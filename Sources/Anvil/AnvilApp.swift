@@ -17,6 +17,7 @@ struct AnvilApp: App {
                 .environmentObject(appState.imageSessions)
                 .environmentObject(appState.chat)
                 .environmentObject(appState.imageGeneration)
+                .environmentObject(appState.profiles)
                 .onAppear {
                     appDelegate.sessions = appState.sessions
                     appDelegate.imageSessions = appState.imageSessions
@@ -28,6 +29,18 @@ struct AnvilApp: App {
             ThreadsListView()
                 .environmentObject(appState.chat)
         }
+
+        // A detached copy of the same live chat — same `ChatViewModel`
+        // instance, so it's the identical conversation, not a fork —
+        // opened via the "Pop Out" button in Chat's sidebar so the user
+        // can keep it visible while using the rest of the app.
+        WindowGroup("Chat", id: "chat-popout") {
+            ChatView()
+                .environmentObject(appState.sessions)
+                .environmentObject(appState.imageSessions)
+                .environmentObject(appState.chat)
+        }
+        .windowResizability(.contentSize)
 
         MenuBarExtra("Anvil", systemImage: "hammer.fill") {
             MenuBarContentView()

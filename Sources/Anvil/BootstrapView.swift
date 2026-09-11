@@ -19,7 +19,7 @@ struct RootView: View {
                     isInstalling: requirements.isInstalling,
                     errorMessage: requirements.lastError
                 )
-            case .modelManager, .chat, .images:
+            case .modelManager, .chat, .images, .profiles:
                 tabBar
                 Divider()
                 switch router.screen {
@@ -29,6 +29,8 @@ struct RootView: View {
                     ChatView()
                 case .images:
                     ImageGenerationView()
+                case .profiles:
+                    ProfilesView()
                 case .bootstrap:
                     EmptyView()
                 }
@@ -47,6 +49,7 @@ struct RootView: View {
             tabButton("Models", screen: .modelManager)
             tabButton("Chat", screen: .chat)
             tabButton("Images", screen: .images)
+            tabButton("Profiles", screen: .profiles)
             Spacer()
         }
         .padding(.horizontal)

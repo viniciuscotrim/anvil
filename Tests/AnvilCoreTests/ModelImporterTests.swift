@@ -59,6 +59,46 @@ struct ModelImporterTests {
     }
 
     @Test
+    func importFolderRegistersEverySubfolderThatLooksLikeAModel() async throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let modelA = root.appendingPathComponent("model-a", isDirectory: true)
+        let modelB = root.appendingPathComponent("model-b", isDirectory: true)
+        let notAModel = root.appendingPathComponent("readme-only", isDirectory: true)
+        try FileManager.default.createDirectory(at: modelA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: modelB, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: notAModel, withIntermediateDirectories: true)
+        try "{}".write(to: modelA.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+        try Data().write(to: modelB.appendingPathComponent("weights.safetensors"))
+        try "hi".write(to: notAModel.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+
+        let registry = ModelRegistry(fileURL: root.appendingPathComponent("registry.json"))
+        let importer = ModelImporter(registry: registry)
+
+        let imported = try await importer.importFolder(at: root)
+
+        #expect(imported.count == 2)
+        let all = await registry.all()
+        #expect(Set(all.map(\.displayName)) == ["model-a", "model-b"])
+    }
+
+    @Test
+    func importFolderImportsTheFolderItselfWhenItIsDirectlyAModel() async throws {
+        let dir = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try "{}".write(to: dir.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        let registry = ModelRegistry(fileURL: dir.appendingPathComponent("registry.json"))
+        let importer = ModelImporter(registry: registry)
+
+        let imported = try await importer.importFolder(at: dir)
+
+        #expect(imported.count == 1)
+        #expect(imported.first?.localPath == dir.standardizedFileURL.path)
+    }
+
+    @Test
     func rejectsAPathThatIsNotADirectory() async throws {
         let dir = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

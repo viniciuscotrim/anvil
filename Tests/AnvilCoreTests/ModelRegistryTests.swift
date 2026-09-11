@@ -24,7 +24,18 @@ struct ModelRegistryTests {
         _ = try await registry.upsert(entry)
         let all = await registry.all()
 
-        #expect(all == [entry])
+        // `all()` always re-reads from disk (see `ModelRegistry`'s doc
+        // comment — it never trusts an in-memory cache, since more than
+        // one instance can point at the same file), so `addedAt` comes
+        // back through the same ISO-8601-with-fractional-seconds
+        // encoding used everywhere else, which is millisecond-precision
+        // — coarser than an in-memory `Date`'s. Compare against an
+        // equally round-tripped value rather than the original, so this
+        // asserts what actually matters (a save+load round trip is
+        // lossless at the precision that's ever persisted) instead of
+        // failing on sub-millisecond noise that was never meaningful.
+        let roundTripped = try JSONDecoder.anvil.decode(ModelEntry.self, from: JSONEncoder.anvil.encode(entry))
+        #expect(all == [roundTripped])
     }
 
     @Test

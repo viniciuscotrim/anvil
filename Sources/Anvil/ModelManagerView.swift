@@ -22,6 +22,7 @@ struct ModelManagerView: View {
         VStack(alignment: .leading, spacing: 12) {
             searchBar
             searchOptionsBar
+            modelsFolderBar
 
             if !viewModel.searchResults.isEmpty {
                 searchResultsList
@@ -99,6 +100,48 @@ struct ModelManagerView: View {
             .help("Searches automatically once you've typed 3+ characters, after a short pause.")
 
             Spacer()
+        }
+        .font(.callout)
+    }
+
+    /// Where downloads land and where "scan for existing models" looks
+    /// — a folder full of models downloaded outside Anvil (an old oMLX
+    /// directory, say) can be pointed at directly; its subfolders get
+    /// read and registered right away.
+    private var modelsFolderBar: some View {
+        HStack {
+            Image(systemName: "folder")
+                .foregroundStyle(.secondary)
+            Text("Models Folder:")
+                .foregroundStyle(.secondary)
+            Text(viewModel.modelsRootPath ?? "Default (Anvil's own folder)")
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer()
+
+            Button("Rescan") { Task { await viewModel.rescanModelsRoot() } }
+                .disabled(viewModel.isBusy)
+            Button("Change…") { viewModel.isChoosingModelsFolder = true }
+                .disabled(viewModel.isBusy)
+                .fileImporter(
+                    isPresented: Binding(
+                        get: { viewModel.isChoosingModelsFolder },
+                        set: { viewModel.isChoosingModelsFolder = $0 }
+                    ),
+                    allowedContentTypes: [.folder]
+                ) { result in
+                    switch result {
+                    case .success(let url):
+                        Task { await viewModel.changeModelsRoot(to: url) }
+                    case .failure(let error):
+                        viewModel.errorMessage = error.localizedDescription
+                    }
+                }
+            if viewModel.modelsRootPath != nil {
+                Button("Reset") { viewModel.resetModelsRootToDefault() }
+                    .disabled(viewModel.isBusy)
+            }
         }
         .font(.callout)
     }
@@ -333,6 +376,11 @@ struct ModelManagerView: View {
                 .frame(width: 80)
             }
 
+            if entry.kind == .image {
+                Divider()
+                imageModelChatDefaults(for: entry)
+            }
+
             HStack {
                 Spacer()
                 Button(isLoaded ? "Apply & Restart" : "Load") {
@@ -349,6 +397,68 @@ struct ModelManagerView: View {
             }
         }
         .padding()
-        .frame(width: 260)
+        .frame(width: entry.kind == .image ? 280 : 260)
+    }
+
+    /// Chat-only behavior for an image model: whether it stays resident
+    /// after delivering a `generate_image` result, and the resolution
+    /// used when that tool call doesn't specify one. Applied
+    /// immediately — no separate "Apply" step, unlike access/port which
+    /// need a server restart to take effect.
+    private func imageModelChatDefaults(for entry: ModelEntry) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Chat Behavior").font(.headline)
+
+            Toggle("Keep loaded after generating in chat", isOn: Binding(
+                get: { entry.keepImageModelLoadedInChat },
+                set: { newValue in
+                    Task {
+                        await viewModel.updateImageDefaults(
+                            for: entry.id,
+                            keepLoadedInChat: newValue,
+                            width: entry.defaultImageWidth,
+                            height: entry.defaultImageHeight
+                        )
+                    }
+                }
+            ))
+            .help(
+                "On: stays in memory between images, faster. "
+                + "Off: unloads right after each image to free memory, and reloads automatically the next time one's requested."
+            )
+
+            LabeledContent("Width") {
+                TextField("512", text: Binding(
+                    get: { entry.defaultImageWidth.map(String.init) ?? "" },
+                    set: { text in
+                        Task {
+                            await viewModel.updateImageDefaults(
+                                for: entry.id,
+                                keepLoadedInChat: entry.keepImageModelLoadedInChat,
+                                width: Int(text.trimmingCharacters(in: .whitespaces)),
+                                height: entry.defaultImageHeight
+                            )
+                        }
+                    }
+                ))
+                .frame(width: 80)
+            }
+            LabeledContent("Height") {
+                TextField("512", text: Binding(
+                    get: { entry.defaultImageHeight.map(String.init) ?? "" },
+                    set: { text in
+                        Task {
+                            await viewModel.updateImageDefaults(
+                                for: entry.id,
+                                keepLoadedInChat: entry.keepImageModelLoadedInChat,
+                                width: entry.defaultImageWidth,
+                                height: Int(text.trimmingCharacters(in: .whitespaces))
+                            )
+                        }
+                    }
+                ))
+                .frame(width: 80)
+            }
+        }
     }
 }

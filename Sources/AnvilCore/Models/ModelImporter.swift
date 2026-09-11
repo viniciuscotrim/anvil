@@ -36,6 +36,51 @@ public struct ModelImporter: Sendable {
         return try await registry.upsert(entry)
     }
 
+    /// Scans a folder's immediate subdirectories and registers every one
+    /// that looks like a model — the mechanism behind "choose a models
+    /// folder": pick a folder full of models downloaded outside Anvil
+    /// (an old oMLX/Draw Things models directory, say) and this makes
+    /// them all show up in "Registered models" without moving a byte.
+    /// A subdirectory that's already registered (by path) is
+    /// re-registered in place — same path, so `upsert` just refreshes
+    /// its metadata rather than duplicating it — one that doesn't look
+    /// like a model is silently skipped, not an error: a models folder
+    /// legitimately has non-model clutter in it sometimes.
+    @discardableResult
+    public func importFolder(at path: URL) async throws -> [ModelEntry] {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw ModelError.importFailed("\(path.path) is not a directory")
+        }
+
+        // The folder itself might directly *be* one model (its own
+        // files at the top level) rather than a folder *of* models —
+        // handle that case too instead of finding nothing.
+        if Self.looksLikeAModel(at: path) {
+            return [try await importModel(at: path)]
+        }
+
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: path,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        ) else {
+            return []
+        }
+
+        var imported: [ModelEntry] = []
+        for entry in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            var entryIsDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: entry.path, isDirectory: &entryIsDirectory),
+                  entryIsDirectory.boolValue,
+                  Self.looksLikeAModel(at: entry) else { continue }
+            if let registered = try? await importModel(at: entry) {
+                imported.append(registered)
+            }
+        }
+        return imported
+    }
+
     static func looksLikeAModel(at path: URL) -> Bool {
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: path,

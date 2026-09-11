@@ -10,6 +10,7 @@ final class AppRouter: ObservableObject {
         case modelManager
         case chat
         case images
+        case profiles
     }
 
     @Published var screen: Screen = .bootstrap

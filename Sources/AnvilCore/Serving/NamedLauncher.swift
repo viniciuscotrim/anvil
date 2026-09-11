@@ -2,21 +2,30 @@ import Foundation
 import Darwin
 
 /// Gives each loaded model's subprocess a real, distinct name in
-/// Activity Monitor ("Anvil - <model>") instead of a generic "Python"
+/// Activity Monitor ("Anvil - <model>", truncated to the kernel's
+/// 16-character process-name limit) instead of a generic "Python"
 /// shared by every model and indistinguishable from anything else
 /// Python-based running on the Mac.
 ///
 /// The venv's own `python3` is a framework build that unconditionally
 /// re-execs itself into a fixed binary — `Python.app/Contents/MacOS/Python`
-/// — needed for Metal/GPU access, so simply renaming the invocation
-/// doesn't work: the interpreter's own startup code overrides it before
-/// we get a say. `sys.executable` doesn't reveal that real path either
-/// (it just echoes back whatever it was invoked with). The actual fix:
-/// ask the kernel what a probe process is *really* running as via
-/// `proc_pidpath` — an unconditional runtime decision baked into the
-/// compiled interpreter, not discoverable by following symlinks — then
-/// invoke that real binary directly through our own symlink. Once
-/// already there, there's nothing left for it to re-exec into.
+/// — needed for Metal/GPU access. A first attempt at this fix invoked
+/// that real binary through a **symlink** named after the model, on the
+/// theory that skipping straight to it would avoid any further renaming.
+/// Real testing (`ps -o ucomm=`, matching what Activity Monitor's Process
+/// Name column actually reads) proved that wrong: macOS sets a process's
+/// kernel-level name (`p_comm`) from the *resolved target* of whatever
+/// was executed, not the symlink used to reach it — so every model kept
+/// showing up as plain "Python" no matter what the symlink was called.
+/// A real **file copy** of that binary (it's a ~33KB stub, cheap to
+/// duplicate per model) behaves differently: there's no symlink
+/// indirection to resolve through, so the copy's own filename becomes
+/// its process name. Validated for real: a copy placed in `venv/bin/`
+/// under a custom name resolves `sys.prefix` to this venv, imports
+/// `mlx.core` and gets `Device(gpu, 0)` (Metal still works, unaffected
+/// by the stub living outside its original bundle — it loads its
+/// framework dylib via absolute paths, not bundle-relative ones), and
+/// `ps -o ucomm=` shows the custom name throughout its run.
 public actor NamedLauncher {
     public static let shared = NamedLauncher()
 
@@ -25,11 +34,12 @@ public actor NamedLauncher {
 
     private init() {}
 
-    /// Creates (or replaces) a symlink under `venv/bin/` that runs as
-    /// `displayName` in Activity Monitor. Placed inside `venv/bin/` so
-    /// Python's own venv detection — based on where it was invoked
-    /// from, not full path resolution — still finds `pyvenv.cfg` and
-    /// loads this venv's site-packages.
+    /// Creates (or replaces) a real copy — not a symlink; see the type's
+    /// doc comment for why that distinction is the whole fix — under
+    /// `venv/bin/` that runs as `displayName` in Activity Monitor.
+    /// Placed inside `venv/bin/` so Python's own venv detection — based
+    /// on where it was invoked from — still finds `pyvenv.cfg` and loads
+    /// this venv's site-packages.
     public func makeLauncher(displayName: String) async -> URL {
         let venvPython = RuntimePaths.venvDirectory.appendingPathComponent("bin/python3")
         guard let realBinary = await resolveRealInterpreterPath() else {
@@ -47,8 +57,10 @@ public actor NamedLauncher {
             try? fm.removeItem(at: launcherURL)
         }
         do {
-            try fm.createSymbolicLink(at: launcherURL, withDestinationURL: realBinary)
+            try fm.copyItem(at: realBinary, to: launcherURL)
+            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcherURL.path)
         } catch {
+            try? fm.removeItem(at: launcherURL)
             return venvPython
         }
         return launcherURL

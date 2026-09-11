@@ -75,7 +75,7 @@ struct ChatView: View {
             } else {
                 Picker("", selection: Binding(
                     get: { chat.selectedModelID },
-                    set: { chat.selectedModelID = $0 }
+                    set: { chat.selectModel($0) }
                 )) {
                     ForEach(sessions.readySessions) { session in
                         Text(session.model.displayName).tag(Optional(session.id))
@@ -98,6 +98,13 @@ struct ChatView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Button {
+                openWindow(id: "chat-popout")
+            } label: {
+                Image(systemName: "macwindow.badge.plus")
+            }
+            .help("Open this conversation in its own window.")
 
             Button {
                 chat.isSidebarOpen.toggle()
@@ -250,6 +257,30 @@ struct ChatView: View {
                 .help("While on, this conversation is never saved to disk.")
             }
 
+            Section("Profile") {
+                Picker("Profile", selection: Binding(
+                    get: { chat.activeProfile?.id },
+                    set: { id in chat.setProfile(chat.availableProfiles.first { $0.id == id }) }
+                )) {
+                    Text("None").tag(Optional<UUID>.none)
+                    ForEach(chat.availableProfiles) { profile in
+                        Text(profile.name).tag(Optional(profile.id))
+                    }
+                }
+                .disabled(!chat.canChangeProfile)
+                .labelsHidden()
+
+                if !chat.canChangeProfile {
+                    Text("Locked after the first message — start a new thread to use a different profile.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if chat.availableProfiles.isEmpty {
+                    Text("No profiles yet — create one in the Profiles tab.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Display") {
                 Toggle("Hide Model Thinking", isOn: Binding(
                     get: { chat.hideReasoning },
@@ -259,11 +290,15 @@ struct ChatView: View {
 
             Section("Generation") {
                 LabeledContent("Max Tokens") {
-                    TextField("", value: Binding(
-                        get: { chat.settings.maxTokens },
-                        set: { chat.settings.maxTokens = $0 }
-                    ), format: .number)
+                    TextField("Unlimited", text: Binding(
+                        get: { chat.settings.maxTokens.map(String.init) ?? "" },
+                        set: { chat.settings.maxTokens = Int($0.trimmingCharacters(in: .whitespaces)) }
+                    ))
                         .frame(width: 80)
+                        .help(
+                            "Empty = a generous \(GenerationSettings.effectivelyUnlimited)-token budget instead "
+                            + "of a small fixed cap — type a number for an explicit limit, higher or lower."
+                        )
                 }
                 LabeledContent("Temperature") {
                     TextField("", value: Binding(

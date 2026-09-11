@@ -187,6 +187,95 @@ Killed the pre-existing 9GB orphan this round's investigation turned up
 (a leftover from testing earlier in development, from before any of
 this cleanup work existed).
 
+## Profiles, per-model folders, and more real bugs (second reliability round)
+
+Six more issues, all found by actually using the app — one of them
+(the Activity Monitor name) turned out to invalidate the *mechanism*
+the previous round shipped, not just a detail of it.
+
+- **Activity Monitor really shows "Anvil - \<model\>" now.** The
+  previous fix (a symlink into `venv/bin/` named after the model)
+  never actually worked — proven with `ps -o ucomm=`, the same field
+  Activity Monitor's Process Name column reads: macOS sets a process's
+  kernel-level name from the *file `execve` actually resolves to*, not
+  the symlink path used to reach it, so every model still showed up as
+  plain "Python" no matter what the symlink was called. The real fix
+  (`NamedLauncher`) is a genuine **copy** of the tiny (~33KB) interpreter
+  stub instead of a symlink — there's no indirection left for the
+  kernel to see through. Validated for real, twice: a standalone script
+  test (`sys.prefix` still resolves to the venv, `mlx.core` still gets
+  `Device(gpu, 0)`), then through the actual app code path via
+  `swift run Anvil -- --phase3-gate` against a real local model, where
+  `ps -o pid,ucomm` showed `Anvil - Qwen3.5-` for the live
+  `mlx_lm.server` process (truncated at 16 characters — a hard kernel
+  limit on process names, not something any app-level trick can widen).
+- **A sent message could vanish if you switched tabs mid-reply.** Root
+  cause: `ChatView`'s `.task { loadInitialState() }` reruns every time
+  the tab is revisited (SwiftUI tears down and recreates the view on
+  each tab switch), and it was unconditionally resetting the active
+  thread to whatever was last saved on disk — discarding an in-flight,
+  not-yet-persisted send if the reply was still coming back when you
+  navigated away and back. Fixed in `ChatViewModel`: the thread is only
+  ever picked once per app session after that; later calls just refresh
+  the thread/profile lists. The user's own message is also now saved to
+  disk immediately after being sent, not only after the full reply
+  (tool calls included) comes back, so it survives even if something
+  else goes wrong before the model answers.
+- **Every chat message was triggering an image generation, image or
+  not.** The `generate_image` tool's description was vague enough
+  ("Generate an image from a text prompt...") that smaller local models
+  called it on nearly every message, since it was simply the only tool
+  on offer. Fixed with an explicit "only call this when the user
+  actually asks for an image" instruction in both the tool's own
+  description and a system-prompt-level reminder sent alongside it.
+- **On-demand image models, with a real off switch.** Each image
+  model's gear icon in Models now has a "keep loaded after generating in
+  chat" toggle. Off: the model unloads right after delivering an image
+  and reloads automatically the next time chat actually asks for one —
+  slower per image, no memory held between requests. On (default):
+  stays resident, same as before. The same panel sets that model's
+  default resolution (512×512 to start, same as the Images tab).
+- **Sequential images in one chat kept drifting off-character.**
+  Asking for "the same character in different clothes" repeatedly
+  changed skin tone, hair, eyes, and body type too, not just the
+  clothing. `ChatViewModel` now remembers each thread's last
+  `generate_image` call (prompt + seed) and carries both forward into
+  the next one — same seed, and an explicit "keep the same appearance
+  unless this clearly changes it" instruction ahead of the new request.
+  The very first image in a thread falls back to the active profile's
+  own description, if it has one. A best-effort consistency aid, not
+  true image editing — nothing here does img2img.
+- **Profiles ("Perfis").** A new tab: reusable system prompts (oMLX
+  called these personas), each optionally the default for one
+  registered model. Loading that model (or selecting it for a thread
+  that's still empty) applies its default profile automatically. A
+  thread shows which profile it's using but only lets you change it
+  before the first message — switching mid-conversation would leave the
+  system prompt inconsistent with everything already answered under the
+  old one.
+- **A destination folder for models.** Models → "Models Folder" points
+  downloads at any folder you choose instead of Anvil's own Application
+  Support directory, and doubles as an importer: pick a folder already
+  full of models (an old oMLX directory, say) and its subfolders get
+  scanned and registered immediately, no separate import step per model.
+  "Rescan" re-checks the current folder for anything added since.
+- **Chat pops out into its own window** — the button next to the
+  sidebar toggle opens the same live conversation (same `ChatViewModel`,
+  not a fork) in a separate window, so it can stay visible while using
+  the rest of the app.
+- **Max Tokens defaults to a generous budget, not a small fixed one.**
+  The reported bug — a reply cut off before it answered, reasoning
+  models especially — was the old fixed default (1024) being consumed
+  entirely by thinking. Left blank, Chat now sends 8192 instead. That
+  number is a real, deliberate choice, not a placeholder: a first
+  attempt sent a literal 1,000,000 ("truly unlimited") and hit a genuine
+  hang in testing — a local Qwen3.5 checkpoint never emitted its stop
+  token for a trivial three-word prompt and just kept generating, CPU
+  pegged, memory climbing, past three minutes with no way to cancel it
+  from the UI. 8192 is large enough that no realistic reply gets cut
+  short while keeping a model that fails to stop bounded to something
+  recoverable. Type a number to set an explicit cap either direction.
+
 ## Architecture
 
 - Single SwiftUI macOS app (`Anvil` target), built with Swift Package Manager

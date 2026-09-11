@@ -12,6 +12,11 @@ final class ModelManagerViewModel: ObservableObject {
     @Published var isBusy: Bool = false
     @Published var errorMessage: String?
     @Published var isImportPanelPresented: Bool = false
+    /// Where downloads land and "scan for existing models" looks — nil
+    /// shows as "Default" in the UI (Anvil's own Application Support
+    /// folder). Loaded from `AppSettings` at init.
+    @Published var modelsRootPath: String?
+    @Published var isChoosingModelsFolder: Bool = false
 
     /// nil = no size filter. Small/Medium/Large are relative to this
     /// Mac's own RAM (see `ModelSizeClass`), not an absolute cutoff.
@@ -61,10 +66,59 @@ final class ModelManagerViewModel: ObservableObject {
         self.registry = registry
         self.downloader = ModelDownloader(registry: registry)
         self.importer = ModelImporter(registry: registry)
+        self.modelsRootPath = AppSettings.load().modelsRootPath
     }
 
     func loadRegistry() async {
         registeredModels = await registry.all()
+    }
+
+    // MARK: - Models folder
+
+    /// The user picked a new folder for models: it becomes both the
+    /// destination for future downloads and gets scanned right away for
+    /// anything already inside it, so pointing Anvil at an existing
+    /// models folder (an old oMLX directory, say) immediately populates
+    /// "Registered models" instead of requiring a separate action.
+    func changeModelsRoot(to url: URL) async {
+        errorMessage = nil
+        var settings = AppSettings.load()
+        settings.modelsRootPath = url.path
+        do {
+            try settings.save()
+        } catch {
+            errorMessage = "Could not save the models folder setting: \(error.localizedDescription)"
+            return
+        }
+        modelsRootPath = url.path
+        await rescanModelsRoot()
+    }
+
+    /// Resets to Anvil's own default folder under Application Support —
+    /// does not move or delete anything already downloaded elsewhere.
+    func resetModelsRootToDefault() {
+        var settings = AppSettings.load()
+        settings.modelsRootPath = nil
+        try? settings.save()
+        modelsRootPath = nil
+    }
+
+    /// Re-scans the current models folder for anything not yet
+    /// registered — for when the user adds model folders manually
+    /// (Finder, another app's download) without changing the folder
+    /// itself.
+    func rescanModelsRoot() async {
+        isBusy = true
+        statusMessage = "Scanning for models…"
+        defer { isBusy = false; statusMessage = "" }
+
+        let root = AppSettings.load().effectiveModelsRoot
+        do {
+            _ = try await importer.importFolder(at: root)
+            await loadRegistry()
+        } catch {
+            errorMessage = "Could not scan \(root.lastPathComponent): \(error.localizedDescription)"
+        }
     }
 
     /// Call whenever `query` changes. Only does anything when live
@@ -112,6 +166,27 @@ final class ModelManagerViewModel: ObservableObject {
             await loadRegistry()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Image model defaults (keep-loaded toggle, resolution)
+
+    /// Persists this image model's chat-unload preference and default
+    /// resolution straight to the registry — read by `ChatViewModel`
+    /// whenever it loads/generates through this model.
+    func updateImageDefaults(
+        for modelID: String,
+        keepLoadedInChat: Bool,
+        width: Int?,
+        height: Int?
+    ) async {
+        guard var entry = registeredModels.first(where: { $0.id == modelID }) else { return }
+        entry.keepImageModelLoadedInChat = keepLoadedInChat
+        entry.defaultImageWidth = width
+        entry.defaultImageHeight = height
+        guard let updated = try? await registry.upsert(entry) else { return }
+        if let index = registeredModels.firstIndex(where: { $0.id == modelID }) {
+            registeredModels[index] = updated
         }
     }
 

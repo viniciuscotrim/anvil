@@ -18,6 +18,17 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
     public var sizeBytes: Int64?
     public var addedAt: Date
     public var kind: ModelKind
+    /// Image models only. When true (the default), the model stays
+    /// resident after a chat tool-call generation finishes. When false,
+    /// `ChatViewModel` unloads it right after delivering the image to
+    /// free its memory, and loads it again on demand the next time one
+    /// is requested — slower per image, but nothing sits in memory
+    /// between requests.
+    public var keepImageModelLoadedInChat: Bool
+    /// Image models only. Default generation resolution — nil falls
+    /// back to `ImageGenerationSettings.default` (512×512).
+    public var defaultImageWidth: Int?
+    public var defaultImageHeight: Int?
 
     public init(
         id: String,
@@ -26,7 +37,10 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
         localPath: String,
         sizeBytes: Int64?,
         addedAt: Date = Date(),
-        kind: ModelKind = .text
+        kind: ModelKind = .text,
+        keepImageModelLoadedInChat: Bool = true,
+        defaultImageWidth: Int? = nil,
+        defaultImageHeight: Int? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -35,14 +49,18 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
         self.sizeBytes = sizeBytes
         self.addedAt = addedAt
         self.kind = kind
+        self.keepImageModelLoadedInChat = keepImageModelLoadedInChat
+        self.defaultImageWidth = defaultImageWidth
+        self.defaultImageHeight = defaultImageHeight
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, displayName, source, localPath, sizeBytes, addedAt, kind
+        case keepImageModelLoadedInChat, defaultImageWidth, defaultImageHeight
     }
 
-    // A registry saved before `kind` existed just defaults to `.text`
-    // on next load — no migration step, no crash.
+    // A registry saved before a field existed just defaults it on next
+    // load — no migration step, no crash.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
@@ -52,6 +70,9 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
         sizeBytes = try container.decodeIfPresent(Int64.self, forKey: .sizeBytes)
         addedAt = try container.decode(Date.self, forKey: .addedAt)
         kind = try container.decodeIfPresent(ModelKind.self, forKey: .kind) ?? .text
+        keepImageModelLoadedInChat = try container.decodeIfPresent(Bool.self, forKey: .keepImageModelLoadedInChat) ?? true
+        defaultImageWidth = try container.decodeIfPresent(Int.self, forKey: .defaultImageWidth)
+        defaultImageHeight = try container.decodeIfPresent(Int.self, forKey: .defaultImageHeight)
     }
 }
 

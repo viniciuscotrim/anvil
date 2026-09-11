@@ -23,7 +23,7 @@ public struct ModelDownloader: Sendable {
             throw ModelError.downloadFailed("Python environment isn't set up yet — install the model browser first")
         }
 
-        let destination = RuntimePaths.modelsDirectory
+        let destination = AppSettings.load().effectiveModelsRoot
             .appendingPathComponent(Self.sanitize(repoID), isDirectory: true)
 
         onProgress?("Downloading \(repoID)…")

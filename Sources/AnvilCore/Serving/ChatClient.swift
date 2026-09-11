@@ -22,26 +22,40 @@ public struct ChatClient: Sendable {
     /// isn't shaped like `namespace/name`. Only override this once
     /// talking to something other than our own per-model server (e.g.
     /// the eventual shared port-8000 server for the persona proxies).
+    /// `systemPrompt`, if given, is prepended as a `.system` message on
+    /// the wire only — never written into `messages`/thread history, so
+    /// a profile's prompt (or the tool-use discipline instruction) can
+    /// change or disappear between turns without leaving stale system
+    /// messages baked into a saved conversation.
     public func send(
         messages: [ChatMessage],
         baseURL: URL,
         model: String = "default_model",
         modelDisplayName: String = "",
         settings: GenerationSettings = .default,
-        tools: [ChatTool] = []
+        tools: [ChatTool] = [],
+        systemPrompt: String? = nil
     ) async throws -> ChatMessage {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // The default 60s isn't enough for a long generation on a large
-        // model, or a tool-call round trip that includes real image
-        // generation in the middle — matches ImageClient's own timeout.
-        request.timeoutInterval = 300
+        // Generous enough to cover a full `wireMaxTokens` budget even
+        // on a slow model — with no explicit cap that budget is now
+        // `GenerationSettings.effectivelyUnlimited` (8192 tokens; see
+        // its doc comment for why that isn't larger), and a slower
+        // model could genuinely take several minutes to either answer
+        // or exhaust that budget. The default 60s was never close.
+        request.timeoutInterval = 1800
+
+        var wireMessages = messages.map(Self.wireMessage)
+        if let systemPrompt, !systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            wireMessages.insert(["role": "system", "content": systemPrompt], at: 0)
+        }
 
         var body: [String: Any] = [
             "model": model,
-            "messages": messages.map(Self.wireMessage),
-            "max_tokens": settings.maxTokens,
+            "messages": wireMessages,
+            "max_tokens": settings.wireMaxTokens,
             "temperature": settings.temperature,
             "top_p": settings.topP,
             "top_k": settings.topK,

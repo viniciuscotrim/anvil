@@ -10,6 +10,7 @@ import AnvilCore
 final class ChatViewModel: ObservableObject {
     @Published var currentThread: ChatThread
     @Published private(set) var allThreads: [ChatThread] = []
+    @Published private(set) var availableProfiles: [ChatProfile] = []
     @Published private(set) var isTemporaryModeActive = false
     @Published var selectedModelID: String?
     @Published var inputText: String = ""
@@ -29,20 +30,45 @@ final class ChatViewModel: ObservableObject {
     private let threadStore: ChatThreadStore
     private let imageSessions: ImageSessionManager
     private let generatedImageStore: GeneratedImageStore
+    private let profileStore: ChatProfileStore
+    private let modelRegistry: ModelRegistry
+    private let requirements: RequirementsManager
     private let client = ChatClient()
     private let imageClient = ImageClient()
     private var threadBeforeTemporaryMode: ChatThread?
+    /// `.task { loadInitialState() }` on `ChatView` reruns every time the
+    /// view re-enters the hierarchy (switching tabs and back) — this
+    /// used to reset `currentThread` to whatever was last persisted on
+    /// disk *every single time*, silently discarding an in-flight,
+    /// not-yet-persisted send (the real bug behind a message vanishing
+    /// after navigating away mid-generation and back). Only the first
+    /// call is allowed to pick the initial thread; every later call just
+    /// refreshes the thread/profile lists.
+    private var hasLoadedInitialState = false
+    /// Per-thread memory of the last `generate_image` tool call, so a
+    /// sequential request ("same character, different clothes") can
+    /// carry the previous prompt and seed forward instead of starting
+    /// from nothing each time — a real, reported bug where consecutive
+    /// generations drifted in skin tone, hair, eyes, and body type even
+    /// though only the clothing was meant to change.
+    private var lastImageGenerationByThread: [UUID: (seed: Int, prompt: String)] = [:]
 
     init(
         sessions: ModelSessionManager,
         threadStore: ChatThreadStore,
         imageSessions: ImageSessionManager,
-        generatedImageStore: GeneratedImageStore
+        generatedImageStore: GeneratedImageStore,
+        profileStore: ChatProfileStore,
+        modelRegistry: ModelRegistry,
+        requirements: RequirementsManager
     ) {
         self.sessions = sessions
         self.threadStore = threadStore
         self.imageSessions = imageSessions
         self.generatedImageStore = generatedImageStore
+        self.profileStore = profileStore
+        self.modelRegistry = modelRegistry
+        self.requirements = requirements
         self.currentThread = ChatThread()
     }
 
@@ -62,35 +88,82 @@ final class ChatViewModel: ObservableObject {
 
     func loadInitialState() async {
         allThreads = await threadStore.all()
-        currentThread = allThreads.first ?? ChatThread()
+        availableProfiles = await profileStore.all()
+        if !hasLoadedInitialState {
+            currentThread = allThreads.first ?? ChatThread()
+            hasLoadedInitialState = true
+        }
         syncSelectedModel()
     }
 
     /// Keeps the selection pointed at a loaded model — called on
     /// appear and whenever the set of loaded models changes.
     func syncSelectedModel() {
-        if let id = selectedModelID, sessions.isLoaded(modelID: id) { return }
+        if let id = selectedModelID, sessions.isLoaded(modelID: id) {
+            applyDefaultProfileIfNeeded(forModelID: id)
+            return
+        }
         selectedModelID = sessions.readySessions.first?.id
+        if let id = selectedModelID {
+            applyDefaultProfileIfNeeded(forModelID: id)
+        }
+    }
+
+    /// The header model picker routes through here instead of setting
+    /// `selectedModelID` directly, so picking a model also applies its
+    /// default profile (if any) to a thread that doesn't have one yet.
+    func selectModel(_ id: String?) {
+        selectedModelID = id
+        if let id { applyDefaultProfileIfNeeded(forModelID: id) }
+    }
+
+    // MARK: - Profiles
+
+    var activeProfile: ChatProfile? {
+        guard let id = currentThread.profileID else { return nil }
+        return availableProfiles.first { $0.id == id }
+    }
+
+    /// Only true before the first message — see `ChatThread.profileID`.
+    var canChangeProfile: Bool { currentThread.messages.isEmpty }
+
+    func setProfile(_ profile: ChatProfile?) {
+        guard canChangeProfile else { return }
+        currentThread.profileID = profile?.id
+    }
+
+    /// Applies `modelID`'s default profile to the current thread only
+    /// if it's still empty (safe to change) and doesn't already have a
+    /// profile — never overrides a manual choice or an already-applied
+    /// default, even if the model selection is re-synced later for
+    /// unrelated reasons.
+    private func applyDefaultProfileIfNeeded(forModelID modelID: String) {
+        guard canChangeProfile, currentThread.profileID == nil else { return }
+        guard let defaultProfile = availableProfiles.first(where: { $0.defaultForModelID == modelID }) else { return }
+        currentThread.profileID = defaultProfile.id
     }
 
     // MARK: - Threads
 
     /// Blocked while temporary mode is active — the user has to turn
-    /// that off first (an explicit action) before starting or switching
-    /// to anything persisted.
+    /// that off first (an explicit action) — or while a message is
+    /// still in flight, so a background send doesn't land on a thread
+    /// the user has since switched away from.
     func newThread() {
-        guard !isTemporaryModeActive else { return }
+        guard !isTemporaryModeActive, !isSending else { return }
         currentThread = ChatThread()
     }
 
     func selectThread(_ thread: ChatThread) {
-        guard !isTemporaryModeActive else { return }
+        guard !isTemporaryModeActive, !isSending else { return }
         currentThread = thread
     }
 
     func deleteThread(_ thread: ChatThread) async {
+        if isSending, currentThread.id == thread.id { return }
         try? await threadStore.delete(id: thread.id)
         allThreads.removeAll { $0.id == thread.id }
+        lastImageGenerationByThread.removeValue(forKey: thread.id)
         if currentThread.id == thread.id {
             currentThread = allThreads.first ?? ChatThread()
         }
@@ -101,6 +174,7 @@ final class ChatViewModel: ObservableObject {
     func clearCurrentConversation() {
         currentThread.messages.removeAll()
         lastTokensPerSecond = nil
+        lastImageGenerationByThread.removeValue(forKey: currentThread.id)
         if !isTemporaryModeActive {
             persistCurrentThread()
         }
@@ -141,11 +215,28 @@ final class ChatViewModel: ObservableObject {
                 currentThread.title = isTemporaryModeActive ? "Temporary: \(title)" : title
             }
         }
+        // Saved right away — not just after the full round trip
+        // completes — so the message survives even if something else
+        // interrupts before the assistant answers. A durability-only
+        // save (no reassignment back onto `currentThread`): it could
+        // resolve after later mutations in this same `send()` call and
+        // must not clobber them if it does.
+        if !isTemporaryModeActive {
+            persistCurrentThreadForDurability()
+        }
 
         let modelDisplayName = sessions.sessions.first { $0.id == id }?.model.displayName ?? id
-        // Only offered when an image model is actually loaded — no
-        // point advertising a tool that would just fail.
-        let tools: [ChatTool] = imageSessions.readySessions.isEmpty ? [] : [.generateImage]
+        // Offered whenever an image model is either already loaded or
+        // registered at all (and can be loaded on demand — see
+        // `runGenerateImageTool`) — no point advertising a tool that
+        // would just fail with nothing to back it.
+        var hasAnyImageModel = !imageSessions.readySessions.isEmpty
+        if !hasAnyImageModel {
+            let registeredImageModels = await modelRegistry.all().filter { $0.kind == .image }
+            hasAnyImageModel = !registeredImageModels.isEmpty
+        }
+        let tools: [ChatTool] = hasAnyImageModel ? [.generateImage] : []
+        let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty)
 
         isSending = true
         defer { isSending = false }
@@ -156,7 +247,8 @@ final class ChatViewModel: ObservableObject {
                 baseURL: endpoint,
                 modelDisplayName: modelDisplayName,
                 settings: settings,
-                tools: tools
+                tools: tools,
+                systemPrompt: systemPrompt
             )
 
             if let toolCall = reply.toolCalls?.first(where: { $0.name == "generate_image" }) {
@@ -170,7 +262,8 @@ final class ChatViewModel: ObservableObject {
                     messages: currentThread.messages,
                     baseURL: endpoint,
                     modelDisplayName: modelDisplayName,
-                    settings: settings
+                    settings: settings,
+                    systemPrompt: systemPrompt
                 )
                 reply.generatedImagePath = generatedPath
             }
@@ -185,11 +278,29 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// The active profile's prompt, plus (whenever the image tool is on
+    /// offer) an explicit instruction to only call it when actually
+    /// asked for an image — a real bug found in testing: without this,
+    /// some local models called `generate_image` on nearly every
+    /// message, tool or not.
+    private func composedSystemPrompt(offeringTools: Bool) -> String? {
+        var parts: [String] = []
+        if let prompt = activeProfile?.prompt.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
+            parts.append(prompt)
+        }
+        if offeringTools {
+            parts.append(ChatTool.generateImageUsageDiscipline)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
     /// Runs a `generate_image` tool call for real — actual generation
-    /// through the loaded image model's server, not a stub. Returns the
-    /// `.tool`-role message to feed back to the chat model, plus the
-    /// generated file's path (if any) for the caller to attach to the
-    /// visible reply that follows.
+    /// through an image model's server, not a stub. Loads a registered
+    /// image model on demand if none is currently resident (and, per
+    /// that model's own chat setting, unloads it again afterward to
+    /// free memory). Returns the `.tool`-role message to feed back to
+    /// the chat model, plus the generated file's path (if any) for the
+    /// caller to attach to the visible reply that follows.
     private func runGenerateImageTool(_ call: ChatMessage.ToolCall) async -> (ChatMessage, String?) {
         struct Arguments: Decodable { let prompt: String }
 
@@ -197,22 +308,63 @@ final class ChatViewModel: ObservableObject {
               let arguments = try? JSONDecoder().decode(Arguments.self, from: data) else {
             return (ChatMessage(role: .tool, content: "Error: could not parse tool arguments.", toolCallID: call.id), nil)
         }
-        guard let imageModelID = imageSessions.readySessions.first?.id,
-              let imageEndpoint = imageSessions.imageEndpoint(for: imageModelID) else {
-            return (ChatMessage(role: .tool, content: "Error: no image model is loaded.", toolCallID: call.id), nil)
+
+        let imageModelID: String
+        if let ready = imageSessions.readySessions.first {
+            imageModelID = ready.id
+        } else if let entry = await modelRegistry.all().first(where: { $0.kind == .image }) {
+            let loaded = await imageSessions.load(entry, requirements: requirements)
+            guard loaded else {
+                let reason = imageSessions.session(for: entry.id)?.status
+                let detail: String
+                if case .failed(let message) = reason { detail = message } else { detail = "load failed" }
+                return (ChatMessage(role: .tool, content: "Error loading the image model: \(detail)", toolCallID: call.id), nil)
+            }
+            imageModelID = entry.id
+        } else {
+            return (ChatMessage(role: .tool, content: "Error: no image model is registered.", toolCallID: call.id), nil)
         }
-        let imageModelName = imageSessions.session(for: imageModelID)?.model.displayName ?? imageModelID
+
+        guard let imageEndpoint = imageSessions.imageEndpoint(for: imageModelID) else {
+            return (ChatMessage(role: .tool, content: "Error: the image model isn't ready.", toolCallID: call.id), nil)
+        }
+        let model = imageSessions.session(for: imageModelID)?.model
+        let imageModelName = model?.displayName ?? imageModelID
+
+        // Carry the previous generation's prompt + seed forward within
+        // this thread for consistency, or fall back to the active
+        // profile's own character description on the first image.
+        let previous = lastImageGenerationByThread[currentThread.id]
+        var effectivePrompt = arguments.prompt
+        var seed: Int?
+        if let previous {
+            seed = previous.seed
+            effectivePrompt = "\(previous.prompt). Keep the same character appearance — skin tone, hair "
+                + "color and style, eye color, body type — unless this request clearly changes them: "
+                + arguments.prompt
+        } else if let profilePrompt = activeProfile?.prompt.trimmingCharacters(in: .whitespacesAndNewlines), !profilePrompt.isEmpty {
+            effectivePrompt = "\(profilePrompt). \(arguments.prompt)"
+        }
+
+        let imageSettings = ImageGenerationSettings(
+            width: model?.defaultImageWidth ?? ImageGenerationSettings.default.width,
+            height: model?.defaultImageHeight ?? ImageGenerationSettings.default.height
+        )
 
         imageToolProgress = nil
         defer { imageToolProgress = nil }
 
         do {
             let result = try await imageClient.generate(
-                prompt: arguments.prompt,
-                baseURL: imageEndpoint
+                prompt: effectivePrompt,
+                baseURL: imageEndpoint,
+                settings: imageSettings,
+                seed: seed
             ) { [weak self] progress in
                 Task { @MainActor in self?.imageToolProgress = progress.fraction }
             }
+            lastImageGenerationByThread[currentThread.id] = (seed: result.seed, prompt: arguments.prompt)
+
             let saved = try await generatedImageStore.add(GeneratedImage(
                 prompt: arguments.prompt,
                 modelDisplayName: imageModelName,
@@ -221,6 +373,11 @@ final class ChatViewModel: ObservableObject {
                 height: result.height,
                 seed: result.seed
             ))
+
+            if model?.keepImageModelLoadedInChat == false {
+                await imageSessions.unload(modelID: imageModelID)
+            }
+
             let toolMessage = ChatMessage(
                 role: .tool,
                 content: "Image generated successfully and is already displayed to the user in this chat. "
@@ -250,6 +407,15 @@ final class ChatViewModel: ObservableObject {
                 currentThread = saved
             }
             allThreads = await threadStore.all()
+        }
+    }
+
+    /// Write-only: saves to disk without reassigning `currentThread` —
+    /// see the call site in `send()` for why that distinction matters.
+    private func persistCurrentThreadForDurability() {
+        let threadToSave = currentThread
+        Task {
+            _ = try? await threadStore.upsert(threadToSave)
         }
     }
 }
