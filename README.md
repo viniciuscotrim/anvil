@@ -407,6 +407,40 @@ looked like (see below).
   spells out the scope directly so it doesn't read as broken when
   nothing visibly changes.
 
+## A model that fails to load now says why
+
+Reported after the models-folder fixes above finally let a
+previously-mis-detected image model show a Load button: it failed, with
+a plain yellow warning triangle and, per the user, no message anywhere
+about what actually went wrong.
+
+The message existed — a `.help()` tooltip — but two real problems sat
+behind it:
+
+- **The detail itself was thrown away.** `LLMServer`/`ImageServer`
+  only ever reported a generic wrapper phrase ("process exited before
+  becoming ready") because nothing captured the child process's actual
+  stdout/stderr unless a caller happened to pass an `onLog` closure —
+  and `ModelSessionManager`/`ImageSessionManager` never did. Both
+  servers now keep a rolling tail of their process's own output
+  (`OutputTail`, fed from the same pipe regardless of `onLog`) and
+  include it in a startup failure's message. Verified for real against
+  the exact case that prompted this: loading
+  `black-forest-labs/FLUX.2-klein-4b-nvfp4` through the real
+  `ImageServer` now surfaces mflux's actual traceback —
+  `FileNotFoundError: No safetensors files found in
+  .../FLUX.2-klein-4b-nvfp4/vae` — instead of the old generic phrase.
+  That traceback also explains the underlying limitation plainly: mflux
+  expects a diffusers-style pipeline directory
+  (`transformer/`/`vae/`/`text_encoder/` subfolders), and this
+  particular repo ships as one flat raw checkpoint — a real format
+  mismatch no code change here can paper over. A properly-packaged
+  mflux-community checkpoint loads fine, as it always did.
+- **A hover tooltip is easy to miss.** The warning triangle is now a
+  real button — tapping it opens a popover with the full, selectable
+  failure text (a Python traceback can run well past what a tooltip
+  can show), while the hover tooltip stays for a quicker glance.
+
 ## Architecture
 
 - Single SwiftUI macOS app (`Anvil` target), built with Swift Package Manager

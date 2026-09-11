@@ -9,6 +9,10 @@ public actor LLMServer {
     private var process: Process?
     private var launcherURL: URL?
     public private(set) var baseURL = URL(string: "http://127.0.0.1:8000")!
+    /// The tail of the child process's combined stdout/stderr — see
+    /// `ImageServer`'s matching property for why this exists (a startup
+    /// failure needs to say *why*, not just that it failed).
+    private var outputTail = OutputTail()
 
     public init() {}
 
@@ -39,12 +43,16 @@ public actor LLMServer {
         proc.executableURL = launcher
         proc.arguments = [script.path, "--model", modelPath, "--host", host, "--port", String(port)]
 
+        outputTail = OutputTail()
+        let tail = outputTail
+
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = pipe
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            tail.append(text)
             onLog?(text)
         }
 
@@ -66,6 +74,13 @@ public actor LLMServer {
             await stop()
             throw error
         }
+    }
+
+    /// The real detail behind a startup failure — the process's own
+    /// last few lines of output, when there are any.
+    private func failureDetail(_ fallback: String) -> String {
+        let captured = outputTail.text
+        return captured.isEmpty ? fallback : "\(fallback)\n\n\(captured)"
     }
 
     public func stop() async {
@@ -93,7 +108,7 @@ public actor LLMServer {
 
         while Date() < deadline {
             if !process.isRunning {
-                throw ServingError.serverFailedToStart("process exited before becoming ready")
+                throw ServingError.serverFailedToStart(failureDetail("process exited before becoming ready"))
             }
             if let (_, response) = try? await URLSession.shared.data(from: modelsURL),
                let http = response as? HTTPURLResponse,
@@ -102,6 +117,6 @@ public actor LLMServer {
             }
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
-        throw ServingError.serverFailedToStart("timed out waiting for the server to become ready")
+        throw ServingError.serverFailedToStart(failureDetail("timed out waiting for the server to become ready"))
     }
 }

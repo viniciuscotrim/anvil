@@ -63,6 +63,12 @@ final class ModelManagerViewModel: ObservableObject {
     /// Which model's server-settings popover is open, if any — one at
     /// a time is plenty.
     @Published var openServerSettingsFor: String?
+    /// Which model's failure-detail popover is open, if any — tapping
+    /// the warning icon opens this so the real error (often several
+    /// lines — the process's own captured output, not just a generic
+    /// wrapper message) is actually readable, not just available on
+    /// hover, which a real report showed users don't reliably discover.
+    @Published var failureDetailFor: String?
     /// Draft port/access per model, edited in the popover before being
     /// applied — separate from `ModelSessionManager.Session` so editing
     /// doesn't affect anything until the user confirms.

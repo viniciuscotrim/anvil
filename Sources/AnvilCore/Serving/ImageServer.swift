@@ -10,6 +10,16 @@ public actor ImageServer {
     private var process: Process?
     private var launcherURL: URL?
     public private(set) var baseURL = URL(string: "http://127.0.0.1:8200")!
+    /// The tail of the child process's combined stdout/stderr — kept
+    /// regardless of whether a caller passes `onLog`, specifically so a
+    /// startup failure can report *why*, not just that it failed. A
+    /// real, reported bug: a model with a real, informative Python
+    /// traceback ("No safetensors files found in .../vae" — an mflux
+    /// pipeline shape mismatch) surfaced to the user as nothing but a
+    /// generic "process exited before becoming ready", because nothing
+    /// captured that traceback when no `onLog` closure happened to be
+    /// listening.
+    private var outputTail = OutputTail()
 
     public init() {}
 
@@ -57,12 +67,16 @@ public actor ImageServer {
         proc.executableURL = launcher
         proc.arguments = arguments
 
+        outputTail = OutputTail()
+        let tail = outputTail
+
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = pipe
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            tail.append(text)
             onLog?(text)
         }
 
@@ -87,6 +101,15 @@ public actor ImageServer {
             await stop()
             throw error
         }
+    }
+
+    /// The real detail behind a startup failure — the Python process's
+    /// own last few lines of output, when there are any. Falls back to
+    /// a generic phrase otherwise (e.g. the process never printed
+    /// anything before dying, or hasn't been started at all).
+    private func failureDetail(_ fallback: String) -> String {
+        let captured = outputTail.text
+        return captured.isEmpty ? fallback : "\(fallback)\n\n\(captured)"
     }
 
     public func stop() async {
@@ -114,7 +137,7 @@ public actor ImageServer {
 
         while Date() < deadline {
             if !process.isRunning {
-                throw ServingError.serverFailedToStart("process exited before becoming ready")
+                throw ServingError.serverFailedToStart(failureDetail("process exited before becoming ready"))
             }
             if let (_, response) = try? await URLSession.shared.data(from: modelsURL),
                let http = response as? HTTPURLResponse,
@@ -123,6 +146,6 @@ public actor ImageServer {
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
-        throw ServingError.serverFailedToStart("timed out waiting for the server to become ready")
+        throw ServingError.serverFailedToStart(failureDetail("timed out waiting for the server to become ready"))
     }
 }

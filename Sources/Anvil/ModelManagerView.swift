@@ -344,9 +344,7 @@ struct ModelManagerView: View {
                 Button("Unload") { Task { await sessions.unload(modelID: entry.id) } }
 
             case .failed(let reason):
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .help(reason)
+                failureIndicator(reason: reason, modelID: entry.id)
                 Button("Retry") { Task { await sessions.load(entry, requirements: requirements) } }
             }
 
@@ -362,6 +360,35 @@ struct ModelManagerView: View {
                     await sessions.load(entry, requirements: requirements, access: access, port: port)
                 }
             }
+        }
+    }
+
+    /// A tappable warning icon — not hover-only, which a real report
+    /// showed users don't reliably discover — opening a popover with
+    /// the full, selectable failure reason. That reason itself now
+    /// includes the server process's own captured output (a real
+    /// traceback, when there is one), not just a generic wrapper
+    /// message — see `LLMServer`/`ImageServer`'s `failureDetail`.
+    private func failureIndicator(reason: String, modelID: String) -> some View {
+        Button {
+            viewModel.failureDetailFor = modelID
+        } label: {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+        }
+        .buttonStyle(.borderless)
+        .help(reason)
+        .popover(isPresented: Binding(
+            get: { viewModel.failureDetailFor == modelID },
+            set: { if !$0 { viewModel.failureDetailFor = nil } }
+        )) {
+            ScrollView {
+                Text(reason)
+                    .textSelection(.enabled)
+                    .font(.system(.callout, design: .monospaced))
+                    .padding()
+            }
+            .frame(width: 420, height: 260)
         }
     }
 
@@ -386,9 +413,7 @@ struct ModelManagerView: View {
                 Button("Unload") { Task { await imageSessions.unload(modelID: entry.id) } }
 
             case .failed(let reason):
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .help(reason)
+                failureIndicator(reason: reason, modelID: entry.id)
                 Button("Retry") { Task { await imageSessions.load(entry, requirements: requirements) } }
             }
 
