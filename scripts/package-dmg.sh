@@ -30,10 +30,16 @@ DMG_PATH="$DIST_DIR/$APP_NAME-$VERSION.dmg"
 echo "==> Building release binary ($VERSION, build $BUILD_NUMBER)"
 swift build -c release
 
-RELEASE_BIN="$ROOT_DIR/.build/out/Products/Release/$APP_NAME"
+# Ask SwiftPM itself rather than guessing the path — it moved once
+# already (the old "swiftbuild" backend's `.build/out/Products/Release`
+# became the native build system's `.build/<triple>/release` once
+# Xcode was installed), so asking is what stays correct across whatever
+# backend is active instead of hardcoding either shape.
+RELEASE_BIN="$(swift build -c release --show-bin-path)/$APP_NAME"
 if [ ! -x "$RELEASE_BIN" ]; then
-  # Fall back to whatever SwiftPM's active build system named it.
-  RELEASE_BIN="$(find "$ROOT_DIR/.build" -path "*/Release/$APP_NAME" -type f -perm -u+x | head -1)"
+  # Fall back to a broad search in case the bin path ever changes shape
+  # again without this script being updated for it.
+  RELEASE_BIN="$(find "$ROOT_DIR/.build" -ipath "*release*/$APP_NAME" -type f -perm -u+x | head -1)"
 fi
 if [ -z "$RELEASE_BIN" ] || [ ! -x "$RELEASE_BIN" ]; then
   echo "error: could not find the built release binary" >&2
