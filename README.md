@@ -276,6 +276,41 @@ the previous round shipped, not just a detail of it.
   short while keeping a model that fails to stop bounded to something
   recoverable. Type a number to set an explicit cap either direction.
 
+## Hugging Face auth, download control, and a real folder-scan fix
+
+- **Hugging Face token.** Models tab has a "Hugging Face Token" field —
+  authenticates search and downloads, needed for private repos and
+  gated ones you've been granted access to, and gets the authenticated
+  (higher) rate limit either way. Stored in the macOS keychain
+  (`HFTokenStore`), not `AppSettings`'s plain JSON file — this is a real
+  credential, unlike everything else that settings file holds. Applied
+  by setting `HF_TOKEN` in the download subprocess's environment
+  (exactly what `huggingface_hub` already looks for — confirmed live:
+  an unauthenticated test download printed huggingface_hub's own
+  "set a HF_TOKEN" warning, proving it checks for that variable) and as
+  an `Authorization: Bearer` header on search requests.
+- **Pause and Stop a download.** Both cancel the in-flight
+  `snapshot_download` process (`ProcessRunner` now supports cooperative
+  `Task` cancellation — cancelling sends the child `SIGTERM`); they only
+  differ in what happens to the partial directory after. Pause keeps
+  it — Hugging Face's own resumable-download support picks up where it
+  left off the next time that repo is downloaded again. Stop deletes
+  it. Validated for real, deterministically (not dependent on network
+  speed): cancelling a `ProcessRunner`-driven process mid-run threw
+  `CancellationError` and left no orphaned process, in under 2 seconds
+  for a script that would otherwise have run 30.
+- **The models-folder scan only found models one level deep.** A real
+  reported bug: pointing Anvil at an existing models folder found
+  nothing, because real models folders are almost always laid out
+  `<namespace>/<repo>/…` — exactly what `snapshot_download`/`git clone`
+  produce — not flat. `ModelImporter.importFolder` now recurses
+  (bounded depth, stops at the first directory that looks like a model
+  so it never descends into a diffusion pipeline's own `transformer/`/
+  `vae/` subfolders) instead of only checking immediate children.
+  Verified against a real, previously-broken folder on this Mac: the
+  fix found and registered all 8 real models nested two levels deep
+  that the old one-level scan missed entirely.
+
 ## Architecture
 
 - Single SwiftUI macOS app (`Anvil` target), built with Swift Package Manager

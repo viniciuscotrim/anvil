@@ -13,6 +13,21 @@ public struct ModelDownloader: Sendable {
         self.python = python
     }
 
+    /// Where `download(repoID:)` will place this repo's files — exposed
+    /// so a caller (the "Stop download" button) can find and delete a
+    /// partially-downloaded directory without duplicating this logic or
+    /// waiting for `download` to return a `ModelEntry` it never will if
+    /// cancelled.
+    public static func destinationDirectory(forRepoID repoID: String) -> URL {
+        AppSettings.load().effectiveModelsRoot.appendingPathComponent(sanitize(repoID), isDirectory: true)
+    }
+
+    /// Cooperatively cancellable — cancelling the calling `Task` sends
+    /// the underlying `snapshot_download` process `SIGTERM` and this
+    /// throws `CancellationError` (see `ProcessRunner`). The caller
+    /// decides what "cancelled" means: leave the partial directory in
+    /// place (pause — Hugging Face's own resumable-download support
+    /// picks up where it left off next time) or delete it (stop).
     @discardableResult
     public func download(
         repoID: String,
@@ -23,25 +38,45 @@ public struct ModelDownloader: Sendable {
             throw ModelError.downloadFailed("Python environment isn't set up yet — install the model browser first")
         }
 
-        let destination = AppSettings.load().effectiveModelsRoot
-            .appendingPathComponent(Self.sanitize(repoID), isDirectory: true)
+        let destination = Self.destinationDirectory(forRepoID: repoID)
 
         onProgress?("Downloading \(repoID)…")
 
         let script = """
+        import os
         import sys
         from huggingface_hub import snapshot_download
-        path = snapshot_download(repo_id=sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])
+        path = snapshot_download(
+            repo_id=sys.argv[1],
+            revision=sys.argv[2],
+            local_dir=sys.argv[3],
+            token=os.environ.get("HF_TOKEN") or None,
+        )
         print(path)
         """
+
+        // Passing `environment:` replaces the whole child environment
+        // (Foundation's `Process` only inherits it when left nil), so a
+        // token means starting from a real copy of ours, not a bare
+        // `["HF_TOKEN": …]` that would also strip PATH/HOME and break
+        // the interpreter.
+        var environment: [String: String]?
+        if let token = HFTokenStore.load(), !token.isEmpty {
+            var env = ProcessInfo.processInfo.environment
+            env["HF_TOKEN"] = token
+            environment = env
+        }
 
         let output: String
         do {
             output = try await ProcessRunner.run(
                 executable: python.venvPython,
                 arguments: ["-c", script, repoID, revision, destination.path],
+                environment: environment,
                 onOutputLine: onProgress
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ModelError.downloadFailed(error.localizedDescription)
         }

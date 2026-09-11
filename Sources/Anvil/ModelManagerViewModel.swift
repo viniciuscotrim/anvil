@@ -17,6 +17,15 @@ final class ModelManagerViewModel: ObservableObject {
     /// folder). Loaded from `AppSettings` at init.
     @Published var modelsRootPath: String?
     @Published var isChoosingModelsFolder: Bool = false
+    /// Held in the macOS keychain, not `AppSettings`'s plain JSON — see
+    /// `HFTokenStore`. Loaded once at init; the UI edits this directly
+    /// and calls `saveHFToken()`/`clearHFToken()` to persist it.
+    @Published var hfTokenDraft: String = ""
+    @Published private(set) var hasStoredHFToken: Bool = false
+    /// Which repo (if any) is actively downloading — drives the
+    /// Pause/Stop controls next to the search result and blocks
+    /// starting a second download at the same time.
+    @Published private(set) var activeDownloadRepoID: String?
 
     /// nil = no size filter. Small/Medium/Large are relative to this
     /// Mac's own RAM (see `ModelSizeClass`), not an absolute cutoff.
@@ -59,6 +68,11 @@ final class ModelManagerViewModel: ObservableObject {
     private let registry: ModelRegistry
     private let downloader: ModelDownloader
     private let importer: ModelImporter
+    /// The in-flight download, if any — cancelling this is the whole
+    /// mechanism behind both Pause and Stop; they differ only in
+    /// whether the partial directory gets deleted afterward.
+    private var downloadTask: Task<Void, Never>?
+    private var deletePartialOnCancel = false
 
     init(requirements: RequirementsManager) {
         self.requirements = requirements
@@ -67,6 +81,21 @@ final class ModelManagerViewModel: ObservableObject {
         self.downloader = ModelDownloader(registry: registry)
         self.importer = ModelImporter(registry: registry)
         self.modelsRootPath = AppSettings.load().modelsRootPath
+        self.hasStoredHFToken = HFTokenStore.load() != nil
+    }
+
+    // MARK: - Hugging Face token
+
+    func saveHFToken() {
+        HFTokenStore.save(hfTokenDraft)
+        hasStoredHFToken = HFTokenStore.load() != nil
+        hfTokenDraft = ""
+    }
+
+    func clearHFToken() {
+        HFTokenStore.clear()
+        hasStoredHFToken = false
+        hfTokenDraft = ""
     }
 
     func loadRegistry() async {
@@ -148,25 +177,67 @@ final class ModelManagerViewModel: ObservableObject {
         }
     }
 
-    func download(_ summary: HFModelSummary) async {
+    /// Fire-and-forget by design — not `async` — so the caller (a
+    /// button) doesn't hold the download's `Task` itself; `pauseDownload()`
+    /// /`stopDownload()` cancel the one this method stores instead.
+    /// One download at a time: a second call while one is already
+    /// running is a no-op.
+    func download(_ summary: HFModelSummary) {
+        guard downloadTask == nil else { return }
         errorMessage = nil
         isBusy = true
-        defer { isBusy = false; statusMessage = "" }
+        activeDownloadRepoID = summary.modelID
+        deletePartialOnCancel = false
 
-        let ready = await requirements.ensure(HuggingFaceClientDependency())
-        guard ready else {
-            errorMessage = requirements.lastError ?? "Could not set up the model browser"
-            return
-        }
-
-        do {
-            _ = try await downloader.download(repoID: summary.modelID) { [weak self] line in
-                Task { @MainActor in self?.statusMessage = line }
+        downloadTask = Task { [weak self] in
+            guard let self else { return }
+            let ready = await self.requirements.ensure(HuggingFaceClientDependency())
+            guard ready else {
+                self.errorMessage = self.requirements.lastError ?? "Could not set up the model browser"
+                self.finishDownload()
+                return
             }
-            await loadRegistry()
-        } catch {
-            errorMessage = error.localizedDescription
+
+            do {
+                _ = try await self.downloader.download(repoID: summary.modelID) { line in
+                    Task { @MainActor in self.statusMessage = line }
+                }
+                await self.loadRegistry()
+            } catch is CancellationError {
+                if self.deletePartialOnCancel {
+                    let destination = ModelDownloader.destinationDirectory(forRepoID: summary.modelID)
+                    try? FileManager.default.removeItem(at: destination)
+                }
+                // Paused (not deleted): nothing else to do — the partial
+                // directory stays, and Hugging Face's own resumable-
+                // download support picks up from it next time this repo
+                // is downloaded again.
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+            self.finishDownload()
         }
+    }
+
+    /// Cancels the in-flight download but keeps whatever's already been
+    /// fetched.
+    func pauseDownload() {
+        deletePartialOnCancel = false
+        downloadTask?.cancel()
+    }
+
+    /// Cancels the in-flight download and deletes whatever was
+    /// partially fetched.
+    func stopDownload() {
+        deletePartialOnCancel = true
+        downloadTask?.cancel()
+    }
+
+    private func finishDownload() {
+        isBusy = false
+        statusMessage = ""
+        downloadTask = nil
+        activeDownloadRepoID = nil
     }
 
     // MARK: - Image model defaults (keep-loaded toggle, resolution)

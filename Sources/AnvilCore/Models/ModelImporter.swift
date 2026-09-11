@@ -36,49 +36,67 @@ public struct ModelImporter: Sendable {
         return try await registry.upsert(entry)
     }
 
-    /// Scans a folder's immediate subdirectories and registers every one
-    /// that looks like a model — the mechanism behind "choose a models
-    /// folder": pick a folder full of models downloaded outside Anvil
-    /// (an old oMLX/Draw Things models directory, say) and this makes
-    /// them all show up in "Registered models" without moving a byte.
-    /// A subdirectory that's already registered (by path) is
-    /// re-registered in place — same path, so `upsert` just refreshes
-    /// its metadata rather than duplicating it — one that doesn't look
-    /// like a model is silently skipped, not an error: a models folder
+    /// Scans a folder — recursively, not just its immediate children —
+    /// and registers every subdirectory that looks like a model. Real
+    /// models folders are almost always laid out `<namespace>/<repo>/…`
+    /// (mirroring Hugging Face's own org/repo shape, which is exactly
+    /// what `snapshot_download`/`git clone` produce), so a one-level
+    /// scan found nothing in a folder full of real models — a real,
+    /// reported bug. Recursion stops the moment a directory looks like a
+    /// model itself (never descends into a model's own component
+    /// subfolders — `transformer/`, `vae/`, and friends for a diffusion
+    /// pipeline), and is bounded to a sane depth so a stray symlink loop
+    /// or an enormous unrelated folder can't run away. A subdirectory
+    /// that's already registered (by path) is re-registered in place —
+    /// same path, so `upsert` just refreshes its metadata rather than
+    /// duplicating it — one that doesn't look like a model anywhere
+    /// below it is silently skipped, not an error: a models folder
     /// legitimately has non-model clutter in it sometimes.
     @discardableResult
-    public func importFolder(at path: URL) async throws -> [ModelEntry] {
+    public func importFolder(at path: URL, maxDepth: Int = 4) async throws -> [ModelEntry] {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
             throw ModelError.importFailed("\(path.path) is not a directory")
         }
 
-        // The folder itself might directly *be* one model (its own
-        // files at the top level) rather than a folder *of* models —
-        // handle that case too instead of finding nothing.
-        if Self.looksLikeAModel(at: path) {
-            return [try await importModel(at: path)]
-        }
-
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: path,
-            includingPropertiesForKeys: [.isDirectoryKey]
-        ) else {
-            return []
-        }
+        let modelDirectories = Self.findModelDirectories(under: path, remainingDepth: maxDepth)
 
         var imported: [ModelEntry] = []
-        for entry in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            var entryIsDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: entry.path, isDirectory: &entryIsDirectory),
-                  entryIsDirectory.boolValue,
-                  Self.looksLikeAModel(at: entry) else { continue }
-            if let registered = try? await importModel(at: entry) {
+        for directory in modelDirectories.sorted(by: { $0.path < $1.path }) {
+            if let registered = try? await importModel(at: directory) {
                 imported.append(registered)
             }
         }
         return imported
+    }
+
+    /// Depth-first search for model directories under `root` (`root`
+    /// itself included). Never recurses into a directory once it's
+    /// already been identified as a model.
+    private static func findModelDirectories(under root: URL, remainingDepth: Int) -> [URL] {
+        if looksLikeAModel(at: root) {
+            return [root]
+        }
+        guard remainingDepth > 0,
+              let contents = try? FileManager.default.contentsOfDirectory(
+                  at: root,
+                  includingPropertiesForKeys: [.isDirectoryKey]
+              ) else {
+            return []
+        }
+
+        var found: [URL] = []
+        for entry in contents {
+            // Skip hidden entries (`.cache`, `.git`, `.DS_Store`, …) —
+            // never anything a scan like this should surface.
+            guard !entry.lastPathComponent.hasPrefix(".") else { continue }
+            var entryIsDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: entry.path, isDirectory: &entryIsDirectory),
+                  entryIsDirectory.boolValue else { continue }
+            found += findModelDirectories(under: entry, remainingDepth: remainingDepth - 1)
+        }
+        return found
     }
 
     static func looksLikeAModel(at path: URL) -> Bool {

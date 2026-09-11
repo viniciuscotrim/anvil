@@ -101,7 +101,16 @@ public struct HuggingFaceCatalog: Sendable {
             throw ModelError.searchFailed("Could not build search URL")
         }
 
-        let (data, response) = try await session.data(from: url)
+        var request = URLRequest(url: url)
+        // Authenticated when a token is set (Anvil's Settings) — turns
+        // up the user's own private/gated repos in search results too,
+        // not just public ones, and gets Hugging Face's higher
+        // authenticated rate limit.
+        if let token = HFTokenStore.load(), !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw ModelError.searchFailed("Unexpected response from Hugging Face")
         }

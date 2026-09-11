@@ -23,6 +23,7 @@ struct ModelManagerView: View {
             searchBar
             searchOptionsBar
             modelsFolderBar
+            hfTokenBar
 
             if !viewModel.searchResults.isEmpty {
                 searchResultsList
@@ -146,6 +147,37 @@ struct ModelManagerView: View {
         .font(.callout)
     }
 
+    /// Authenticates search and downloads against Hugging Face — needed
+    /// for private repos and gated ones you've been granted access to,
+    /// and gets the authenticated (higher) rate limit either way. Held
+    /// in the macOS keychain, not a plain settings file — see
+    /// `HFTokenStore`.
+    private var hfTokenBar: some View {
+        HStack {
+            Image(systemName: "key")
+                .foregroundStyle(.secondary)
+            Text("Hugging Face Token:")
+                .foregroundStyle(.secondary)
+
+            if viewModel.hasStoredHFToken {
+                Text("Set").foregroundStyle(.green)
+                Spacer()
+                Button("Remove") { viewModel.clearHFToken() }
+            } else {
+                SecureField("hf_…", text: Binding(
+                    get: { viewModel.hfTokenDraft },
+                    set: { viewModel.hfTokenDraft = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 260)
+                Button("Save") { viewModel.saveHFToken() }
+                    .disabled(viewModel.hfTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Spacer()
+            }
+        }
+        .font(.callout)
+    }
+
     private var searchResultsList: some View {
         List(viewModel.filteredSearchResults) { summary in
             HStack {
@@ -165,8 +197,13 @@ struct ModelManagerView: View {
                     .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Download") { Task { await viewModel.download(summary) } }
-                    .disabled(viewModel.isBusy)
+                if viewModel.activeDownloadRepoID == summary.modelID {
+                    Button("Pause") { viewModel.pauseDownload() }
+                    Button("Stop", role: .destructive) { viewModel.stopDownload() }
+                } else {
+                    Button("Download") { viewModel.download(summary) }
+                        .disabled(viewModel.isBusy)
+                }
             }
         }
         .frame(minHeight: 160, maxHeight: 220)

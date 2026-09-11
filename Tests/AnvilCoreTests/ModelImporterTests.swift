@@ -84,6 +84,52 @@ struct ModelImporterTests {
     }
 
     @Test
+    func importFolderFindsModelsNestedTwoLevelsDeepLikeAnHFNamespaceRepoLayout() async throws {
+        // A real reported bug: a one-level-only scan found nothing in a
+        // real models folder, because `snapshot_download`/`git clone`
+        // lay files out as `<namespace>/<repo>/…`, not flat.
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let nested = root
+            .appendingPathComponent("mlx-community", isDirectory: true)
+            .appendingPathComponent("Some-Model-4bit", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try "{}".write(to: nested.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        let registry = ModelRegistry(fileURL: root.appendingPathComponent("registry.json"))
+        let importer = ModelImporter(registry: registry)
+
+        let imported = try await importer.importFolder(at: root)
+
+        #expect(imported.count == 1)
+        #expect(imported.first?.localPath == nested.standardizedFileURL.path)
+    }
+
+    @Test
+    func importFolderDoesNotDescendIntoAModelsOwnComponentSubdirectories() async throws {
+        // A diffusion pipeline's `transformer/`/`vae/` subfolders must
+        // never be registered as their own separate "models".
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pipeline = root.appendingPathComponent("flux-model", isDirectory: true)
+        let transformer = pipeline.appendingPathComponent("transformer", isDirectory: true)
+        let vae = pipeline.appendingPathComponent("vae", isDirectory: true)
+        try FileManager.default.createDirectory(at: transformer, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: vae, withIntermediateDirectories: true)
+        try "{}".write(to: transformer.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        let registry = ModelRegistry(fileURL: root.appendingPathComponent("registry.json"))
+        let importer = ModelImporter(registry: registry)
+
+        let imported = try await importer.importFolder(at: root)
+
+        #expect(imported.count == 1)
+        #expect(imported.first?.localPath == pipeline.standardizedFileURL.path)
+    }
+
+    @Test
     func importFolderImportsTheFolderItselfWhenItIsDirectlyAModel() async throws {
         let dir = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
