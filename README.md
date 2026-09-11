@@ -311,6 +311,39 @@ the previous round shipped, not just a detail of it.
   fix found and registered all 8 real models nested two levels deep
   that the old one-level scan missed entirely.
 
+## Moving/deleting registered models, and grouping them by family
+
+Models registered from outside the current models folder (the ones
+that made Anvil's own default folder still show entries after pointing
+it elsewhere — expected, since changing the folder is forward-only, it
+was never going to retroactively move anything) now have a real way to
+consolidate or clear them out:
+
+- **Move into the current folder** — a tray icon next to a model whose
+  files live somewhere other than the current models folder physically
+  moves them there (`FileManager.moveItem`, real bytes on disk, nothing
+  re-downloaded) and updates the registry to match. The entry's `id` is
+  deliberately left untouched by a move — even for an imported model,
+  whose `id` embeds its original path — specifically so nothing that
+  references it elsewhere (a loaded session, a profile's default-model
+  binding) goes stale; only `localPath` changes.
+- **Delete** — a trash icon moves a model's files to the Trash (not a
+  permanent delete; recoverable there the same as any other Finder
+  delete, which matters given these are often multi-gigabyte weights)
+  and removes it from the registry, behind a confirmation dialog.
+  Verified for real: `FileManager.trashItem` moved a test directory to
+  `~/.Trash` and left nothing at the original path.
+- Both are disabled while the model is currently loaded — unload it
+  first.
+- **Grouped by family.** "Registered models" is no longer one flat
+  list — `ModelFamilyGrouping` buckets every size/quantization variant
+  of the same underlying model together ("Qwen3.5" holding its 9B-bf16,
+  9B-mxfp8, and 4B-4bit entries; "FLUX.2-klein" its own), by stripping
+  the trailing size ("9B") and quant/dtype ("4bit", "bf16", "mxfp8", …)
+  tokens off an HF-style repo name and grouping on what's left. A name
+  that doesn't match anything just becomes its own singleton group
+  rather than an error.
+
 ## Architecture
 
 - Single SwiftUI macOS app (`Anvil` target), built with Swift Package Manager

@@ -218,33 +218,88 @@ struct ModelManagerView: View {
                 Text("None yet.")
                     .foregroundStyle(.secondary)
             } else {
-                List(viewModel.registeredModels) { entry in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text(entry.displayName)
-                                Text(entry.kind == .image ? "· image" : "· text")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                if let size = entry.sizeBytes {
-                                    Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                // Grouped by family (e.g. every "Qwen3.5" size/quant
+                // variant together, "FLUX.2-klein" its own) rather than
+                // one flat list — see `ModelManagerViewModel.familyName`.
+                List {
+                    ForEach(viewModel.registeredModelFamilies) { family in
+                        Section(family.name) {
+                            ForEach(family.models) { entry in
+                                modelRow(entry)
                             }
-                            Text(entry.localPath)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
                         }
-                        Spacer()
-                        loadControl(for: entry)
                     }
                 }
-                .frame(minHeight: 140)
+                .frame(minHeight: 220)
             }
+        }
+        .confirmationDialog(
+            "Move \"\(viewModel.modelPendingDeletion?.displayName ?? "")\" to the Trash?",
+            isPresented: Binding(
+                get: { viewModel.modelPendingDeletion != nil },
+                set: { if !$0 { viewModel.modelPendingDeletion = nil } }
+            ),
+            presenting: viewModel.modelPendingDeletion
+        ) { entry in
+            Button("Move to Trash", role: .destructive) {
+                Task { await viewModel.deleteModel(entry) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { entry in
+            Text("This moves the model's files to the Trash and removes it from Anvil — not a permanent delete, but it does free up \(ByteCountFormatter.string(fromByteCount: entry.sizeBytes ?? 0, countStyle: .file)) once emptied.")
+        }
+    }
+
+    private func modelRow(_ entry: ModelEntry) -> some View {
+        let isLoaded = entry.kind == .image ? imageSessions.isLoaded(modelID: entry.id) : sessions.isLoaded(modelID: entry.id)
+
+        return HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(entry.displayName)
+                    Text(entry.kind == .image ? "· image" : "· text")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if let size = entry.sizeBytes {
+                        Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(entry.localPath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+
+            if !viewModel.isUnderCurrentModelsFolder(entry) {
+                Button {
+                    Task { await viewModel.moveToCurrentFolder(entry) }
+                } label: {
+                    if viewModel.movingModelID == entry.id {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "tray.and.arrow.down")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(isLoaded || viewModel.movingModelID != nil)
+                .help(isLoaded ? "Unload the model first." : "Move into the current models folder.")
+            }
+
+            Button {
+                viewModel.modelPendingDeletion = entry
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .disabled(isLoaded)
+            .help(isLoaded ? "Unload the model first." : "Move this model's files to the Trash.")
+
+            loadControl(for: entry)
         }
     }
 

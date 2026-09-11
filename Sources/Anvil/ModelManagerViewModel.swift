@@ -50,6 +50,11 @@ final class ModelManagerViewModel: ObservableObject {
         }
     }
 
+    /// Grouped by family for display — see `ModelFamilyGrouping`.
+    var registeredModelFamilies: [ModelFamilyGrouping.Family] {
+        ModelFamilyGrouping.group(registeredModels)
+    }
+
     /// Which model's server-settings popover is open, if any — one at
     /// a time is plenty.
     @Published var openServerSettingsFor: String?
@@ -238,6 +243,89 @@ final class ModelManagerViewModel: ObservableObject {
         statusMessage = ""
         downloadTask = nil
         activeDownloadRepoID = nil
+    }
+
+    // MARK: - Moving / deleting a registered model's files
+
+    /// True when this model's files already live under the current
+    /// models folder — the "Move" button only makes sense otherwise
+    /// (drives whether the View shows/enables it).
+    func isUnderCurrentModelsFolder(_ entry: ModelEntry) -> Bool {
+        let root = AppSettings.load().effectiveModelsRoot.standardizedFileURL.path
+        let path = URL(fileURLWithPath: entry.localPath).standardizedFileURL.path
+        return path == root || path.hasPrefix(root + "/")
+    }
+
+    @Published private(set) var movingModelID: String?
+    /// Which model the delete confirmation dialog is asking about, if
+    /// any — set by the View's Delete button, cleared once answered.
+    @Published var modelPendingDeletion: ModelEntry?
+
+    /// Physically moves this model's files into the current models
+    /// folder and updates the registry to match — real bytes move on
+    /// disk, nothing is re-downloaded. The entry's `id` is left
+    /// untouched even for an imported model (whose id embeds its
+    /// original path) specifically so nothing referencing it elsewhere
+    /// — a loaded session, a profile's default-model binding — goes
+    /// stale; only `localPath` (and an imported entry's `source`
+    /// bookkeeping) changes.
+    func moveToCurrentFolder(_ entry: ModelEntry) async {
+        errorMessage = nil
+        guard !isUnderCurrentModelsFolder(entry) else { return }
+
+        let root = AppSettings.load().effectiveModelsRoot
+        let source = URL(fileURLWithPath: entry.localPath)
+        let destination = root.appendingPathComponent(source.lastPathComponent, isDirectory: true)
+
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            errorMessage = "\"\(source.lastPathComponent)\" already exists in the models folder."
+            return
+        }
+
+        movingModelID = entry.id
+        defer { movingModelID = nil }
+
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: source, to: destination)
+        } catch {
+            errorMessage = "Could not move \(entry.displayName): \(error.localizedDescription)"
+            return
+        }
+
+        var updated = entry
+        updated.localPath = destination.path
+        if case .imported = entry.source {
+            updated.source = .imported(originalPath: destination.standardizedFileURL.path)
+        }
+        guard let saved = try? await registry.upsert(updated) else { return }
+        if let index = registeredModels.firstIndex(where: { $0.id == entry.id }) {
+            registeredModels[index] = saved
+        }
+    }
+
+    /// Moves this model's files to the Trash (not a permanent delete —
+    /// recoverable there like any other Finder delete, which matters
+    /// for multi-gigabyte weights) and removes it from the registry.
+    /// The caller (the View) confirms with the user first. If the files
+    /// are already gone (deleted outside Anvil), the registry entry is
+    /// still removed rather than left dangling; a real error moving to
+    /// the Trash otherwise stops short of touching the registry, so a
+    /// model whose files couldn't actually be removed doesn't just
+    /// vanish from the list.
+    func deleteModel(_ entry: ModelEntry) async {
+        errorMessage = nil
+        let url = URL(fileURLWithPath: entry.localPath)
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            } catch {
+                errorMessage = "Could not delete \(entry.displayName): \(error.localizedDescription)"
+                return
+            }
+        }
+        try? await registry.remove(id: entry.id)
+        registeredModels.removeAll { $0.id == entry.id }
     }
 
     // MARK: - Image model defaults (keep-loaded toggle, resolution)
