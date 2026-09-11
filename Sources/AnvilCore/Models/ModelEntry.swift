@@ -17,6 +17,7 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
     public var localPath: String
     public var sizeBytes: Int64?
     public var addedAt: Date
+    public var kind: ModelKind
 
     public init(
         id: String,
@@ -24,7 +25,8 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
         source: ModelSource,
         localPath: String,
         sizeBytes: Int64?,
-        addedAt: Date = Date()
+        addedAt: Date = Date(),
+        kind: ModelKind = .text
     ) {
         self.id = id
         self.displayName = displayName
@@ -32,6 +34,24 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
         self.localPath = localPath
         self.sizeBytes = sizeBytes
         self.addedAt = addedAt
+        self.kind = kind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, displayName, source, localPath, sizeBytes, addedAt, kind
+    }
+
+    // A registry saved before `kind` existed just defaults to `.text`
+    // on next load — no migration step, no crash.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        source = try container.decode(ModelSource.self, forKey: .source)
+        localPath = try container.decode(String.self, forKey: .localPath)
+        sizeBytes = try container.decodeIfPresent(Int64.self, forKey: .sizeBytes)
+        addedAt = try container.decode(Date.self, forKey: .addedAt)
+        kind = try container.decodeIfPresent(ModelKind.self, forKey: .kind) ?? .text
     }
 }
 

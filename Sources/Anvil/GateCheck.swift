@@ -123,4 +123,120 @@ enum GateCheck {
 
         return true
     }
+
+    /// The full Phase 4 loop, for real: a real text model with the
+    /// `generate_image` tool offered, a real Flux model behind it, one
+    /// chat message that should make the text model call the tool, the
+    /// image actually generated, and a follow-up reply that references
+    /// it — the same round trip `ChatViewModel.send()` runs, exercised
+    /// headlessly end to end.
+    static func runPhase4GateIfRequested() async -> Bool {
+        guard CommandLine.arguments.contains("--phase4-gate") else { return false }
+
+        let env = ProcessInfo.processInfo.environment
+        guard let textModelPath = env["ANVIL_GATE_TEXT_MODEL_PATH"] else {
+            log("ANVIL_GATE_TEXT_MODEL_PATH must be set to a local text model directory")
+            print("{}")
+            return true
+        }
+        guard let imageModelPath = env["ANVIL_GATE_IMAGE_MODEL_PATH"] else {
+            log("ANVIL_GATE_IMAGE_MODEL_PATH must be set to a local Flux model directory")
+            print("{}")
+            return true
+        }
+        let baseModel = env["ANVIL_GATE_IMAGE_BASE_MODEL"]
+        let prompt = env["ANVIL_GATE_PROMPT"] ?? "Please generate an image of a red apple on a white table."
+
+        let textServer = LLMServer()
+        let imageServer = ImageServer()
+        let chatClient = ChatClient()
+        let imageClient = ImageClient()
+
+        var result: [String: Any] = [
+            "textModelPath": textModelPath,
+            "imageModelPath": imageModelPath
+        ]
+
+        do {
+            let python = PythonEnvironment()
+            if !(await python.isPackageInstalled("mlx_lm")) {
+                log("Setting up text generation…")
+                try await python.pipInstall(["mlx-lm"])
+            }
+            if !(await python.isPackageInstalled("mflux")) {
+                log("Setting up image generation…")
+                try await python.pipInstall(["mflux"])
+            }
+
+            log("Starting text server with \(textModelPath)…")
+            try await textServer.start(
+                modelPath: textModelPath,
+                displayName: URL(fileURLWithPath: textModelPath).lastPathComponent,
+                port: env["ANVIL_GATE_TEXT_PORT"].flatMap(Int.init) ?? 8000
+            ) { log($0) }
+
+            log("Starting image server with \(imageModelPath)…")
+            try await imageServer.start(
+                modelPath: imageModelPath,
+                displayName: URL(fileURLWithPath: imageModelPath).lastPathComponent,
+                baseModel: baseModel,
+                port: env["ANVIL_GATE_IMAGE_PORT"].flatMap(Int.init) ?? 8200
+            ) { log($0) }
+
+            log("Sending: \(prompt)")
+            var messages = [ChatMessage(role: .user, content: prompt)]
+            var reply = try await chatClient.send(
+                messages: messages,
+                baseURL: textServer.baseURL,
+                tools: [.generateImage]
+            )
+            result["firstReplyToolCalls"] = reply.toolCalls?.map(\.name) ?? []
+
+            if let call = reply.toolCalls?.first(where: { $0.name == "generate_image" }) {
+                log("Model called generate_image with: \(call.argumentsJSON)")
+                messages.append(reply)
+
+                struct Arguments: Decodable { let prompt: String }
+                let arguments = try JSONDecoder().decode(
+                    Arguments.self,
+                    from: Data(call.argumentsJSON.utf8)
+                )
+
+                log("Generating image for real…")
+                let imageResult = try await imageClient.generate(prompt: arguments.prompt, baseURL: imageServer.baseURL)
+                result["generatedImagePath"] = imageResult.localPath
+                result["generatedImageFileExists"] = FileManager.default.fileExists(atPath: imageResult.localPath)
+
+                messages.append(ChatMessage(
+                    role: .tool,
+                    content: "Image generated successfully and is already displayed to the user in this chat. "
+                        + "Do not include a URL or Markdown image syntax — just briefly acknowledge it in plain text.",
+                    toolCallID: call.id
+                ))
+
+                log("Sending follow-up for the model's narration…")
+                reply = try await chatClient.send(messages: messages, baseURL: textServer.baseURL)
+                result["finalReply"] = reply.content
+                log("Final reply: \(reply.content)")
+            } else {
+                log("Model did not call generate_image — recording its plain reply instead.")
+                result["finalReply"] = reply.content
+            }
+        } catch {
+            result["error"] = error.localizedDescription
+            log("Gate check failed: \(error.localizedDescription)")
+        }
+
+        await textServer.stop()
+        await imageServer.stop()
+
+        if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            print(json)
+        } else {
+            print("{}")
+        }
+
+        return true
+    }
 }

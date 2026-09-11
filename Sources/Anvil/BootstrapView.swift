@@ -19,13 +19,18 @@ struct RootView: View {
                     isInstalling: requirements.isInstalling,
                     errorMessage: requirements.lastError
                 )
-            case .modelManager, .chat:
+            case .modelManager, .chat, .images:
                 tabBar
                 Divider()
-                if router.screen == .modelManager {
+                switch router.screen {
+                case .modelManager:
                     ModelManagerView(requirements: requirements)
-                } else {
+                case .chat:
                     ChatView()
+                case .images:
+                    ImageGenerationView()
+                case .bootstrap:
+                    EmptyView()
                 }
             }
         }
@@ -41,6 +46,7 @@ struct RootView: View {
         HStack(spacing: 8) {
             tabButton("Models", screen: .modelManager)
             tabButton("Chat", screen: .chat)
+            tabButton("Images", screen: .images)
             Spacer()
         }
         .padding(.horizontal)

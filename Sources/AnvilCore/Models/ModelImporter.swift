@@ -30,7 +30,8 @@ public struct ModelImporter: Sendable {
             displayName: path.lastPathComponent,
             source: .imported(originalPath: path.standardizedFileURL.path),
             localPath: path.standardizedFileURL.path,
-            sizeBytes: DirectorySize.of(path)
+            sizeBytes: DirectorySize.of(path),
+            kind: ModelKindDetector.detect(at: path)
         )
         return try await registry.upsert(entry)
     }
@@ -42,8 +43,14 @@ public struct ModelImporter: Sendable {
         ) else {
             return false
         }
+        let names = Set(contents.map(\.lastPathComponent))
 
-        if contents.contains(where: { $0.lastPathComponent == "config.json" }) {
+        if names.contains("config.json") || names.contains("model_index.json") {
+            return true
+        }
+        // A diffusion pipeline (Flux and friends): weights live inside
+        // component subdirectories rather than flat at the top level.
+        if names.contains("transformer") && names.contains("vae") {
             return true
         }
         return contents.contains { ["safetensors", "gguf"].contains($0.pathExtension.lowercased()) }

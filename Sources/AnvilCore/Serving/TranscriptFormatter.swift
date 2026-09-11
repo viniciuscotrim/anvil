@@ -29,6 +29,7 @@ public enum TranscriptFormatter {
         case .user: return "You"
         case .assistant: return "Assistant"
         case .system: return "System"
+        case .tool: return "Tool"
         }
     }
 

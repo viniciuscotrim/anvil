@@ -54,12 +54,14 @@ public struct ModelDownloader: Sendable {
             throw ModelError.downloadFailed("snapshot_download did not produce a usable local path")
         }
 
+        let localURL = URL(fileURLWithPath: localPath)
         let entry = ModelEntry(
             id: repoID,
             displayName: repoID,
             source: .huggingFace(repoID: repoID, revision: revision),
             localPath: localPath,
-            sizeBytes: DirectorySize.of(URL(fileURLWithPath: localPath))
+            sizeBytes: DirectorySize.of(localURL),
+            kind: ModelKindDetector.detect(at: localURL)
         )
         return try await registry.upsert(entry)
     }

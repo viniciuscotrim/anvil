@@ -27,36 +27,26 @@ public struct ChatClient: Sendable {
         baseURL: URL,
         model: String = "default_model",
         modelDisplayName: String = "",
-        settings: GenerationSettings = .default
+        settings: GenerationSettings = .default,
+        tools: [ChatTool] = []
     ) async throws -> ChatMessage {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        struct WireMessage: Encodable {
-            let role: String
-            let content: String
+        var body: [String: Any] = [
+            "model": model,
+            "messages": messages.map(Self.wireMessage),
+            "max_tokens": settings.maxTokens,
+            "temperature": settings.temperature,
+            "top_p": settings.topP,
+            "top_k": settings.topK,
+            "min_p": settings.minP
+        ]
+        if !tools.isEmpty {
+            body["tools"] = tools.map(\.wireRepresentation)
         }
-        struct RequestBody: Encodable {
-            let model: String
-            let messages: [WireMessage]
-            let max_tokens: Int
-            let temperature: Double
-            let top_p: Double
-            let top_k: Int
-            let min_p: Double
-        }
-        request.httpBody = try JSONEncoder().encode(
-            RequestBody(
-                model: model,
-                messages: messages.map { WireMessage(role: $0.role.rawValue, content: $0.content) },
-                max_tokens: settings.maxTokens,
-                temperature: settings.temperature,
-                top_p: settings.topP,
-                top_k: settings.topK,
-                min_p: settings.minP
-            )
-        )
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let start = Date()
 
@@ -71,8 +61,8 @@ public struct ChatClient: Sendable {
 
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw ServingError.requestFailed("HTTP \(statusCode): \(body)")
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            throw ServingError.requestFailed("HTTP \(statusCode): \(bodyText)")
         }
 
         let decoded: ChatCompletionResponse
@@ -91,21 +81,54 @@ public struct ChatClient: Sendable {
             ? Double(completionTokens) / elapsedSeconds
             : nil
 
+        let toolCalls = choice.message.tool_calls?.map {
+            ChatMessage.ToolCall(id: $0.id, name: $0.function.name, argumentsJSON: $0.function.arguments)
+        }
+
         return ChatMessage(
             role: .assistant,
             content: choice.message.content?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
             reasoning: choice.message.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             modelDisplayName: modelDisplayName.nilIfEmpty,
-            tokensPerSecond: tokensPerSecond
+            tokensPerSecond: tokensPerSecond,
+            toolCalls: (toolCalls?.isEmpty ?? true) ? nil : toolCalls
         )
+    }
+
+    /// Wire shape stays intentionally narrow: role/content always, plus
+    /// `tool_call_id` for a `.tool` result and `tool_calls` for an
+    /// assistant message that made one — never the other locally-only
+    /// fields (id, reasoning, modelDisplayName, tokensPerSecond,
+    /// generatedImagePath) that make `ChatMessage` fully `Codable` for
+    /// disk persistence.
+    private static func wireMessage(_ message: ChatMessage) -> [String: Any] {
+        var wire: [String: Any] = ["role": message.role.rawValue, "content": message.content]
+        if let toolCallID = message.toolCallID {
+            wire["tool_call_id"] = toolCallID
+        }
+        if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
+            wire["tool_calls"] = toolCalls.map {
+                ["id": $0.id, "type": "function", "function": ["name": $0.name, "arguments": $0.argumentsJSON]]
+            }
+        }
+        return wire
     }
 }
 
 private struct ChatCompletionResponse: Decodable {
     struct Choice: Decodable {
         struct Message: Decodable {
+            struct ToolCallWire: Decodable {
+                struct Function: Decodable {
+                    let name: String
+                    let arguments: String
+                }
+                let id: String
+                let function: Function
+            }
             let content: String?
             let reasoning: String?
+            let tool_calls: [ToolCallWire]?
         }
         let message: Message
     }

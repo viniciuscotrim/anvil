@@ -4,9 +4,13 @@ import UniformTypeIdentifiers
 
 /// Phase 2: browse/search/download against Hugging Face directly, plus
 /// importing an already-downloaded model folder without re-fetching it.
+/// A model's `kind` (auto-detected at download/import time) decides
+/// which session manager — text or image — its Load/Unload/server
+/// controls talk to.
 struct ModelManagerView: View {
     @StateObject private var viewModel: ModelManagerViewModel
     @EnvironmentObject private var sessions: ModelSessionManager
+    @EnvironmentObject private var imageSessions: ImageSessionManager
     private let requirements: RequirementsManager
 
     init(requirements: RequirementsManager) {
@@ -106,6 +110,9 @@ struct ModelManagerView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {
                                 Text(entry.displayName)
+                                Text(entry.kind == .image ? "· image" : "· text")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
                                 Spacer()
                                 if let size = entry.sizeBytes {
                                     Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
@@ -130,6 +137,16 @@ struct ModelManagerView: View {
 
     @ViewBuilder
     private func loadControl(for entry: ModelEntry) -> some View {
+        switch entry.kind {
+        case .text:
+            textLoadControl(for: entry)
+        case .image:
+            imageLoadControl(for: entry)
+        }
+    }
+
+    @ViewBuilder
+    private func textLoadControl(for entry: ModelEntry) -> some View {
         let session = sessions.sessions.first { $0.id == entry.id }
 
         HStack(spacing: 6) {
@@ -155,14 +172,75 @@ struct ModelManagerView: View {
                 Button("Retry") { Task { await sessions.load(entry, requirements: requirements) } }
             }
 
-            serverSettingsButton(for: entry)
+            serverSettingsButton(
+                for: entry,
+                currentPort: session?.port ?? sessions.suggestedPort(),
+                currentAccess: session?.access ?? .localOnly,
+                isLoaded: sessions.isLoaded(modelID: entry.id)
+            ) { access, port in
+                if sessions.isLoaded(modelID: entry.id) {
+                    await sessions.updateServerSettings(modelID: entry.id, requirements: requirements, access: access, port: port)
+                } else {
+                    await sessions.load(entry, requirements: requirements, access: access, port: port)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func imageLoadControl(for entry: ModelEntry) -> some View {
+        let session = imageSessions.sessions.first { $0.id == entry.id }
+
+        HStack(spacing: 6) {
+            switch session?.status {
+            case .none:
+                Button("Load") { Task { await imageSessions.load(entry, requirements: requirements) } }
+
+            case .loading:
+                ProgressView().controlSize(.small)
+                Text("Loading…").font(.caption).foregroundStyle(.secondary)
+
+            case .ready:
+                Circle().fill(.green).frame(width: 8, height: 8)
+                Text("\(session?.access.host ?? ""):\(session?.port ?? 0)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Unload") { Task { await imageSessions.unload(modelID: entry.id) } }
+
+            case .failed(let reason):
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(reason)
+                Button("Retry") { Task { await imageSessions.load(entry, requirements: requirements) } }
+            }
+
+            serverSettingsButton(
+                for: entry,
+                currentPort: session?.port ?? imageSessions.suggestedPort(),
+                currentAccess: session?.access ?? .localOnly,
+                isLoaded: imageSessions.isLoaded(modelID: entry.id)
+            ) { access, port in
+                if imageSessions.isLoaded(modelID: entry.id) {
+                    await imageSessions.updateServerSettings(modelID: entry.id, requirements: requirements, access: access, port: port)
+                } else {
+                    await imageSessions.load(entry, requirements: requirements, access: access, port: port)
+                }
+            }
         }
     }
 
     /// Opt-in, per-model control for the two things a server the user
     /// opens must let them decide: which port, and whether it's
-    /// reachable only from this Mac or over the network.
-    private func serverSettingsButton(for entry: ModelEntry) -> some View {
+    /// reachable only from this Mac or over the network. Works for
+    /// either session manager — the caller supplies the current
+    /// port/access and how to actually apply a new choice.
+    private func serverSettingsButton(
+        for entry: ModelEntry,
+        currentPort: Int,
+        currentAccess: ServerAccess,
+        isLoaded: Bool,
+        apply: @escaping (ServerAccess, Int) async -> Void
+    ) -> some View {
         Button {
             viewModel.openServerSettingsFor = entry.id
         } label: {
@@ -177,20 +255,31 @@ struct ModelManagerView: View {
                 }
             }
         )) {
-            serverSettingsPopover(for: entry)
+            serverSettingsPopover(
+                for: entry,
+                currentPort: currentPort,
+                currentAccess: currentAccess,
+                isLoaded: isLoaded,
+                apply: apply
+            )
         }
     }
 
-    private func serverSettingsPopover(for entry: ModelEntry) -> some View {
-        let isLoaded = sessions.isLoaded(modelID: entry.id)
-        let currentAccess = viewModel.access(for: entry.id, sessions: sessions)
+    private func serverSettingsPopover(
+        for entry: ModelEntry,
+        currentPort: Int,
+        currentAccess: ServerAccess,
+        isLoaded: Bool,
+        apply: @escaping (ServerAccess, Int) async -> Void
+    ) -> some View {
+        let resolvedAccess = viewModel.access(for: entry.id, currentAccess: currentAccess)
 
         return VStack(alignment: .leading, spacing: 10) {
             Text("Server Settings").font(.headline)
 
             Picker("Access", selection: Binding(
-                get: { currentAccess },
-                set: { viewModel.setAccess($0, for: entry.id, sessions: sessions) }
+                get: { resolvedAccess },
+                set: { viewModel.setAccess($0, for: entry.id, currentPort: currentPort, currentAccess: currentAccess) }
             )) {
                 ForEach(ServerAccess.allCases) { access in
                     Text(access.label).tag(access)
@@ -199,14 +288,14 @@ struct ModelManagerView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            Text(currentAccess.explanation)
+            Text(resolvedAccess.explanation)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             LabeledContent("Port") {
                 TextField("8000", text: Binding(
-                    get: { viewModel.portText(for: entry.id, sessions: sessions) },
-                    set: { viewModel.setPortText($0, for: entry.id, sessions: sessions) }
+                    get: { viewModel.portText(for: entry.id, currentPort: currentPort) },
+                    set: { viewModel.setPortText($0, for: entry.id, currentPort: currentPort, currentAccess: currentAccess) }
                 ))
                 .frame(width: 80)
             }
@@ -215,7 +304,12 @@ struct ModelManagerView: View {
                 Spacer()
                 Button(isLoaded ? "Apply & Restart" : "Load") {
                     Task {
-                        await viewModel.applyServerSettings(for: entry, sessions: sessions, requirements: requirements)
+                        await viewModel.applyServerSettings(
+                            for: entry.id,
+                            currentPort: currentPort,
+                            currentAccess: currentAccess,
+                            apply: apply
+                        )
                     }
                 }
                 .buttonStyle(.borderedProminent)

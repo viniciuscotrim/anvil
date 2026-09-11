@@ -19,7 +19,7 @@ struct ChatView: View {
 
                 if sessions.readySessions.isEmpty {
                     emptyState
-                } else if chat.messages.isEmpty {
+                } else if chat.visibleMessages.isEmpty {
                     Spacer()
                     Text("Say something to \(activeModelName).")
                         .foregroundStyle(.secondary)
@@ -126,7 +126,7 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(chat.messages) { message in
+                    ForEach(chat.visibleMessages) { message in
                         bubble(for: message)
                             .id(message.id)
                     }
@@ -139,8 +139,8 @@ struct ChatView: View {
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onChange(of: chat.messages) { _, _ in
-                let target: AnyHashable = chat.messages.last.map { AnyHashable($0.id) }
+            .onChange(of: chat.visibleMessages) { _, _ in
+                let target: AnyHashable = chat.visibleMessages.last.map { AnyHashable($0.id) }
                     ?? AnyHashable("sending-indicator")
                 withAnimation {
                     proxy.scrollTo(target, anchor: .bottom)
@@ -172,9 +172,17 @@ struct ChatView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .italic()
-                } else {
+                } else if !message.content.isEmpty {
                     Text(message.content)
                         .textSelection(.enabled)
+                }
+
+                if let path = message.generatedImagePath, let nsImage = NSImage(contentsOfFile: path) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 280)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
             }
             .padding(10)
@@ -189,6 +197,7 @@ struct ChatView: View {
         case .user: return "You"
         case .system: return "System"
         case .assistant: return message.modelDisplayName.map { "Assistant · \($0)" } ?? "Assistant"
+        case .tool: return "Tool" // never actually shown — visibleMessages filters these out
         }
     }
 

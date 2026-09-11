@@ -23,16 +23,38 @@ final class ChatViewModel: ObservableObject {
 
     private let sessions: ModelSessionManager
     private let threadStore: ChatThreadStore
+    private let imageSessions: ImageSessionManager
+    private let generatedImageStore: GeneratedImageStore
     private let client = ChatClient()
+    private let imageClient = ImageClient()
     private var threadBeforeTemporaryMode: ChatThread?
 
-    init(sessions: ModelSessionManager, threadStore: ChatThreadStore) {
+    init(
+        sessions: ModelSessionManager,
+        threadStore: ChatThreadStore,
+        imageSessions: ImageSessionManager,
+        generatedImageStore: GeneratedImageStore
+    ) {
         self.sessions = sessions
         self.threadStore = threadStore
+        self.imageSessions = imageSessions
+        self.generatedImageStore = generatedImageStore
         self.currentThread = ChatThread()
     }
 
     var messages: [ChatMessage] { currentThread.messages }
+
+    /// What the chat bubbles actually show — tool-call plumbing
+    /// (the assistant's `generate_image` request, the `.tool` result
+    /// message that answers it) stays in `messages`/history for the
+    /// server's context but isn't meant for a human to read directly;
+    /// the generated image ends up attached to the assistant's next
+    /// real reply instead (see `send()`).
+    var visibleMessages: [ChatMessage] {
+        currentThread.messages.filter {
+            $0.role != .tool && !($0.role == .assistant && $0.content.isEmpty && $0.toolCalls != nil)
+        }
+    }
 
     func loadInitialState() async {
         allThreads = await threadStore.all()
@@ -117,17 +139,38 @@ final class ChatViewModel: ObservableObject {
         }
 
         let modelDisplayName = sessions.sessions.first { $0.id == id }?.model.displayName ?? id
+        // Only offered when an image model is actually loaded — no
+        // point advertising a tool that would just fail.
+        let tools: [ChatTool] = imageSessions.readySessions.isEmpty ? [] : [.generateImage]
 
         isSending = true
         defer { isSending = false }
 
         do {
-            let reply = try await client.send(
+            var reply = try await client.send(
                 messages: currentThread.messages,
                 baseURL: endpoint,
                 modelDisplayName: modelDisplayName,
-                settings: settings
+                settings: settings,
+                tools: tools
             )
+
+            if let toolCall = reply.toolCalls?.first(where: { $0.name == "generate_image" }) {
+                currentThread.messages.append(reply)
+                let (toolResult, generatedPath) = await runGenerateImageTool(toolCall)
+                currentThread.messages.append(toolResult)
+
+                // No `tools` on the follow-up — the model just needs to
+                // narrate the result, not call anything else.
+                reply = try await client.send(
+                    messages: currentThread.messages,
+                    baseURL: endpoint,
+                    modelDisplayName: modelDisplayName,
+                    settings: settings
+                )
+                reply.generatedImagePath = generatedPath
+            }
+
             currentThread.messages.append(reply)
             lastTokensPerSecond = reply.tokensPerSecond
             if !isTemporaryModeActive {
@@ -138,8 +181,53 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Runs a `generate_image` tool call for real — actual generation
+    /// through the loaded image model's server, not a stub. Returns the
+    /// `.tool`-role message to feed back to the chat model, plus the
+    /// generated file's path (if any) for the caller to attach to the
+    /// visible reply that follows.
+    private func runGenerateImageTool(_ call: ChatMessage.ToolCall) async -> (ChatMessage, String?) {
+        struct Arguments: Decodable { let prompt: String }
+
+        guard let data = call.argumentsJSON.data(using: .utf8),
+              let arguments = try? JSONDecoder().decode(Arguments.self, from: data) else {
+            return (ChatMessage(role: .tool, content: "Error: could not parse tool arguments.", toolCallID: call.id), nil)
+        }
+        guard let imageModelID = imageSessions.readySessions.first?.id,
+              let imageEndpoint = imageSessions.imageEndpoint(for: imageModelID) else {
+            return (ChatMessage(role: .tool, content: "Error: no image model is loaded.", toolCallID: call.id), nil)
+        }
+        let imageModelName = imageSessions.session(for: imageModelID)?.model.displayName ?? imageModelID
+
+        do {
+            let result = try await imageClient.generate(prompt: arguments.prompt, baseURL: imageEndpoint)
+            let saved = try await generatedImageStore.add(GeneratedImage(
+                prompt: arguments.prompt,
+                modelDisplayName: imageModelName,
+                localPath: result.localPath,
+                width: result.width,
+                height: result.height,
+                seed: result.seed
+            ))
+            let toolMessage = ChatMessage(
+                role: .tool,
+                content: "Image generated successfully and is already displayed to the user in this chat. "
+                    + "Do not include a URL or Markdown image syntax — just briefly acknowledge it in plain text.",
+                toolCallID: call.id
+            )
+            return (toolMessage, saved.localPath)
+        } catch {
+            let toolMessage = ChatMessage(
+                role: .tool,
+                content: "Error generating image: \(error.localizedDescription)",
+                toolCallID: call.id
+            )
+            return (toolMessage, nil)
+        }
+    }
+
     func exportMarkdown() -> String {
-        TranscriptFormatter.markdown(modelName: currentThread.title, messages: currentThread.messages)
+        TranscriptFormatter.markdown(modelName: currentThread.title, messages: visibleMessages)
     }
 
     private func persistCurrentThread() {

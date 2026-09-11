@@ -96,12 +96,47 @@ before moving on (see the brief for exact gates).
       loopback: bound a model to `0.0.0.0` on a chosen port and confirmed
       a real chat completion over the Mac's actual network IP from
       another process.
-      **Not done yet**: the brief's actual gate — the Sofia persona
-      proxy (:8003) getting a valid response through this backend with
-      zero changes on its side, then retiring oMLX. That's a deliberate,
-      separate step since it touches the live stack; not taken until
-      asked for.
-- [ ] Phase 4 — Image generation (Draw Things / flux_server.py replacement)
+      **Not done, by explicit decision**: the brief's actual gate — the
+      Sofia persona proxy (:8003) getting a valid response through this
+      backend, then retiring oMLX — is out of scope for this project.
+      Nothing external (no agent, no other app, no persona proxy) gets
+      pointed at Anvil's server during this engagement; the mechanism is
+      built and verified locally (real chat completions, real LAN
+      reachability) but the live-stack handoff itself isn't happening
+      here. Same policy applies going forward, including Phase 4's
+      flux_server.py retirement.
+- [~] **Phase 4 — Image generation (in progress)**: `mflux` ships no
+      server of its own (only a generate-once-and-exit CLI), so
+      `ImageServerScript` is genuinely Anvil's own `/v1/images/generations`
+      endpoint — Python stdlib `http.server`, keeps the Flux pipeline
+      resident across requests instead of reloading multi-gigabyte
+      weights every call. `ImageServer`/`ImageSessionManager` mirror
+      `LLMServer`/`ModelSessionManager`'s shape (kept separate rather
+      than unified — different processes, different load times).
+      Models now carry a `kind` (`.text`/`.image`), auto-detected from
+      their file layout (diffusion pipelines split weights across
+      `transformer/`/`vae/`/two text-encoder directories rather than one
+      flat set of files) so the Models tab routes Load/Unload to the
+      right session manager on its own. Standalone image generation is
+      its own tab (model picker, prompt, a settings panel matching
+      Chat's, a gallery of everything generated) — the Draw Things half
+      of this phase. The brief's other half — `generate_image(prompt)`
+      as a tool the chat model can call mid-conversation — is real,
+      working tool-calling (`ChatTool`, `mlx_lm.server`'s own
+      `tools`/`tool_calls` support), not a stub: verified with an actual
+      4B text model asked to draw something, which on its own decided to
+      call `generate_image` with a well-formed, elaborated prompt, got a
+      real Flux-generated image back, and narrated it — the full round
+      trip `ChatViewModel.send()` drives, exercised headlessly end to
+      end via `--phase4-gate`. Generated images render inline in the
+      chat bubble. That real run also caught the model fabricating a
+      Markdown image link with a made-up URL in its narration (the
+      image is attached directly, not by reference) — the tool result
+      message now explicitly tells it the image is already shown and
+      not to include one.
+      **Not done yet**: the actual `flux_server.py`/port-8200 retirement
+      — same policy as Phase 3, nothing external gets pointed at this
+      during the project.
 - [ ] Phase 5 — Concurrent multi-model residency
 - [ ] Phase 6 — Voice chat
 

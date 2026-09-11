@@ -12,16 +12,29 @@ import AnvilCore
 final class AppState: ObservableObject {
     let requirements: RequirementsManager
     let sessions: ModelSessionManager
+    let imageSessions: ImageSessionManager
     let threadStore: ChatThreadStore
+    let generatedImageStore: GeneratedImageStore
     let chat: ChatViewModel
+    let imageGeneration: ImageGenerationViewModel
 
     init() {
         let requirements = RequirementsManager()
         let sessions = ModelSessionManager()
+        let imageSessions = ImageSessionManager()
         let threadStore = ChatThreadStore()
+        let generatedImageStore = GeneratedImageStore()
         self.requirements = requirements
         self.sessions = sessions
+        self.imageSessions = imageSessions
         self.threadStore = threadStore
-        self.chat = ChatViewModel(sessions: sessions, threadStore: threadStore)
+        self.generatedImageStore = generatedImageStore
+        self.imageGeneration = ImageGenerationViewModel(imageSessions: imageSessions, store: generatedImageStore)
+        self.chat = ChatViewModel(
+            sessions: sessions,
+            threadStore: threadStore,
+            imageSessions: imageSessions,
+            generatedImageStore: generatedImageStore
+        )
     }
 }

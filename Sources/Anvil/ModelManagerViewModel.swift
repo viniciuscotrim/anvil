@@ -89,50 +89,57 @@ final class ModelManagerViewModel: ObservableObject {
     }
 
     // MARK: - Server settings draft (port + local/network access)
+    //
+    // Takes primitives (current port/access) rather than a session
+    // manager directly, so the same draft logic serves both
+    // `ModelSessionManager` (text) and `ImageSessionManager` (image)
+    // without coupling to either concrete type — the caller already
+    // knows which manager applies to a given model's `kind`.
 
-    func portText(for modelID: String, sessions: ModelSessionManager) -> String {
-        serverDrafts[modelID]?.portText ?? String(sessions.session(for: modelID)?.port ?? sessions.suggestedPort())
+    func portText(for modelID: String, currentPort: Int) -> String {
+        serverDrafts[modelID]?.portText ?? String(currentPort)
     }
 
-    func access(for modelID: String, sessions: ModelSessionManager) -> ServerAccess {
-        serverDrafts[modelID]?.access ?? sessions.session(for: modelID)?.access ?? .localOnly
+    func access(for modelID: String, currentAccess: ServerAccess) -> ServerAccess {
+        serverDrafts[modelID]?.access ?? currentAccess
     }
 
-    func setPortText(_ text: String, for modelID: String, sessions: ModelSessionManager) {
-        var draft = draft(for: modelID, sessions: sessions)
+    func setPortText(_ text: String, for modelID: String, currentPort: Int, currentAccess: ServerAccess) {
+        var draft = draft(for: modelID, currentPort: currentPort, currentAccess: currentAccess)
         draft.portText = text
         serverDrafts[modelID] = draft
     }
 
-    func setAccess(_ access: ServerAccess, for modelID: String, sessions: ModelSessionManager) {
-        var draft = draft(for: modelID, sessions: sessions)
+    func setAccess(_ access: ServerAccess, for modelID: String, currentPort: Int, currentAccess: ServerAccess) {
+        var draft = draft(for: modelID, currentPort: currentPort, currentAccess: currentAccess)
         draft.access = access
         serverDrafts[modelID] = draft
     }
 
-    /// Applies the current draft — loads the model if it isn't running
-    /// yet, or restarts it under the new settings if it already is.
-    func applyServerSettings(for model: ModelEntry, sessions: ModelSessionManager, requirements: RequirementsManager) async {
-        let text = portText(for: model.id, sessions: sessions)
+    /// Validates the current draft and hands the resolved (access, port)
+    /// to `apply` — the caller loads or restarts whichever session
+    /// manager actually applies to this model.
+    func applyServerSettings(
+        for modelID: String,
+        currentPort: Int,
+        currentAccess: ServerAccess,
+        apply: (ServerAccess, Int) async -> Void
+    ) async {
+        let text = portText(for: modelID, currentPort: currentPort)
         guard let port = Int(text), (1...65535).contains(port) else {
             errorMessage = "Enter a valid port number (1–65535)."
             return
         }
         errorMessage = nil
         openServerSettingsFor = nil
-        let access = access(for: model.id, sessions: sessions)
-
-        if sessions.isLoaded(modelID: model.id) {
-            await sessions.updateServerSettings(modelID: model.id, requirements: requirements, access: access, port: port)
-        } else {
-            await sessions.load(model, requirements: requirements, access: access, port: port)
-        }
+        let access = access(for: modelID, currentAccess: currentAccess)
+        await apply(access, port)
     }
 
-    private func draft(for modelID: String, sessions: ModelSessionManager) -> ServerDraft {
+    private func draft(for modelID: String, currentPort: Int, currentAccess: ServerAccess) -> ServerDraft {
         serverDrafts[modelID] ?? ServerDraft(
-            portText: portText(for: modelID, sessions: sessions),
-            access: access(for: modelID, sessions: sessions)
+            portText: portText(for: modelID, currentPort: currentPort),
+            access: access(for: modelID, currentAccess: currentAccess)
         )
     }
 }

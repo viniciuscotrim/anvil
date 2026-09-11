@@ -14,6 +14,9 @@ Task {
     if !ranGateCheck {
         ranGateCheck = await GateCheck.runPhase3GateIfRequested()
     }
+    if !ranGateCheck {
+        ranGateCheck = await GateCheck.runPhase4GateIfRequested()
+    }
     semaphore.signal()
 }
 semaphore.wait()
