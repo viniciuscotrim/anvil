@@ -29,7 +29,12 @@ public final class ModelSessionManager: ObservableObject {
 
     private var servers: [String: LLMServer] = [:]
 
-    public init() {}
+    public init() {
+        // Best-effort: clean up launcher symlinks a previous run left
+        // behind (a crash, a force-quit) — harmless either way, each
+        // gets recreated the next time that model loads.
+        Task { await NamedLauncher.shared.cleanupStaleLaunchers() }
+    }
 
     public var readySessions: [Session] {
         sessions.filter { $0.status == .ready }
@@ -65,7 +70,7 @@ public final class ModelSessionManager: ObservableObject {
 
         let server = LLMServer()
         do {
-            try await server.start(modelPath: model.localPath, port: port)
+            try await server.start(modelPath: model.localPath, displayName: model.displayName, port: port)
             servers[model.id] = server
             upsert(Session(model: model, port: port, status: .ready))
             return true

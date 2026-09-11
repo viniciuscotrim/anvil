@@ -67,15 +67,23 @@ before moving on (see the brief for exact gates).
       settings — max tokens/temperature/top-p/top-k/min-p, sent
       per-request) except the model picker and tok/s, which stay in the
       always-visible header per spec.
-      **Known limitation, investigated and confirmed structural**: each
-      loaded model's process shows as "Python" in Activity Monitor, not
-      a custom name — Homebrew's framework Python build unconditionally
-      re-execs itself into `Python.app/Contents/MacOS/Python` for Metal/
-      GPU access (confirmed via a real test; `PYTHONEXECUTABLE`, the
-      documented escape hatch, didn't stop it either). Each loaded model
-      is already its own real OS process/PID, just not relabeled. Fixing
-      the label would mean shipping a custom native launcher — not
-      pursued yet given the cost/benefit.
+      Each loaded model now shows in Activity Monitor as "Anvil - <model
+      name>" instead of a generic "Python" indistinguishable from every
+      other loaded model (`NamedLauncher`). The venv's Python is a
+      Homebrew framework build that unconditionally re-execs itself into
+      a fixed binary (`Python.app/Contents/MacOS/Python`, needed for
+      Metal/GPU access) — renaming the invocation alone doesn't survive
+      that, and neither does `sys.executable` (it just echoes back
+      whatever path it was invoked with, pre-re-exec) or
+      `PYTHONEXECUTABLE` (the documented override, tried, didn't stop
+      it). The actual fix: probe the real interpreter once with
+      `proc_pidpath` — asking the *kernel* what a running process really
+      is, not Python's own self-report — to find the true final binary,
+      then symlink that under `venv/bin/Anvil - <name>` (inside `venv/bin/`
+      so Python's own venv detection still finds `pyvenv.cfg`) and invoke
+      the script through *that* launcher. Verified for real, end-to-end,
+      through the actual app code path, holding the process open and
+      checking `ps aux` mid-run — not just the launch line.
       **Not done yet**: the brief's actual gate — the Sofia persona
       proxy (:8003) getting a valid response through this backend with
       zero changes on its side, then retiring oMLX. That's a deliberate,

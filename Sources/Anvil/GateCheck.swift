@@ -84,8 +84,10 @@ enum GateCheck {
                 try await python.pipInstall(["mlx-lm"])
             }
 
-            log("Starting mlx_lm.server with \(modelPath)…")
-            try await server.start(modelPath: modelPath) { log($0) }
+            let port = env["ANVIL_GATE_PORT"].flatMap(Int.init) ?? 8000
+            log("Starting mlx_lm.server with \(modelPath) on port \(port)…")
+            let displayName = URL(fileURLWithPath: modelPath).lastPathComponent
+            try await server.start(modelPath: modelPath, displayName: displayName, port: port) { log($0) }
             result["serverStarted"] = true
 
             let modelsURL = await server.baseURL.appendingPathComponent("v1/models")
@@ -98,6 +100,11 @@ enum GateCheck {
                 baseURL: server.baseURL
             )
             result["chatReply"] = reply.content
+
+            if let holdSeconds = env["ANVIL_GATE_HOLD_SECONDS"].flatMap(Double.init) {
+                log("Holding server open for \(holdSeconds)s…")
+                try? await Task.sleep(nanoseconds: UInt64(holdSeconds * 1_000_000_000))
+            }
             log("Reply: \(reply.content)")
         } catch {
             result["error"] = error.localizedDescription

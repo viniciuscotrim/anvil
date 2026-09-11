@@ -7,6 +7,7 @@ import Foundation
 /// introduces true concurrent multi-model residency.
 public actor LLMServer {
     private var process: Process?
+    private var launcherURL: URL?
     public private(set) var baseURL = URL(string: "http://127.0.0.1:8000")!
 
     public init() {}
@@ -15,22 +16,28 @@ public actor LLMServer {
         process?.isRunning ?? false
     }
 
+    /// `displayName` becomes this process's name in Activity Monitor
+    /// ("Anvil - <displayName>") — see `NamedLauncher` for why that
+    /// needs more than just picking a nice `arguments[0]`.
     public func start(
         modelPath: String,
+        displayName: String,
         host: String = "127.0.0.1",
         port: Int = 8000,
         onLog: (@Sendable (String) -> Void)? = nil
     ) async throws {
         if isRunning { await stop() }
 
-        let executable = RuntimePaths.venvDirectory.appendingPathComponent("bin/mlx_lm.server")
-        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+        let script = RuntimePaths.venvDirectory.appendingPathComponent("bin/mlx_lm.server")
+        guard FileManager.default.isExecutableFile(atPath: script.path) else {
             throw ServingError.serverFailedToStart("mlx_lm.server isn't installed")
         }
 
+        let launcher = await NamedLauncher.shared.makeLauncher(displayName: displayName)
+
         let proc = Process()
-        proc.executableURL = executable
-        proc.arguments = ["--model", modelPath, "--host", host, "--port", String(port)]
+        proc.executableURL = launcher
+        proc.arguments = [script.path, "--model", modelPath, "--host", host, "--port", String(port)]
 
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -44,29 +51,39 @@ public actor LLMServer {
         do {
             try proc.run()
         } catch {
+            await NamedLauncher.shared.removeLauncher(at: launcher)
             throw ServingError.serverFailedToStart(error.localizedDescription)
         }
 
         process = proc
+        launcherURL = launcher
         baseURL = URL(string: "http://\(host):\(port)")!
 
-        try await waitUntilReady(process: proc)
+        do {
+            try await waitUntilReady(process: proc)
+        } catch {
+            await stop()
+            throw error
+        }
     }
 
     public func stop() async {
-        guard let process, process.isRunning else {
-            self.process = nil
-            return
-        }
-        process.terminate()
-        for _ in 0..<20 {
-            if !process.isRunning { break }
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
-        if process.isRunning {
-            kill(process.processIdentifier, SIGKILL)
+        if let process, process.isRunning {
+            process.terminate()
+            for _ in 0..<20 {
+                if !process.isRunning { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
         }
         self.process = nil
+
+        if let launcherURL {
+            await NamedLauncher.shared.removeLauncher(at: launcherURL)
+        }
+        self.launcherURL = nil
     }
 
     private func waitUntilReady(process: Process, timeout: TimeInterval = 60) async throws {
