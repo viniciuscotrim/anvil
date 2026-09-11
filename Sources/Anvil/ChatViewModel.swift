@@ -310,9 +310,19 @@ final class ChatViewModel: ObservableObject {
         }
 
         let imageModelID: String
-        if let ready = imageSessions.readySessions.first {
+        let preferredID = AppSettings.load().defaultChatImageModelID
+        let registeredImageModels = await modelRegistry.all().filter { $0.kind == .image }
+
+        if let preferredID, imageSessions.isLoaded(modelID: preferredID) {
+            // The configured default is already resident — use it even
+            // if some other image model also happens to be loaded.
+            imageModelID = preferredID
+        } else if let ready = imageSessions.readySessions.first {
+            // No configured default (or it isn't loaded) but something
+            // else already is — use that rather than loading a second
+            // image model just to honor an unmet preference.
             imageModelID = ready.id
-        } else if let entry = await modelRegistry.all().first(where: { $0.kind == .image }) {
+        } else if let entry = registeredImageModels.first(where: { $0.id == preferredID }) ?? registeredImageModels.first {
             let loaded = await imageSessions.load(entry, requirements: requirements)
             guard loaded else {
                 let reason = imageSessions.session(for: entry.id)?.status

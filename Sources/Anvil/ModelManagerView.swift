@@ -501,6 +501,18 @@ struct ModelManagerView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Chat Behavior").font(.headline)
 
+            Toggle("Default image model for chat", isOn: Binding(
+                get: { viewModel.defaultChatImageModelID == entry.id },
+                set: { isOn in
+                    viewModel.setDefaultChatImageModel(isOn ? entry.id : nil)
+                }
+            ))
+            .help(
+                "With more than one image model registered, this is the one generate_image "
+                + "in chat prefers — loading it on demand if it isn't already resident. "
+                + "Only one model can be the default at a time."
+            )
+
             Toggle("Keep loaded after generating in chat", isOn: Binding(
                 get: { entry.keepImageModelLoadedInChat },
                 set: { newValue in

@@ -26,6 +26,11 @@ final class ModelManagerViewModel: ObservableObject {
     /// Pause/Stop controls next to the search result and blocks
     /// starting a second download at the same time.
     @Published private(set) var activeDownloadRepoID: String?
+    /// Which registered image model `generate_image` tool calls in
+    /// chat should prefer when more than one is loaded/registered —
+    /// see `AppSettings.defaultChatImageModelID`. Loaded from
+    /// `AppSettings` at init.
+    @Published var defaultChatImageModelID: String?
 
     /// nil = no size filter. Small/Medium/Large are relative to this
     /// Mac's own RAM (see `ModelSizeClass`), not an absolute cutoff.
@@ -85,8 +90,22 @@ final class ModelManagerViewModel: ObservableObject {
         self.registry = registry
         self.downloader = ModelDownloader(registry: registry)
         self.importer = ModelImporter(registry: registry)
-        self.modelsRootPath = AppSettings.load().modelsRootPath
+        let settings = AppSettings.load()
+        self.modelsRootPath = settings.modelsRootPath
+        self.defaultChatImageModelID = settings.defaultChatImageModelID
         self.hasStoredHFToken = HFTokenStore.load() != nil
+    }
+
+    /// Sets (or, passing nil, clears) which image model chat should
+    /// prefer for `generate_image` when more than one is loaded or
+    /// registered. Exclusive by construction — there's only ever one
+    /// `defaultChatImageModelID`, so picking a new one automatically
+    /// un-defaults whichever model held it before.
+    func setDefaultChatImageModel(_ modelID: String?) {
+        var settings = AppSettings.load()
+        settings.defaultChatImageModelID = modelID
+        try? settings.save()
+        defaultChatImageModelID = modelID
     }
 
     // MARK: - Hugging Face token

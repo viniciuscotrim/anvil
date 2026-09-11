@@ -344,6 +344,21 @@ consolidate or clear them out:
   that doesn't match anything just becomes its own singleton group
   rather than an error.
 
+## A default image model for chat
+
+With more than one image model registered, `generate_image` tool calls
+in chat had no explicit preference — whichever image session happened
+to already be loaded (arbitrary load order) or, failing that, whichever
+registered entry came back first. Each image model's gear settings in
+Models now has a "Default image model for chat" toggle
+(`AppSettings.defaultChatImageModelID` — exclusive, like a profile's
+model binding: turning it on for one model turns it off for whichever
+held it before). `ChatViewModel` now picks in this order: the default,
+if it's already loaded; otherwise whatever image model is already
+loaded, rather than loading a second one just to satisfy an unmet
+preference; otherwise the default from the registry, loaded on demand;
+otherwise the first registered image model, same as before this existed.
+
 ## Architecture
 
 - Single SwiftUI macOS app (`Anvil` target), built with Swift Package Manager

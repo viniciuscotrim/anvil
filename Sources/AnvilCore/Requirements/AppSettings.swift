@@ -11,9 +11,18 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// Where new downloads land and where "scan for existing models"
     /// looks — nil means the default, `RuntimePaths.modelsDirectory`.
     public var modelsRootPath: String?
+    /// Which registered image model (`ModelEntry.id`) `generate_image`
+    /// tool calls in chat should prefer when more than one is loaded or
+    /// registered — nil means "no explicit preference", the old
+    /// behavior (whichever's already loaded, or the first registered
+    /// one found). Set from a toggle on the model's own gear settings
+    /// in the Models tab; picking one there clears it from any other
+    /// model, so at most one is ever the default.
+    public var defaultChatImageModelID: String?
 
-    public init(modelsRootPath: String? = nil) {
+    public init(modelsRootPath: String? = nil, defaultChatImageModelID: String? = nil) {
         self.modelsRootPath = modelsRootPath
+        self.defaultChatImageModelID = defaultChatImageModelID
     }
 
     private static var fileURL: URL {
