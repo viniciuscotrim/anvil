@@ -24,7 +24,7 @@ struct RootView: View {
                 Divider()
                 switch router.screen {
                 case .modelManager:
-                    ModelManagerView(requirements: requirements)
+                    ModelManagerView()
                 case .chat:
                     ChatView()
                 case .images:

@@ -18,6 +18,19 @@ public struct HFModelSummary: Codable, Sendable, Equatable, Identifiable {
     /// result into Small/Medium/Large. `nil` for repos with no
     /// safetensors metadata at all (e.g. GGUF-only repos).
     public let sizeBytes: Int64?
+    /// The repo's own file list (`siblings`), when the search request
+    /// asked for it — powers `compatibility` below. Not persisted
+    /// anywhere; only ever a live search result.
+    public let filePaths: [String]?
+
+    /// Whether this repo's file layout looks loadable by Anvil's image
+    /// backend — see `ModelCompatibility`'s own doc comment for the
+    /// real bug this exists to catch before a multi-gigabyte download,
+    /// not after. `.unknown` when `filePaths` wasn't requested.
+    public var compatibility: ModelCompatibility {
+        guard let filePaths else { return .unknown }
+        return ModelCompatibility.classify(paths: filePaths)
+    }
 
     enum CodingKeys: String, CodingKey {
         case modelID = "id"
@@ -25,10 +38,15 @@ public struct HFModelSummary: Codable, Sendable, Equatable, Identifiable {
         case likes
         case tags
         case safetensors
+        case siblings
     }
 
     private struct SafetensorsField: Decodable {
         let parameters: [String: Int64]?
+    }
+
+    private struct SiblingField: Decodable {
+        let rfilename: String
     }
 
     public init(from decoder: Decoder) throws {
@@ -46,14 +64,18 @@ public struct HFModelSummary: Codable, Sendable, Equatable, Identifiable {
         } else {
             sizeBytes = nil
         }
+
+        let siblings = try container.decodeIfPresent([SiblingField].self, forKey: .siblings)
+        filePaths = siblings?.map(\.rfilename)
     }
 
-    public init(modelID: String, downloads: Int?, likes: Int?, tags: [String]?, sizeBytes: Int64?) {
+    public init(modelID: String, downloads: Int?, likes: Int?, tags: [String]?, sizeBytes: Int64?, filePaths: [String]? = nil) {
         self.modelID = modelID
         self.downloads = downloads
         self.likes = likes
         self.tags = tags
         self.sizeBytes = sizeBytes
+        self.filePaths = filePaths
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -95,7 +117,11 @@ public struct HuggingFaceCatalog: Sendable {
             URLQueryItem(name: "expand", value: "downloads"),
             URLQueryItem(name: "expand", value: "likes"),
             URLQueryItem(name: "expand", value: "tags"),
-            URLQueryItem(name: "expand", value: "safetensors")
+            URLQueryItem(name: "expand", value: "safetensors"),
+            // Powers `HFModelSummary.compatibility` — the repo's own
+            // file list is enough to tell a proper pipeline apart from
+            // a raw single-file checkpoint before ever downloading it.
+            URLQueryItem(name: "expand", value: "siblings")
         ]
         guard let url = components.url else {
             throw ModelError.searchFailed("Could not build search URL")

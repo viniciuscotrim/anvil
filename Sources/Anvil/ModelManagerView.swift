@@ -8,26 +8,41 @@ import UniformTypeIdentifiers
 /// which session manager — text or image — its Load/Unload/server
 /// controls talk to.
 struct ModelManagerView: View {
-    @StateObject private var viewModel: ModelManagerViewModel
+    // Owned once by `AppState` (like `chat`/`imageGeneration`/`profiles`),
+    // not a view-local `@StateObject` — that was a real, reported bug:
+    // switching away from Models and back tore this down and rebuilt
+    // it from scratch, so an in-flight download's Task, still running
+    // in the background, was orphaned from any UI that could show it —
+    // it kept downloading, just invisibly. Same root cause, same fix,
+    // as the earlier Chat/conversation-loss bug.
+    @EnvironmentObject private var viewModel: ModelManagerViewModel
     @EnvironmentObject private var sessions: ModelSessionManager
     @EnvironmentObject private var imageSessions: ImageSessionManager
-    private let requirements: RequirementsManager
-
-    init(requirements: RequirementsManager) {
-        _viewModel = StateObject(wrappedValue: ModelManagerViewModel(requirements: requirements))
-        self.requirements = requirements
-    }
+    @EnvironmentObject private var requirements: RequirementsManager
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            searchBar
-            searchOptionsBar
-            modelsFolderBar
-            hfTokenBar
+            sourcePicker
 
-            if !viewModel.searchResults.isEmpty {
-                searchResultsList
+            if viewModel.searchSource == .huggingFace {
+                searchBar
+                searchOptionsBar
+                hfTokenBar
+                if !viewModel.searchResults.isEmpty {
+                    searchResultsList
+                }
+            } else {
+                civitaiSearchBar
+                Text("Search and download work today — loading a downloaded CivitAI checkpoint doesn't yet (mflux needs a single-file loading path this hasn't been wired up to). It'll register and show up below either way.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                civitaiTokenBar
+                if !viewModel.civitaiResults.isEmpty {
+                    civitaiResultsList
+                }
             }
+
+            modelsFolderBar
 
             if let error = viewModel.errorMessage {
                 Text(error)
@@ -64,15 +79,22 @@ struct ModelManagerView: View {
         }
     }
 
-    private var searchBar: some View {
+    /// Which catalog Search/results below act on — a shared download
+    /// queue/progress covers both, so switching sources never risks a
+    /// second, simultaneous download.
+    private var sourcePicker: some View {
         HStack {
-            TextField("Search Hugging Face models…", text: $viewModel.query)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { Task { await viewModel.search() } }
-                .onChange(of: viewModel.query) { _, _ in viewModel.queryDidChange() }
-
-            Button("Search") { Task { await viewModel.search() } }
-                .disabled(viewModel.isBusy)
+            Picker("", selection: Binding(
+                get: { viewModel.searchSource },
+                set: { viewModel.searchSource = $0 }
+            )) {
+                ForEach(ModelSearchSource.allCases) { source in
+                    Text(source.rawValue).tag(source)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 220)
 
             Button("Import Local Model…") { viewModel.isImportPanelPresented = true }
                 .disabled(viewModel.isBusy)
@@ -90,6 +112,19 @@ struct ModelManagerView: View {
                         viewModel.errorMessage = error.localizedDescription
                     }
                 }
+            Spacer()
+        }
+    }
+
+    private var searchBar: some View {
+        HStack {
+            TextField("Search Hugging Face models…", text: $viewModel.query)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { Task { await viewModel.search() } }
+                .onChange(of: viewModel.query) { _, _ in viewModel.queryDidChange() }
+
+            Button("Search") { Task { await viewModel.search() } }
+                .disabled(viewModel.isBusy)
         }
     }
 
@@ -112,6 +147,12 @@ struct ModelManagerView: View {
                 set: { viewModel.isLiveSearchEnabled = $0 }
             ))
             .help("Searches automatically once you've typed 3+ characters, after a short pause.")
+
+            Toggle("Compatible only", isOn: Binding(
+                get: { viewModel.hideIncompatibleModels },
+                set: { viewModel.hideIncompatibleModels = $0 }
+            ))
+            .help("Hides repos shaped like a raw single-file checkpoint mflux can't load as-is — a flat *.safetensors with no pipeline folders. Never hides a model this can't tell either way about, text models included.")
 
             Spacer()
         }
@@ -201,6 +242,85 @@ struct ModelManagerView: View {
         .font(.callout)
     }
 
+    private var civitaiSearchBar: some View {
+        HStack {
+            TextField("Search CivitAI checkpoints…", text: Binding(
+                get: { viewModel.civitaiQuery },
+                set: { viewModel.civitaiQuery = $0 }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .onSubmit { Task { await viewModel.searchCivitAI() } }
+
+            Button("Search") { Task { await viewModel.searchCivitAI() } }
+                .disabled(viewModel.isBusy)
+        }
+    }
+
+    private var civitaiTokenBar: some View {
+        HStack {
+            Image(systemName: "key")
+                .foregroundStyle(.secondary)
+            Text("CivitAI API Key:")
+                .foregroundStyle(.secondary)
+
+            if viewModel.hasStoredCivitAIToken {
+                Text("Set").foregroundStyle(.green)
+                Spacer()
+                Button("Remove") { viewModel.clearCivitAIToken() }
+            } else {
+                SecureField("optional — needed for some gated content", text: Binding(
+                    get: { viewModel.civitaiTokenDraft },
+                    set: { viewModel.civitaiTokenDraft = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 300)
+                Button("Save") { viewModel.saveCivitAIToken() }
+                    .disabled(viewModel.civitaiTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Spacer()
+            }
+        }
+        .font(.callout)
+    }
+
+    private var civitaiResultsList: some View {
+        List(viewModel.civitaiResults) { summary in
+            HStack {
+                VStack(alignment: .leading) {
+                    Text(summary.name)
+                        .font(.headline)
+                    HStack(spacing: 6) {
+                        Text(summary.type)
+                        if let baseModel = summary.baseModel {
+                            Text("· \(baseModel)")
+                        }
+                        if let downloads = summary.downloadCount {
+                            Text("· \(downloads) downloads")
+                        }
+                        if let bytes = summary.primaryFile?.sizeBytes {
+                            Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer()
+                let job = DownloadJob.civitai(summary)
+                if viewModel.activeDownloadID == job.id {
+                    downloadProgressControl
+                } else if let queuePosition = viewModel.downloadQueue.firstIndex(where: { $0.id == job.id }) {
+                    Text("Queued (#\(queuePosition + 1))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Remove") { viewModel.removeFromQueue(job) }
+                } else {
+                    Button(viewModel.isBusy ? "Queue" : "Download") { viewModel.download(summary) }
+                        .disabled(summary.primaryFile == nil)
+                }
+            }
+        }
+        .frame(minHeight: 160, maxHeight: 220)
+    }
+
     private var searchResultsList: some View {
         List(viewModel.filteredSearchResults) { summary in
             HStack {
@@ -215,18 +335,23 @@ struct ModelManagerView: View {
                             Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                             Text("· \(ModelSizeClass.classify(sizeBytes: bytes).label)")
                         }
+                        if summary.compatibility == .incompatible {
+                            Text("· raw checkpoint, likely won't load")
+                                .foregroundStyle(.orange)
+                        }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if viewModel.activeDownloadRepoID == summary.modelID {
+                let job = DownloadJob.huggingFace(summary)
+                if viewModel.activeDownloadID == job.id {
                     downloadProgressControl
-                } else if let queuePosition = viewModel.downloadQueue.firstIndex(where: { $0.modelID == summary.modelID }) {
+                } else if let queuePosition = viewModel.downloadQueue.firstIndex(where: { $0.id == job.id }) {
                     Text("Queued (#\(queuePosition + 1))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Button("Remove") { viewModel.removeFromQueue(summary) }
+                    Button("Remove") { viewModel.removeFromQueue(job) }
                 } else {
                     // Not disabled while something else is downloading
                     // — clicking then enqueues instead of starting a

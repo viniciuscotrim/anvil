@@ -1,12 +1,45 @@
 import Foundation
 import AnvilCore
 
+/// One thing that can be downloaded — a Hugging Face repo or a CivitAI
+/// checkpoint — unified so a single queue/progress/pause-stop mechanism
+/// covers both sources: never simultaneous, whichever source it's from.
+enum DownloadJob: Identifiable, Equatable {
+    case huggingFace(HFModelSummary)
+    case civitai(CivitAIModelSummary)
+
+    var id: String {
+        switch self {
+        case .huggingFace(let summary): return "hf:\(summary.modelID)"
+        case .civitai(let summary): return "civitai:\(summary.id)"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .huggingFace(let summary): return summary.modelID
+        case .civitai(let summary): return summary.name
+        }
+    }
+}
+
 /// Plain `ObservableObject` (not `@Observable`) so it can be held with
 /// `@StateObject` — see the toolchain note in README about `@State`.
+enum ModelSearchSource: String, CaseIterable, Identifiable {
+    case huggingFace = "Hugging Face"
+    case civitai = "CivitAI"
+    var id: String { rawValue }
+}
+
 @MainActor
 final class ModelManagerViewModel: ObservableObject {
+    @Published var searchSource: ModelSearchSource = .huggingFace
     @Published var query: String = ""
     @Published var searchResults: [HFModelSummary] = []
+    @Published var civitaiQuery: String = ""
+    @Published var civitaiResults: [CivitAIModelSummary] = []
+    @Published var civitaiTokenDraft: String = ""
+    @Published private(set) var hasStoredCivitAIToken: Bool = false
     @Published var registeredModels: [ModelEntry] = []
     @Published var statusMessage: String = ""
     @Published var isBusy: Bool = false
@@ -22,17 +55,18 @@ final class ModelManagerViewModel: ObservableObject {
     /// and calls `saveHFToken()`/`clearHFToken()` to persist it.
     @Published var hfTokenDraft: String = ""
     @Published private(set) var hasStoredHFToken: Bool = false
-    /// Which repo (if any) is actively downloading — drives the
-    /// Pause/Stop controls next to the search result and blocks
-    /// starting a second download at the same time.
-    @Published private(set) var activeDownloadRepoID: String?
+    /// Which download (if any, from either source) is actively running
+    /// — drives the Pause/Stop controls next to it and blocks starting
+    /// a second one at the same time.
+    @Published private(set) var activeDownloadID: String?
     /// 0...1, when the active download's own progress lines carry a
     /// real percentage — nil otherwise (nothing downloading, or a
     /// stretch of output with no percentage in it, e.g. between files).
     @Published private(set) var downloadProgress: Double?
-    /// Repos waiting their turn — never simultaneous, downloads always
-    /// happen one at a time, draining this queue as each finishes.
-    @Published private(set) var downloadQueue: [HFModelSummary] = []
+    /// Jobs waiting their turn — one shared queue for both sources, so
+    /// an HF download and a CivitAI download never run at the same
+    /// time either; drains one at a time as each finishes.
+    @Published private(set) var downloadQueue: [DownloadJob] = []
     /// Which registered image model `generate_image` tool calls in
     /// chat should prefer when more than one is loaded/registered —
     /// see `AppSettings.defaultChatImageModelID`. Loaded from
@@ -45,18 +79,26 @@ final class ModelManagerViewModel: ObservableObject {
     /// When on, typing (3+ characters) searches automatically after a
     /// short pause instead of waiting for Search/Return.
     @Published var isLiveSearchEnabled: Bool = false
+    /// On by default: hides search results Anvil can already tell it
+    /// won't be able to load — a flat single-file checkpoint with none
+    /// of the pipeline structure `mflux` needs, the exact real shape
+    /// that downloaded fine and then failed to load. Never hides an
+    /// `.unknown` result (most text models included) — only a
+    /// confirmed `.incompatible` one.
+    @Published var hideIncompatibleModels: Bool = true
     private var liveSearchTask: Task<Void, Never>?
 
     private let ramBytes = ProcessInfo.processInfo.physicalMemory
 
     /// What the list actually shows — `searchResults` narrowed by
-    /// `sizeFilter`. A result with no size estimate at all (no
-    /// safetensors metadata, e.g. a GGUF-only repo) is kept when no
-    /// filter is active but excluded by any specific filter, since
-    /// there's nothing to classify it by.
+    /// `sizeFilter` and `hideIncompatibleModels`. A result with no size
+    /// estimate at all (no safetensors metadata, e.g. a GGUF-only repo)
+    /// is kept when no size filter is active but excluded by any
+    /// specific one, since there's nothing to classify it by.
     var filteredSearchResults: [HFModelSummary] {
-        guard let sizeFilter else { return searchResults }
-        return searchResults.filter { summary in
+        searchResults.filter { summary in
+            if hideIncompatibleModels, summary.compatibility == .incompatible { return false }
+            guard let sizeFilter else { return true }
             guard let bytes = summary.sizeBytes else { return false }
             return ModelSizeClass.classify(sizeBytes: bytes, ramBytes: ramBytes) == sizeFilter
         }
@@ -88,8 +130,10 @@ final class ModelManagerViewModel: ObservableObject {
 
     private let requirements: RequirementsManager
     private let catalog = HuggingFaceCatalog()
+    private let civitaiCatalog = CivitAICatalog()
     private let registry: ModelRegistry
     private let downloader: ModelDownloader
+    private let civitaiDownloader: CivitAIDownloader
     private let importer: ModelImporter
     /// The in-flight download, if any — cancelling this is the whole
     /// mechanism behind both Pause and Stop; they differ only in
@@ -102,11 +146,38 @@ final class ModelManagerViewModel: ObservableObject {
         let registry = ModelRegistry()
         self.registry = registry
         self.downloader = ModelDownloader(registry: registry)
+        self.civitaiDownloader = CivitAIDownloader(registry: registry)
         self.importer = ModelImporter(registry: registry)
         let settings = AppSettings.load()
         self.modelsRootPath = settings.modelsRootPath
         self.defaultChatImageModelID = settings.defaultChatImageModelID
         self.hasStoredHFToken = HFTokenStore.load() != nil
+        self.hasStoredCivitAIToken = CivitAITokenStore.load() != nil
+    }
+
+    // MARK: - CivitAI token
+
+    func saveCivitAIToken() {
+        CivitAITokenStore.save(civitaiTokenDraft)
+        hasStoredCivitAIToken = CivitAITokenStore.load() != nil
+        civitaiTokenDraft = ""
+    }
+
+    func clearCivitAIToken() {
+        CivitAITokenStore.clear()
+        hasStoredCivitAIToken = false
+        civitaiTokenDraft = ""
+    }
+
+    func searchCivitAI() async {
+        let trimmed = civitaiQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        errorMessage = nil
+        do {
+            civitaiResults = try await civitaiCatalog.search(query: trimmed)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     /// Sets (or, passing nil, clears) which image model chat should
@@ -238,65 +309,85 @@ final class ModelManagerViewModel: ObservableObject {
     /// Fire-and-forget by design — not `async` — so the caller (a
     /// button) doesn't hold the download's `Task` itself;
     /// `pauseDownload()`/`stopDownload()` cancel the one this method
-    /// stores instead. Never simultaneous: a second call while one is
-    /// already running enqueues instead of starting it — the queue
-    /// drains one at a time as each download finishes (however it
-    /// finishes: completed, paused, or stopped).
+    /// stores instead. Never simultaneous — from either source — a
+    /// second call while one is already running enqueues instead of
+    /// starting it, and the queue drains one at a time as each
+    /// download finishes (however it finishes: completed, paused, or
+    /// stopped).
     func download(_ summary: HFModelSummary) {
+        enqueueOrStart(.huggingFace(summary))
+    }
+
+    func download(_ summary: CivitAIModelSummary) {
+        enqueueOrStart(.civitai(summary))
+    }
+
+    private func enqueueOrStart(_ job: DownloadJob) {
         guard downloadTask == nil else {
-            guard summary.modelID != activeDownloadRepoID,
-                  !downloadQueue.contains(where: { $0.modelID == summary.modelID }) else { return }
-            downloadQueue.append(summary)
+            guard job.id != activeDownloadID, !downloadQueue.contains(where: { $0.id == job.id }) else { return }
+            downloadQueue.append(job)
             return
         }
-        startDownload(summary)
+        startDownload(job)
     }
 
     /// Removes a not-yet-started download from the queue — no effect
     /// on the one currently in progress; use `pauseDownload()`/
     /// `stopDownload()` for that.
-    func removeFromQueue(_ summary: HFModelSummary) {
-        downloadQueue.removeAll { $0.modelID == summary.modelID }
+    func removeFromQueue(_ job: DownloadJob) {
+        downloadQueue.removeAll { $0.id == job.id }
     }
 
-    private func startDownload(_ summary: HFModelSummary) {
+    private func startDownload(_ job: DownloadJob) {
         errorMessage = nil
         isBusy = true
-        activeDownloadRepoID = summary.modelID
+        activeDownloadID = job.id
         downloadProgress = nil
         deletePartialOnCancel = false
 
         downloadTask = Task { [weak self] in
             guard let self else { return }
-            let ready = await self.requirements.ensure(HuggingFaceClientDependency())
-            guard ready else {
-                self.errorMessage = self.requirements.lastError ?? "Could not set up the model browser"
-                self.finishDownload()
-                return
-            }
-
             do {
-                _ = try await self.downloader.download(repoID: summary.modelID) { line in
-                    Task { @MainActor in
-                        self.statusMessage = line
-                        // huggingface_hub's own tqdm-style progress
-                        // lines carry a real percentage — a fillable
-                        // bar instead of just a scrolling status line.
-                        if let fraction = DownloadProgressParser.fraction(from: line) {
-                            self.downloadProgress = fraction
+                switch job {
+                case .huggingFace(let summary):
+                    let ready = await self.requirements.ensure(HuggingFaceClientDependency())
+                    guard ready else {
+                        throw ModelError.downloadFailed(self.requirements.lastError ?? "Could not set up the model browser")
+                    }
+                    _ = try await self.downloader.download(repoID: summary.modelID) { line in
+                        Task { @MainActor in
+                            self.statusMessage = line
+                            // huggingface_hub's own tqdm-style progress
+                            // lines carry a real percentage — a
+                            // fillable bar instead of just a scrolling
+                            // status line.
+                            if let fraction = DownloadProgressParser.fraction(from: line) {
+                                self.downloadProgress = fraction
+                            }
                         }
+                    }
+                case .civitai(let summary):
+                    self.statusMessage = "Downloading \(summary.name)…"
+                    _ = try await self.civitaiDownloader.download(summary) { fraction in
+                        Task { @MainActor in self.downloadProgress = fraction }
                     }
                 }
                 await self.loadRegistry()
             } catch is CancellationError {
                 if self.deletePartialOnCancel {
-                    let destination = ModelDownloader.destinationDirectory(forRepoID: summary.modelID)
-                    try? FileManager.default.removeItem(at: destination)
+                    switch job {
+                    case .huggingFace(let summary):
+                        try? FileManager.default.removeItem(at: ModelDownloader.destinationDirectory(forRepoID: summary.modelID))
+                    case .civitai(let summary):
+                        try? FileManager.default.removeItem(at: CivitAIDownloader.destinationDirectory(for: summary))
+                    }
                 }
                 // Paused (not deleted): nothing else to do — the partial
-                // directory stays, and Hugging Face's own resumable-
-                // download support picks up from it next time this repo
-                // is downloaded again.
+                // directory stays; Hugging Face's own resumable-download
+                // support picks up from it next time (CivitAI downloads
+                // are one plain file, so "resuming" one just re-downloads
+                // it — still only ever the one file, not the whole model
+                // re-fetched piece by piece).
             } catch {
                 self.errorMessage = error.localizedDescription
             }
@@ -323,7 +414,7 @@ final class ModelManagerViewModel: ObservableObject {
         statusMessage = ""
         downloadProgress = nil
         downloadTask = nil
-        activeDownloadRepoID = nil
+        activeDownloadID = nil
         if !downloadQueue.isEmpty {
             startDownload(downloadQueue.removeFirst())
         }

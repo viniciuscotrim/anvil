@@ -501,6 +501,84 @@ isn't already resident, generates with whatever the prompt now reads
 the Images tab's gallery/version-history reads from — it shows up there
 immediately, like any other generation.
 
+## A download that "disappeared" was still running — Models tab had the Chat bug too
+
+Reported: leave the Models tab mid-download, come back, and the
+download — progress bar, queue, everything — is gone from the UI, but
+it's still actually running in the background.
+
+Same root cause, same fix, as an earlier Chat bug (see "keeps `chat`...
+alive across tab switches" in `AppState`'s own doc comment):
+`ModelManagerViewModel` was still a view-local `@StateObject`, so
+switching tabs away from Models and back tore the whole thing down and
+built a fresh one from scratch. The in-flight download's `Task` kept
+running regardless (once started, it holds a strong reference to the
+view model it needs, independent of whatever SwiftUI does with the
+view), so nothing crashed or leaked — it just became invisible and
+uncontrollable, since the new view model had never heard of it. Fixed
+the same way `ChatViewModel` was: moved into `AppState`, constructed
+once, shared via `@EnvironmentObject` instead of rebuilt per tab visit.
+
+## Xcode arrives, and a real fix for the actual FLUX.2-klein error
+
+Xcode is now installed (a paid Apple Developer account signed in) —
+`swift build`/`swift test` no longer need the Command Line Tools
+workarounds this README used to document (the special `swift test`
+frameworks-search-path flag, in particular; a plain `swift test` works
+now). iOS Simulators are available and ready for that work whenever it
+starts; a real device additionally needs Xcode to auto-generate a
+signing identity from the signed-in account the first time a project
+targets one, no separate action needed.
+
+Investigating the FLUX.2-klein "no safetensors found in .../vae" error
+further turned up the actual, useful explanation: Black Forest Labs
+publishes **two different packagings** of the same model —
+`black-forest-labs/FLUX.2-klein-4b-nvfp4` (what got downloaded — a flat
+single-file NVIDIA-format quantized dump, genuinely not loadable by
+`mflux`) and `black-forest-labs/FLUX.2-klein-4B` (no `-nvfp4` suffix,
+capital B — a proper diffusers-style pipeline with real
+`transformer/`/`vae/`/`text_encoder/` folders, confirmed for real via
+`mflux`'s own `ModelConfig.from_name("flux2-klein-4b")`, which resolves
+straight to it). Also confirmed: `ModelCompatibility` classifies the two
+correctly — `.incompatible` for the nvfp4 one, `.compatible` for the
+real one — so the new Hugging Face search filter (below) would have
+caught this before the download, not after.
+
+## A compatibility filter for Hugging Face search, and CivitAI support
+
+- **Hugging Face: "Compatible only" filter (on by default).**
+  `ModelCompatibility` classifies a search result from its own file list
+  (`siblings`, fetched via `expand=siblings` on the same search request
+  — no extra API call) — `.compatible` for a real diffusers pipeline
+  (`model_index.json`, or `transformer/`+`vae/`), `.incompatible` for a
+  flat single/few-file checkpoint with no pipeline structure and no
+  `config.json` (the exact FLUX.2-klein-4b-nvfp4 shape), `.unknown`
+  otherwise — deliberately never flagging an unfamiliar shape (most
+  text models included) as incompatible just because it isn't a
+  diffusion pipeline. Verified against real search results for both the
+  broken repo and its working counterpart.
+- **CivitAI search and download**, the same shape of feature as the
+  Hugging Face one: a source picker in Models switches between them: a
+  `CivitAICatalog` (civitai.com's public REST API), a `CivitAITokenStore`
+  (macOS keychain, same reasoning as `HFTokenStore` — optional, needed
+  for some gated content), and a `CivitAIDownloader` — native
+  `URLSessionDownloadTask` (no Python needed; CivitAI's download is one
+  file behind a redirect, not a whole-repo fetch), real progress via its
+  delegate, cooperatively cancellable the same way the Hugging Face
+  downloader is. Both sources share one download queue/progress/pause-
+  stop mechanism (`DownloadJob`) — never two downloads running at once
+  regardless of source. Verified for real end to end: searched CivitAI
+  live, downloaded a real (small) file, confirmed it registered with
+  `kind: .image`.
+- **What CivitAI downloads can't do yet: load.** CivitAI's checkpoints
+  are single files, not diffusers pipelines — `mflux` doesn't have a
+  single-file loading path today, Flux-family checkpoints included, so
+  a CivitAI download registers and shows up in Models but won't load
+  until that's built (a real Python project,
+  [robjsliwa/mlx-sd-single-file-models](https://github.com/robjsliwa/mlx-sd-single-file-models),
+  shows this is solvable for MLX generally — not yet wired into Anvil).
+  The Models UI says so plainly rather than implying it already works.
+
 ## Architecture
 
 - Single SwiftUI macOS app (`Anvil` target), built with Swift Package Manager
