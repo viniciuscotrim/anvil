@@ -8,17 +8,40 @@ import AnvilCore
 /// are plain Combine-based property wrappers and build fine. Keep this
 /// pattern for any future view-local state rather than reaching for
 /// `@State`.
-private final class BootstrapViewState: ObservableObject {
+final class BootstrapViewState: ObservableObject {
     @Published var isReady = false
 }
 
-/// First-launch screen. Triggers only the bare minimum needed to browse
-/// and pick a model (Phase 1 rule) — the model picker itself lands in
-/// Phase 2, at which point this view becomes the "installing…" state
-/// that picker pushes into, rather than the whole app.
-struct BootstrapView: View {
+/// Top-level switcher: shows the bootstrap screen until the bare
+/// minimum needed to browse models is installed (Phase 1 rule), then
+/// hands off to the model manager (Phase 2).
+struct RootView: View {
     @EnvironmentObject private var requirements: RequirementsManager
-    @StateObject private var viewState = BootstrapViewState()
+    @StateObject private var bootstrapState = BootstrapViewState()
+
+    var body: some View {
+        Group {
+            if bootstrapState.isReady {
+                ModelManagerView(requirements: requirements)
+            } else {
+                BootstrapProgressView(
+                    statusMessage: requirements.statusMessage,
+                    isInstalling: requirements.isInstalling,
+                    errorMessage: requirements.lastError
+                )
+            }
+        }
+        .task {
+            bootstrapState.isReady = await requirements.ensure(HuggingFaceClientDependency())
+        }
+    }
+}
+
+/// First-launch screen — pure display, all state comes from its parent.
+struct BootstrapProgressView: View {
+    let statusMessage: String
+    let isInstalling: Bool
+    let errorMessage: String?
 
     var body: some View {
         VStack(spacing: 16) {
@@ -30,27 +53,22 @@ struct BootstrapView: View {
                 .font(.title)
                 .bold()
 
-            if requirements.isInstalling {
-                ProgressView(requirements.statusMessage.isEmpty ? "Setting up…" : requirements.statusMessage)
+            if isInstalling {
+                ProgressView(statusMessage.isEmpty ? "Setting up…" : statusMessage)
                     .progressViewStyle(.linear)
                     .frame(maxWidth: 320)
-            } else if let error = requirements.lastError {
+            } else if let errorMessage {
                 VStack(spacing: 8) {
                     Text("Setup couldn't finish")
                         .font(.headline)
-                    Text(error)
+                    Text(errorMessage)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
-            } else if viewState.isReady {
-                Text("Ready to pick a model.")
-                    .foregroundStyle(.secondary)
             }
         }
         .padding(32)
-        .task {
-            viewState.isReady = await requirements.ensure(HuggingFaceClientDependency())
-        }
+        .frame(minWidth: 480, minHeight: 320)
     }
 }

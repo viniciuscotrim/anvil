@@ -17,7 +17,14 @@ before moving on (see the brief for exact gates).
       `uv` + Python venv bootstrap, lazy per-choice dependency installs.
       Core logic + unit tests in place; full on-device gate (clean account,
       zero terminal windows, timed install) still to be run.
-- [ ] Phase 2 — Model manager (HF download + local import)
+- [x] **Phase 2 — Model manager**: HF search (native REST call, no Python
+      needed just to browse), download via `huggingface_hub.snapshot_download`,
+      local import (register an existing folder without re-fetching it),
+      all backed by one JSON model registry. Gate run for real on this Mac:
+      cold download of `mlx-community/SmolLM2-135M-Instruct-8bit` +
+      import of a separately-downloaded folder simulating an existing
+      oMLX model directory, both landing in the printed registry (see
+      `swift run Anvil -- --phase2-gate`).
 - [ ] Phase 3 — LLM serving on port 8000 (oMLX replacement)
 - [ ] Phase 4 — Image generation (Draw Things / flux_server.py replacement)
 - [ ] Phase 5 — Concurrent multi-model residency
@@ -32,11 +39,18 @@ before moving on (see the brief for exact gates).
   Kept separate from the `Anvil` executable target so it's unit-testable
   without a UI.
 - The app owns a private runtime under
-  `~/Library/Application Support/Anvil/` — its own `uv` binary and Python
-  venv. It never touches the system Python or Homebrew.
+  `~/Library/Application Support/Anvil/` — its own `uv` binary, Python venv,
+  and downloaded models (`models/`, with `models/registry.json` as the
+  single source of truth for what's registered). It never touches the
+  system Python or Homebrew.
 - Backend Python process (spawned by the app, never a visible terminal)
   serves an OpenAI-compatible API on port 8000 — a drop-in replacement for
   the existing persona proxies, no config changes on their side.
+- Each phase gate is confirmed by an inspectable artifact, not just "it
+  looked fine in the UI" — `Anvil -- --<phaseN>-gate` runs the phase's
+  gate headlessly (no window) and prints the resulting state as JSON.
+  `--phase2-gate` downloads one model cold and, if `ANVIL_GATE_IMPORT_PATH`
+  is set, imports that folder too, then prints the model registry.
 
 ## Building
 
