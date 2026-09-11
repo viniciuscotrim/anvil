@@ -354,7 +354,7 @@ final class ModelManagerViewModel: ObservableObject {
                     guard ready else {
                         throw ModelError.downloadFailed(self.requirements.lastError ?? "Could not set up the model browser")
                     }
-                    _ = try await self.downloader.download(repoID: summary.modelID) { line in
+                    _ = try await self.downloader.download(repoID: summary.modelID, knownFilePaths: summary.filePaths) { line in
                         Task { @MainActor in
                             self.statusMessage = line
                             // huggingface_hub's own tqdm-style progress

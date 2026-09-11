@@ -579,6 +579,60 @@ caught this before the download, not after.
   shows this is solvable for MLX generally — not yet wired into Anvil).
   The Models UI says so plainly rather than implying it already works.
 
+## A download nearly 3× the size it needed to be
+
+Reported live, mid-download: the download link showed ~7GB but the
+final size looked headed for 20GB+, and — separately — why does Draw
+Things run a "Flux.2 9B 8-bit" comfortably when even this 4B model
+looked bigger than this Mac's whole RAM?
+
+Checked both for real, with actual byte counts from Hugging Face's own
+API (`black-forest-labs/FLUX.2-klein-4B`, the repo from the previous
+round's fix):
+
+| file | size |
+|---|---|
+| `flux-2-klein-4b.safetensors` (root) | 7.75 GB |
+| `transformer/diffusion_pytorch_model.safetensors` | 7.75 GB |
+| `text_encoder/model-00001-of-00002.safetensors` | 4.97 GB |
+| `text_encoder/model-00002-of-00002.safetensors` | 3.08 GB |
+| `vae/diffusion_pytorch_model.safetensors` | 0.17 GB |
+| **total** | **23.7 GB** |
+
+Two real, separate things going on:
+
+- **A genuinely redundant download.** The root-level file and
+  `transformer/diffusion_pytorch_model.safetensors` are the same size
+  to the byte — this repo ships its weights *twice*: once as real
+  pipeline component folders (what `mflux` actually loads) and again as
+  a flat single-file copy for tools that load a whole checkpoint from
+  one file (ComfyUI-style). `mflux` never touches that second copy, so
+  downloading it was pure waste — confirmed the actual root cause of
+  "shows 7GB, ends up 20GB+". Fixed generally, not for just this one
+  repo: `ModelDownloader.redundantRootLevelWeightFiles` looks at a
+  repo's own file list (already fetched for search — no extra API call)
+  and skips any root-level `.safetensors`/`.bin`/`.ckpt`/`.pt`/`.gguf`
+  file *only* when `model_index.json` confirms a real pipeline exists
+  in the subfolders — never touches anything inside a component
+  subfolder, never guesses on a repo it isn't sure about. Verified for
+  real against the actual repo's exact file list, and the
+  Python-side `ignore_patterns` JSON round-trip and matching behavior
+  independently confirmed against the same `fnmatch` logic
+  `huggingface_hub` uses internally.
+- **The wrong precision, separately.** Even after removing the
+  duplicate, ~16GB of *unquantized* (BF16) weights is still a lot for
+  24GB of RAM — and not what Draw Things is actually running: "Flux.2
+  9B 8-bit" is a *pre-quantized* build, not the raw release. (Can't say
+  for certain which exact repo Draw Things itself pulls from — no
+  access to inspect its own network calls — but the *equivalent*,
+  correct source for Anvil is the same `mflux-community` org already
+  used elsewhere in this project.) Checked real sizes there too:
+  `mflux-community/flux2-klein-9b-mflux-q8` (9B, 8-bit) is 17.9GB — the
+  same ballpark as Draw Things' but still tight against this Mac's RAM;
+  `mflux-community/flux2-klein-4b-mflux-q4` (4B, 4-bit) is 4.6GB and
+  comfortably fits. Both have a clean file layout already (no redundant
+  root-level copy) — confirmed via the same file-list check.
+
 ## Architecture
 
 - Single SwiftUI macOS app (`Anvil` target), built with Swift Package Manager
