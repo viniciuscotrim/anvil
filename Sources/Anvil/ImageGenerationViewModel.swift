@@ -12,6 +12,10 @@ final class ImageGenerationViewModel: ObservableObject {
     @Published var isGenerating: Bool = false
     @Published var isSettingsOpen: Bool = false
     @Published var errorMessage: String?
+    /// nil until the first progress reading arrives (or if the server
+    /// never reports a total, e.g. mid-startup) — CircularProgressView
+    /// falls back to a plain spinner for that gap.
+    @Published private(set) var generationProgress: Double?
     @Published private(set) var gallery: [GeneratedImage] = []
 
     private let imageSessions: ImageSessionManager
@@ -42,12 +46,15 @@ final class ImageGenerationViewModel: ObservableObject {
         guard !text.isEmpty, !isGenerating else { return nil }
         errorMessage = nil
         isGenerating = true
-        defer { isGenerating = false }
+        generationProgress = nil
+        defer { isGenerating = false; generationProgress = nil }
 
         let modelDisplayName = imageSessions.session(for: id)?.model.displayName ?? id
 
         do {
-            let result = try await client.generate(prompt: text, baseURL: endpoint, settings: settings)
+            let result = try await client.generate(prompt: text, baseURL: endpoint, settings: settings) { [weak self] progress in
+                Task { @MainActor in self?.generationProgress = progress.fraction }
+            }
             let image = GeneratedImage(
                 prompt: text,
                 modelDisplayName: modelDisplayName,

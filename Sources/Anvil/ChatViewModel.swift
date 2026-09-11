@@ -20,6 +20,10 @@ final class ChatViewModel: ObservableObject {
     @Published var isExportPresented = false
     @Published var isSidebarOpen = false
     @Published private(set) var lastTokensPerSecond: Double?
+    /// Set while a `generate_image` tool call is actively generating —
+    /// nil the rest of the time, including while just waiting on the
+    /// text model itself.
+    @Published private(set) var imageToolProgress: Double?
 
     private let sessions: ModelSessionManager
     private let threadStore: ChatThreadStore
@@ -199,8 +203,16 @@ final class ChatViewModel: ObservableObject {
         }
         let imageModelName = imageSessions.session(for: imageModelID)?.model.displayName ?? imageModelID
 
+        imageToolProgress = nil
+        defer { imageToolProgress = nil }
+
         do {
-            let result = try await imageClient.generate(prompt: arguments.prompt, baseURL: imageEndpoint)
+            let result = try await imageClient.generate(
+                prompt: arguments.prompt,
+                baseURL: imageEndpoint
+            ) { [weak self] progress in
+                Task { @MainActor in self?.imageToolProgress = progress.fraction }
+            }
             let saved = try await generatedImageStore.add(GeneratedImage(
                 prompt: arguments.prompt,
                 modelDisplayName: imageModelName,

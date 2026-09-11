@@ -21,6 +21,7 @@ struct ModelManagerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             searchBar
+            searchOptionsBar
 
             if !viewModel.searchResults.isEmpty {
                 searchResultsList
@@ -53,6 +54,7 @@ struct ModelManagerView: View {
             TextField("Search Hugging Face models…", text: $viewModel.query)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { Task { await viewModel.search() } }
+                .onChange(of: viewModel.query) { _, _ in viewModel.queryDidChange() }
 
             Button("Search") { Task { await viewModel.search() } }
                 .disabled(viewModel.isBusy)
@@ -76,17 +78,48 @@ struct ModelManagerView: View {
         }
     }
 
+    private var searchOptionsBar: some View {
+        HStack {
+            Picker("Size", selection: Binding(
+                get: { viewModel.sizeFilter },
+                set: { viewModel.sizeFilter = $0 }
+            )) {
+                Text("Any size").tag(Optional<ModelSizeClass>.none)
+                ForEach(ModelSizeClass.allCases) { sizeClass in
+                    Text(sizeClass.label).tag(Optional(sizeClass))
+                }
+            }
+            .frame(maxWidth: 160)
+            .help("Relative to this Mac's RAM — Small ≤25%, Medium ≤50%, Large above that.")
+
+            Toggle("Search as I type", isOn: Binding(
+                get: { viewModel.isLiveSearchEnabled },
+                set: { viewModel.isLiveSearchEnabled = $0 }
+            ))
+            .help("Searches automatically once you've typed 3+ characters, after a short pause.")
+
+            Spacer()
+        }
+        .font(.callout)
+    }
+
     private var searchResultsList: some View {
-        List(viewModel.searchResults) { summary in
+        List(viewModel.filteredSearchResults) { summary in
             HStack {
                 VStack(alignment: .leading) {
                     Text(summary.modelID)
                         .font(.headline)
-                    if let downloads = summary.downloads {
-                        Text("\(downloads) downloads")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        if let downloads = summary.downloads {
+                            Text("\(downloads) downloads")
+                        }
+                        if let bytes = summary.sizeBytes {
+                            Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+                            Text("· \(ModelSizeClass.classify(sizeBytes: bytes).label)")
+                        }
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Download") { Task { await viewModel.download(summary) } }

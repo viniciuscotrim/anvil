@@ -131,9 +131,17 @@ struct ChatView: View {
                             .id(message.id)
                     }
                     if chat.isSending {
-                        ProgressView()
-                            .padding(.leading, 4)
-                            .id("sending-indicator")
+                        HStack(spacing: 6) {
+                            CircularProgressView(fraction: chat.imageToolProgress)
+                                .frame(width: 16, height: 16)
+                            if chat.imageToolProgress != nil {
+                                Text("Generating image…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.leading, 4)
+                        .id("sending-indicator")
                     }
                 }
                 .padding()
@@ -177,9 +185,8 @@ struct ChatView: View {
                         .textSelection(.enabled)
                 }
 
-                if let path = message.generatedImagePath, let nsImage = NSImage(contentsOfFile: path) {
-                    Image(nsImage: nsImage)
-                        .resizable()
+                if let path = message.generatedImagePath {
+                    InteractiveImageView(path: path)
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: 280)
                         .clipShape(RoundedRectangle(cornerRadius: 8))

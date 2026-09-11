@@ -33,6 +33,10 @@ public struct ChatClient: Sendable {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // The default 60s isn't enough for a long generation on a large
+        // model, or a tool-call round trip that includes real image
+        // generation in the middle — matches ImageClient's own timeout.
+        request.timeoutInterval = 300
 
         var body: [String: Any] = [
             "model": model,

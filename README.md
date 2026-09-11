@@ -140,6 +140,53 @@ before moving on (see the brief for exact gates).
 - [ ] Phase 5 — Concurrent multi-model residency
 - [ ] Phase 6 — Voice chat
 
+## Reliability and UX fixes (post-Phase-4 round)
+
+All found by actually using the app, not review — same pattern as every
+round before.
+
+- **Guaranteed cleanup, even on a crash.** The real bug: a model
+  server's `applicationShouldTerminate` cleanup never runs if Anvil is
+  force-quit, crashes, or gets `kill -9`'d — exactly how a real 9GB
+  orphaned process was found hours after its app had already died.
+  `ProcessWatchdog` now spawns a tiny shell process alongside every
+  loaded model that polls its own parent PID; the moment Anvil goes
+  away for *any* reason, the OS reparents it to launchd (ppid becomes
+  `1`), and it kills the server it's watching. Verified for real in the
+  harshest case: launched a real model server through the actual app
+  code path, `kill -9`'d the app (no cleanup code got to run at all,
+  same as a real crash), and confirmed the watchdog killed the orphan
+  within ~2s.
+- **Real progress, not a spinner.** `mflux` exposes a proper in-loop
+  callback (`flux.callbacks.register(...)`, `call_in_loop(t, ...,
+  time_steps)`) — confirmed by hand before touching the server code.
+  Wiring it in via `ThreadingHTTPServer` first broke generation outright
+  ("There is no Stream(cpu, 0) in current thread" — MLX ties its compute
+  stream to whichever thread loaded the model) — fixed by running the
+  model load and every generation call through one dedicated worker
+  thread (`ThreadPoolExecutor(max_workers=1)`) while the HTTP server's
+  other threads stay free to answer `GET /v1/images/progress`. A new
+  `CircularProgressView` (a real filling ring, not SwiftUI's
+  `.circular` style, which stays an indeterminate spinner on macOS even
+  with a value) shows it in both the Images tab and inline during a
+  chat tool call.
+- Chat's images are now interactive — `InteractiveImageView` (shared
+  with the gallery): right-click to copy or reveal in Finder, or Save
+  As… through a real save panel, not just a static picture.
+- `ChatClient`'s request timeout was the default 60s, too short for a
+  slow model or a tool-call round trip that includes real image
+  generation in the middle — raised to 300s, matching `ImageClient`.
+- Hugging Face search gained a Small/Medium/Large size filter, relative
+  to *this Mac's* RAM (`ModelSizeClass`: ≤25% / ≤50% / above), from
+  size estimates pulled in bulk via `expand=safetensors` (parameter
+  counts × bytes-per-dtype) — one search call, not one lookup per
+  result. A "search as I type" toggle debounce-searches after 3+
+  characters instead of waiting for Return.
+
+Killed the pre-existing 9GB orphan this round's investigation turned up
+(a leftover from testing earlier in development, from before any of
+this cleanup work existed).
+
 ## Architecture
 
 - Single SwiftUI macOS app (`Anvil` target), built with Swift Package Manager

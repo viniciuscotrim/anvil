@@ -13,17 +13,34 @@ public struct ImageClient: Sendable {
         public let height: Int
     }
 
+    public struct Progress: Sendable, Equatable {
+        public let step: Int
+        public let total: Int
+        public let active: Bool
+
+        public var fraction: Double? {
+            guard total > 0 else { return nil }
+            return Double(step) / Double(total)
+        }
+    }
+
     private let session: URLSession
 
     public init(session: URLSession = .shared) {
         self.session = session
     }
 
+    /// While the POST below is in flight, polls `GET
+    /// /v1/images/progress` on the side (a separate connection — the
+    /// server runs generation on one dedicated thread and answers this
+    /// on others, so it's never blocked behind the request it's
+    /// reporting on) and reports each reading through `onProgress`.
     public func generate(
         prompt: String,
         baseURL: URL,
         settings: ImageGenerationSettings = .default,
-        seed: Int? = nil
+        seed: Int? = nil,
+        onProgress: (@Sendable (Progress) -> Void)? = nil
     ) async throws -> Result {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/images/generations"))
         request.httpMethod = "POST"
@@ -47,6 +64,18 @@ public struct ImageClient: Sendable {
                 seed: seed
             )
         )
+
+        let progressTask: Task<Void, Never>? = onProgress.map { callback in
+            Task {
+                while !Task.isCancelled {
+                    if let progress = try? await pollProgress(baseURL: baseURL) {
+                        callback(progress)
+                    }
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                }
+            }
+        }
+        defer { progressTask?.cancel() }
 
         let data: Data
         let response: URLResponse
@@ -74,6 +103,15 @@ public struct ImageClient: Sendable {
         }
         return Result(localPath: item.path, seed: item.seed, width: item.width, height: item.height)
     }
+
+    public func pollProgress(baseURL: URL) async throws -> Progress {
+        let (data, response) = try await session.data(from: baseURL.appendingPathComponent("v1/images/progress"))
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw ServingError.requestFailed("Could not read generation progress")
+        }
+        let decoded = try JSONDecoder().decode(ProgressResponse.self, from: data)
+        return Progress(step: decoded.step, total: decoded.total, active: decoded.active)
+    }
 }
 
 private struct ImageGenerationResponse: Decodable {
@@ -84,4 +122,10 @@ private struct ImageGenerationResponse: Decodable {
         let height: Int
     }
     let data: [Item]
+}
+
+private struct ProgressResponse: Decodable {
+    let step: Int
+    let total: Int
+    let active: Bool
 }

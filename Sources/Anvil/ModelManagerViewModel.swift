@@ -13,6 +13,29 @@ final class ModelManagerViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var isImportPanelPresented: Bool = false
 
+    /// nil = no size filter. Small/Medium/Large are relative to this
+    /// Mac's own RAM (see `ModelSizeClass`), not an absolute cutoff.
+    @Published var sizeFilter: ModelSizeClass?
+    /// When on, typing (3+ characters) searches automatically after a
+    /// short pause instead of waiting for Search/Return.
+    @Published var isLiveSearchEnabled: Bool = false
+    private var liveSearchTask: Task<Void, Never>?
+
+    private let ramBytes = ProcessInfo.processInfo.physicalMemory
+
+    /// What the list actually shows — `searchResults` narrowed by
+    /// `sizeFilter`. A result with no size estimate at all (no
+    /// safetensors metadata, e.g. a GGUF-only repo) is kept when no
+    /// filter is active but excluded by any specific filter, since
+    /// there's nothing to classify it by.
+    var filteredSearchResults: [HFModelSummary] {
+        guard let sizeFilter else { return searchResults }
+        return searchResults.filter { summary in
+            guard let bytes = summary.sizeBytes else { return false }
+            return ModelSizeClass.classify(sizeBytes: bytes, ramBytes: ramBytes) == sizeFilter
+        }
+    }
+
     /// Which model's server-settings popover is open, if any — one at
     /// a time is plenty.
     @Published var openServerSettingsFor: String?
@@ -42,6 +65,22 @@ final class ModelManagerViewModel: ObservableObject {
 
     func loadRegistry() async {
         registeredModels = await registry.all()
+    }
+
+    /// Call whenever `query` changes. Only does anything when live
+    /// search is on and there are at least 3 characters — debounced so
+    /// it doesn't fire a request per keystroke.
+    func queryDidChange() {
+        liveSearchTask?.cancel()
+        guard isLiveSearchEnabled,
+              query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3 else {
+            return
+        }
+        liveSearchTask = Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            await search()
+        }
     }
 
     func search() async {

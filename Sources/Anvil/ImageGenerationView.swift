@@ -107,14 +107,11 @@ struct ImageGenerationView: View {
 
     private func galleryTile(_ image: GeneratedImage) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            LocalImageView(path: image.localPath)
-                .aspectRatio(CGFloat(image.width) / CGFloat(max(image.height, 1)), contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .contextMenu {
-                    Button("Copy Image") { copyToPasteboard(image) }
-                    Button("Reveal in Finder") { revealInFinder(image) }
-                    Button("Delete", role: .destructive) { Task { await viewModel.delete(image) } }
-                }
+            InteractiveImageView(path: image.localPath) {
+                Button("Delete", role: .destructive) { Task { await viewModel.delete(image) } }
+            }
+            .aspectRatio(CGFloat(image.width) / CGFloat(max(image.height, 1)), contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
 
             Text(image.prompt)
                 .font(.caption2)
@@ -135,7 +132,8 @@ struct ImageGenerationView: View {
                 .disabled(imageSessions.readySessions.isEmpty)
 
             if viewModel.isGenerating {
-                ProgressView().controlSize(.small)
+                CircularProgressView(fraction: viewModel.generationProgress)
+                    .frame(width: 18, height: 18)
             }
 
             Button("Generate") { Task { await viewModel.generate() } }
@@ -184,33 +182,5 @@ struct ImageGenerationView: View {
             }
         }
         .formStyle(.grouped)
-    }
-
-    private func copyToPasteboard(_ image: GeneratedImage) {
-        guard let nsImage = NSImage(contentsOfFile: image.localPath) else { return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([nsImage])
-    }
-
-    private func revealInFinder(_ image: GeneratedImage) {
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: image.localPath)])
-    }
-}
-
-/// Loads a local file path as an image — a thin wrapper since SwiftUI's
-/// `Image` has no direct "from local path" initializer on macOS.
-private struct LocalImageView: View {
-    let path: String
-
-    var body: some View {
-        if let nsImage = NSImage(contentsOfFile: path) {
-            Image(nsImage: nsImage)
-                .resizable()
-        } else {
-            Rectangle()
-                .fill(Color.gray.opacity(0.2))
-                .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
-        }
     }
 }

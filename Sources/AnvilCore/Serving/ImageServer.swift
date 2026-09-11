@@ -72,6 +72,7 @@ public actor ImageServer {
             await NamedLauncher.shared.removeLauncher(at: launcher)
             throw ServingError.serverFailedToStart(error.localizedDescription)
         }
+        ProcessWatchdog.attach(toPID: proc.processIdentifier)
 
         process = proc
         launcherURL = launcher

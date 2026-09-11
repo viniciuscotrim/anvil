@@ -25,13 +25,26 @@ enum ImageServerScript {
     import base64
     import json
     import sys
+    import threading
     import time
     import uuid
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from concurrent.futures import ThreadPoolExecutor
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from pathlib import Path
 
     from mflux.models.common.config import ModelConfig
     from mflux.models.flux.variants.txt2img.flux import Flux1
+
+    # MLX ties its compute stream to whatever thread first touches it —
+    # calling generate_image() from a thread other than the one that
+    # loaded the model fails ("There is no Stream(cpu, 0) in current
+    # thread"), confirmed by hitting that error for real. A single
+    # dedicated worker thread runs both the load and every generation
+    # call; ThreadingHTTPServer's own handler threads stay free to
+    # answer GET /v1/images/progress while a POST is in flight — they
+    # just submit generation work to this executor and block on the
+    # result, not on the shared HTTP server itself.
+    mlx_executor = ThreadPoolExecutor(max_workers=1)
 
 
     def parse_args():
@@ -50,7 +63,48 @@ enum ImageServerScript {
         return Flux1(model_config=model_config, quantize=args.quantize)
 
 
-    def make_handler(flux, output_dir: Path, model_label: str):
+    class ProgressState:
+        """Shared between the generation thread (writer, via the mflux
+        in-loop callback) and any GET /v1/images/progress request
+        (reader) — a ThreadingHTTPServer serves those concurrently while
+        a generation POST is still blocking its own thread."""
+
+        def __init__(self):
+            self._lock = threading.Lock()
+            self._step = 0
+            self._total = 0
+            self._active = False
+
+        def begin(self):
+            with self._lock:
+                self._step = 0
+                self._total = 0
+                self._active = True
+
+        def update(self, step, total):
+            with self._lock:
+                self._step = step
+                self._total = total
+
+        def end(self):
+            with self._lock:
+                self._active = False
+
+        def snapshot(self):
+            with self._lock:
+                return {"step": self._step, "total": self._total, "active": self._active}
+
+
+    class ProgressCallback:
+        def __init__(self, state: ProgressState):
+            self._state = state
+
+        def call_in_loop(self, t, seed, prompt, latents, config, time_steps):
+            total = getattr(time_steps, "total", None) or 0
+            self._state.update(t + 1, total)
+
+
+    def make_handler(flux, output_dir: Path, model_label: str, progress: ProgressState):
         class Handler(BaseHTTPRequestHandler):
             def _send_json(self, status, payload):
                 body = json.dumps(payload).encode("utf-8")
@@ -66,7 +120,9 @@ enum ImageServerScript {
                 )
 
             def do_GET(self):
-                if self.path.startswith("/v1/models"):
+                if self.path.startswith("/v1/images/progress"):
+                    self._send_json(200, progress.snapshot())
+                elif self.path.startswith("/v1/models"):
                     self._send_json(200, {"object": "list", "data": [{"id": model_label, "object": "model"}]})
                 else:
                     self._send_json(404, {"error": "not found"})
@@ -104,18 +160,22 @@ enum ImageServerScript {
                     self._send_json(400, {"error": f"invalid parameter: {exc}"})
                     return
 
+                progress.begin()
                 try:
-                    image = flux.generate_image(
+                    image = mlx_executor.submit(
+                        flux.generate_image,
                         seed=seed,
                         prompt=prompt,
                         num_inference_steps=steps,
                         height=height,
                         width=width,
                         guidance=guidance,
-                    )
+                    ).result()
                 except Exception as exc:
+                    progress.end()
                     self._send_json(500, {"error": f"generation failed: {exc}"})
                     return
+                progress.end()
 
                 output_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"{int(time.time())}-{uuid.uuid4().hex[:8]}.png"
@@ -145,11 +205,19 @@ enum ImageServerScript {
     def main():
         args = parse_args()
         print(f"Loading {args.model}...", file=sys.stderr, flush=True)
-        flux = build_pipeline(args)
+        # Loaded on the same dedicated worker thread every generation
+        # call below will also run on — see the mlx_executor comment.
+        flux = mlx_executor.submit(build_pipeline, args).result()
+        progress = ProgressState()
+        flux.callbacks.register(ProgressCallback(progress))
         print("Model loaded.", file=sys.stderr, flush=True)
 
-        handler = make_handler(flux, Path(args.output_dir), args.model)
-        server = HTTPServer((args.host, args.port), handler)
+        handler = make_handler(flux, Path(args.output_dir), args.model, progress)
+        # Threading, not the plain single-threaded HTTPServer: a
+        # generation POST blocks its own thread for a while, and
+        # GET /v1/images/progress needs to be answered while that's
+        # happening, not queued behind it.
+        server = ThreadingHTTPServer((args.host, args.port), handler)
         print(f"Starting httpd at {args.host} on port {args.port}...", file=sys.stderr, flush=True)
         server.serve_forever()
 
