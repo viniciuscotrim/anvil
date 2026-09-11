@@ -132,32 +132,96 @@ struct ModelManagerView: View {
     private func loadControl(for entry: ModelEntry) -> some View {
         let session = sessions.sessions.first { $0.id == entry.id }
 
-        switch session?.status {
-        case .none:
-            Button("Load") { Task { await sessions.load(entry, requirements: requirements) } }
+        HStack(spacing: 6) {
+            switch session?.status {
+            case .none:
+                Button("Load") { Task { await sessions.load(entry, requirements: requirements) } }
 
-        case .loading:
-            HStack(spacing: 6) {
+            case .loading:
                 ProgressView().controlSize(.small)
                 Text("Loading…").font(.caption).foregroundStyle(.secondary)
-            }
 
-        case .ready:
-            HStack(spacing: 6) {
+            case .ready:
                 Circle().fill(.green).frame(width: 8, height: 8)
-                Text("Loaded · :\(session?.port ?? 0)")
+                Text("\(session?.access.host ?? ""):\(session?.port ?? 0)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Unload") { Task { await sessions.unload(modelID: entry.id) } }
-            }
 
-        case .failed(let reason):
-            HStack(spacing: 6) {
+            case .failed(let reason):
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                     .help(reason)
                 Button("Retry") { Task { await sessions.load(entry, requirements: requirements) } }
             }
+
+            serverSettingsButton(for: entry)
         }
+    }
+
+    /// Opt-in, per-model control for the two things a server the user
+    /// opens must let them decide: which port, and whether it's
+    /// reachable only from this Mac or over the network.
+    private func serverSettingsButton(for entry: ModelEntry) -> some View {
+        Button {
+            viewModel.openServerSettingsFor = entry.id
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .buttonStyle(.borderless)
+        .popover(isPresented: Binding(
+            get: { viewModel.openServerSettingsFor == entry.id },
+            set: { isPresented in
+                if !isPresented, viewModel.openServerSettingsFor == entry.id {
+                    viewModel.openServerSettingsFor = nil
+                }
+            }
+        )) {
+            serverSettingsPopover(for: entry)
+        }
+    }
+
+    private func serverSettingsPopover(for entry: ModelEntry) -> some View {
+        let isLoaded = sessions.isLoaded(modelID: entry.id)
+        let currentAccess = viewModel.access(for: entry.id, sessions: sessions)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Server Settings").font(.headline)
+
+            Picker("Access", selection: Binding(
+                get: { currentAccess },
+                set: { viewModel.setAccess($0, for: entry.id, sessions: sessions) }
+            )) {
+                ForEach(ServerAccess.allCases) { access in
+                    Text(access.label).tag(access)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            Text(currentAccess.explanation)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            LabeledContent("Port") {
+                TextField("8000", text: Binding(
+                    get: { viewModel.portText(for: entry.id, sessions: sessions) },
+                    set: { viewModel.setPortText($0, for: entry.id, sessions: sessions) }
+                ))
+                .frame(width: 80)
+            }
+
+            HStack {
+                Spacer()
+                Button(isLoaded ? "Apply & Restart" : "Load") {
+                    Task {
+                        await viewModel.applyServerSettings(for: entry, sessions: sessions, requirements: requirements)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding()
+        .frame(width: 260)
     }
 }

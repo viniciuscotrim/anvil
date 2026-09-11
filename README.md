@@ -84,6 +84,18 @@ before moving on (see the brief for exact gates).
       the script through *that* launcher. Verified for real, end-to-end,
       through the actual app code path, holding the process open and
       checking `ps aux` mid-run — not just the launch line.
+      Opening a model's server is now an explicit, per-model choice
+      (`ServerAccess`), not an implicit side effect of loading: a
+      gear icon next to each model opens a popover to pick the port
+      (validated against a real bind before committing, not just
+      Anvil's own bookkeeping — a taken port fails with a clear message
+      instead of the raw Python traceback `mlx_lm.server` throws) and
+      whether it's local-only (`127.0.0.1`, the default) or open to the
+      network (`0.0.0.0` — what the persona proxies over Tailscale will
+      need). Reachability verified for real over the LAN, not just
+      loopback: bound a model to `0.0.0.0` on a chosen port and confirmed
+      a real chat completion over the Mac's actual network IP from
+      another process.
       **Not done yet**: the brief's actual gate — the Sofia persona
       proxy (:8003) getting a valid response through this backend with
       zero changes on its side, then retiring oMLX. That's a deliberate,

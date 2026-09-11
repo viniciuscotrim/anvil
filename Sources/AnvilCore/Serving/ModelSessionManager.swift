@@ -8,6 +8,10 @@ import Foundation
 /// residency; there's no memory-budget policy yet, just independent
 /// per-model processes).
 ///
+/// Every load is local-only (127.0.0.1) with an auto-picked port unless
+/// the caller explicitly asks otherwise — network exposure and a
+/// specific port are opt-in, never the default.
+///
 /// Plain `ObservableObject` (not `@Observable`) so it can be held with
 /// `@StateObject` — see the `@State` toolchain note in README.
 @MainActor
@@ -21,6 +25,7 @@ public final class ModelSessionManager: ObservableObject {
     public struct Session: Identifiable, Equatable, Sendable {
         public let model: ModelEntry
         public let port: Int
+        public let access: ServerAccess
         public var status: Status
         public var id: String { model.id }
     }
@@ -44,6 +49,13 @@ public final class ModelSessionManager: ObservableObject {
         sessions.contains { $0.id == modelID && $0.status == .ready }
     }
 
+    public func session(for modelID: String) -> Session? {
+        sessions.first { $0.id == modelID }
+    }
+
+    /// Always the loopback address for Anvil's own in-app chat — a
+    /// server bound to 0.0.0.0 still answers on 127.0.0.1, so the app
+    /// never needs to care which access mode a session is using.
     public func chatEndpoint(for modelID: String) -> URL? {
         guard let session = sessions.first(where: { $0.id == modelID }), session.status == .ready else {
             return nil
@@ -51,33 +63,74 @@ public final class ModelSessionManager: ObservableObject {
         return URL(string: "http://127.0.0.1:\(session.port)")
     }
 
+    /// Suggests the next free local port, starting at 8000 — a
+    /// starting point for a settings UI to offer, not a value forced
+    /// on the user.
+    public func suggestedPort() -> Int {
+        portForNewSession(access: .localOnly)
+    }
+
     @discardableResult
-    public func load(_ model: ModelEntry, requirements: RequirementsManager) async -> Bool {
+    public func load(
+        _ model: ModelEntry,
+        requirements: RequirementsManager,
+        access: ServerAccess = .localOnly,
+        port: Int? = nil
+    ) async -> Bool {
         if let existing = sessions.first(where: { $0.id == model.id }) {
             if existing.status == .ready { return true }
             if case .loading = existing.status { return false }
         }
 
-        let port = portForNewSession()
-        upsert(Session(model: model, port: port, status: .loading))
+        let resolvedPort = port ?? portForNewSession(access: access)
+        guard PortProbe.isFree(resolvedPort, host: access.host) else {
+            upsert(Session(
+                model: model, port: resolvedPort, access: access,
+                status: .failed("Port \(resolvedPort) is already in use — pick another.")
+            ))
+            return false
+        }
+
+        upsert(Session(model: model, port: resolvedPort, access: access, status: .loading))
 
         let ready = await requirements.ensure(TextModelRuntimeDependency())
         guard ready else {
             let reason = requirements.lastError ?? "Could not set up text generation"
-            upsert(Session(model: model, port: port, status: .failed(reason)))
+            upsert(Session(model: model, port: resolvedPort, access: access, status: .failed(reason)))
             return false
         }
 
         let server = LLMServer()
         do {
-            try await server.start(modelPath: model.localPath, displayName: model.displayName, port: port)
+            try await server.start(
+                modelPath: model.localPath,
+                displayName: model.displayName,
+                host: access.host,
+                port: resolvedPort
+            )
             servers[model.id] = server
-            upsert(Session(model: model, port: port, status: .ready))
+            upsert(Session(model: model, port: resolvedPort, access: access, status: .ready))
             return true
         } catch {
-            upsert(Session(model: model, port: port, status: .failed(error.localizedDescription)))
+            upsert(Session(model: model, port: resolvedPort, access: access, status: .failed(error.localizedDescription)))
             return false
         }
+    }
+
+    /// Stops and reloads an already-loaded model under new server
+    /// settings (port and/or access). A no-op port/access change still
+    /// does a full restart — simplest correct behavior, and reloading a
+    /// model that's already resident in the OS file cache is fast.
+    @discardableResult
+    public func updateServerSettings(
+        modelID: String,
+        requirements: RequirementsManager,
+        access: ServerAccess,
+        port: Int
+    ) async -> Bool {
+        guard let model = sessions.first(where: { $0.id == modelID })?.model else { return false }
+        await unload(modelID: modelID)
+        return await load(model, requirements: requirements, access: access, port: port)
     }
 
     public func unload(modelID: String) async {
@@ -97,10 +150,10 @@ public final class ModelSessionManager: ObservableObject {
         sessions.removeAll()
     }
 
-    private func portForNewSession() -> Int {
+    private func portForNewSession(access: ServerAccess) -> Int {
         let used = Set(sessions.map(\.port))
         var candidate = 8000
-        while used.contains(candidate) || !PortProbe.isFree(candidate) {
+        while used.contains(candidate) || !PortProbe.isFree(candidate, host: access.host) {
             candidate += 1
         }
         return candidate

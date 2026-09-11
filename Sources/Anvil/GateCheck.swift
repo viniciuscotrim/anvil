@@ -85,9 +85,10 @@ enum GateCheck {
             }
 
             let port = env["ANVIL_GATE_PORT"].flatMap(Int.init) ?? 8000
-            log("Starting mlx_lm.server with \(modelPath) on port \(port)…")
+            let host = env["ANVIL_GATE_HOST"] ?? "127.0.0.1"
+            log("Starting mlx_lm.server with \(modelPath) on \(host):\(port)…")
             let displayName = URL(fileURLWithPath: modelPath).lastPathComponent
-            try await server.start(modelPath: modelPath, displayName: displayName, port: port) { log($0) }
+            try await server.start(modelPath: modelPath, displayName: displayName, host: host, port: port) { log($0) }
             result["serverStarted"] = true
 
             let modelsURL = await server.baseURL.appendingPathComponent("v1/models")

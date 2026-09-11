@@ -13,6 +13,19 @@ final class ModelManagerViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var isImportPanelPresented: Bool = false
 
+    /// Which model's server-settings popover is open, if any — one at
+    /// a time is plenty.
+    @Published var openServerSettingsFor: String?
+    /// Draft port/access per model, edited in the popover before being
+    /// applied — separate from `ModelSessionManager.Session` so editing
+    /// doesn't affect anything until the user confirms.
+    @Published private var serverDrafts: [String: ServerDraft] = [:]
+
+    struct ServerDraft: Equatable {
+        var portText: String
+        var access: ServerAccess
+    }
+
     private let requirements: RequirementsManager
     private let catalog = HuggingFaceCatalog()
     private let registry: ModelRegistry
@@ -73,5 +86,53 @@ final class ModelManagerViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    // MARK: - Server settings draft (port + local/network access)
+
+    func portText(for modelID: String, sessions: ModelSessionManager) -> String {
+        serverDrafts[modelID]?.portText ?? String(sessions.session(for: modelID)?.port ?? sessions.suggestedPort())
+    }
+
+    func access(for modelID: String, sessions: ModelSessionManager) -> ServerAccess {
+        serverDrafts[modelID]?.access ?? sessions.session(for: modelID)?.access ?? .localOnly
+    }
+
+    func setPortText(_ text: String, for modelID: String, sessions: ModelSessionManager) {
+        var draft = draft(for: modelID, sessions: sessions)
+        draft.portText = text
+        serverDrafts[modelID] = draft
+    }
+
+    func setAccess(_ access: ServerAccess, for modelID: String, sessions: ModelSessionManager) {
+        var draft = draft(for: modelID, sessions: sessions)
+        draft.access = access
+        serverDrafts[modelID] = draft
+    }
+
+    /// Applies the current draft — loads the model if it isn't running
+    /// yet, or restarts it under the new settings if it already is.
+    func applyServerSettings(for model: ModelEntry, sessions: ModelSessionManager, requirements: RequirementsManager) async {
+        let text = portText(for: model.id, sessions: sessions)
+        guard let port = Int(text), (1...65535).contains(port) else {
+            errorMessage = "Enter a valid port number (1–65535)."
+            return
+        }
+        errorMessage = nil
+        openServerSettingsFor = nil
+        let access = access(for: model.id, sessions: sessions)
+
+        if sessions.isLoaded(modelID: model.id) {
+            await sessions.updateServerSettings(modelID: model.id, requirements: requirements, access: access, port: port)
+        } else {
+            await sessions.load(model, requirements: requirements, access: access, port: port)
+        }
+    }
+
+    private func draft(for modelID: String, sessions: ModelSessionManager) -> ServerDraft {
+        serverDrafts[modelID] ?? ServerDraft(
+            portText: portText(for: modelID, sessions: sessions),
+            access: access(for: modelID, sessions: sessions)
+        )
     }
 }
