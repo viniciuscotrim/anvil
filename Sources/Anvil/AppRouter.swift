@@ -1,14 +1,14 @@
 import Foundation
-import AnvilCore
 
 /// Which screen is showing — plain `ObservableObject`, not `@Observable`,
 /// so it can be held with `@StateObject` (see the `@State` toolchain
-/// note in README).
+/// note in README). Chat isn't tied to a specific model anymore — it's
+/// an app-level tab that picks among whatever's currently loaded.
 final class AppRouter: ObservableObject {
     enum Screen: Equatable {
         case bootstrap
         case modelManager
-        case chat(ModelEntry)
+        case chat
     }
 
     @Published var screen: Screen = .bootstrap

@@ -6,11 +6,12 @@ import UniformTypeIdentifiers
 /// importing an already-downloaded model folder without re-fetching it.
 struct ModelManagerView: View {
     @StateObject private var viewModel: ModelManagerViewModel
-    @ObservedObject private var router: AppRouter
+    @EnvironmentObject private var sessions: ModelSessionManager
+    private let requirements: RequirementsManager
 
-    init(requirements: RequirementsManager, router: AppRouter) {
+    init(requirements: RequirementsManager) {
         _viewModel = StateObject(wrappedValue: ModelManagerViewModel(requirements: requirements))
-        self.router = router
+        self.requirements = requirements
     }
 
     var body: some View {
@@ -118,10 +119,44 @@ struct ModelManagerView: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                         }
-                        Button("Chat") { router.screen = .chat(entry) }
+                        Spacer()
+                        loadControl(for: entry)
                     }
                 }
                 .frame(minHeight: 140)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func loadControl(for entry: ModelEntry) -> some View {
+        let session = sessions.sessions.first { $0.id == entry.id }
+
+        switch session?.status {
+        case .none:
+            Button("Load") { Task { await sessions.load(entry, requirements: requirements) } }
+
+        case .loading:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Loading…").font(.caption).foregroundStyle(.secondary)
+            }
+
+        case .ready:
+            HStack(spacing: 6) {
+                Circle().fill(.green).frame(width: 8, height: 8)
+                Text("Loaded · :\(session?.port ?? 0)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Unload") { Task { await sessions.unload(modelID: entry.id) } }
+            }
+
+        case .failed(let reason):
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(reason)
+                Button("Retry") { Task { await sessions.load(entry, requirements: requirements) } }
             }
         }
     }

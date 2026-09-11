@@ -1,67 +1,73 @@
 import Foundation
 import AnvilCore
 
-/// Plain `ObservableObject` (not `@Observable`) — see the `@State`
-/// toolchain note in README.
+/// Chat is an app-level feature, not tied to any one model — you pick
+/// which currently-loaded model you're talking to, and each one keeps
+/// its own conversation history so switching between them doesn't lose
+/// anything. Plain `ObservableObject` (not `@Observable`) — see the
+/// `@State` toolchain note in README.
 @MainActor
 final class ChatViewModel: ObservableObject {
-    @Published var messages: [ChatMessage] = []
+    @Published var selectedModelID: String?
+    @Published private(set) var conversations: [String: [ChatMessage]] = [:]
     @Published var inputText: String = ""
-    @Published var isLoadingModel = false
     @Published var isSending = false
     @Published var errorMessage: String?
-    @Published var isServerReady = false
+    @Published var isExportPresented = false
 
-    let model: ModelEntry
-    private let requirements: RequirementsManager
-    private let server = LLMServer()
+    private let sessions: ModelSessionManager
     private let client = ChatClient()
 
-    init(model: ModelEntry, requirements: RequirementsManager) {
-        self.model = model
-        self.requirements = requirements
+    init(sessions: ModelSessionManager) {
+        self.sessions = sessions
     }
 
-    func start() async {
-        guard !isServerReady, !isLoadingModel else { return }
-        isLoadingModel = true
-        errorMessage = nil
-        defer { isLoadingModel = false }
+    var messages: [ChatMessage] {
+        guard let id = selectedModelID else { return [] }
+        return conversations[id] ?? []
+    }
 
-        let ready = await requirements.ensure(TextModelRuntimeDependency())
-        guard ready else {
-            errorMessage = requirements.lastError ?? "Could not set up text generation"
-            return
-        }
+    var selectedModelDisplayName: String? {
+        sessions.sessions.first { $0.id == selectedModelID }?.model.displayName
+    }
 
-        do {
-            try await server.start(modelPath: model.localPath)
-            isServerReady = true
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+    /// Keeps the selection pointed at a loaded model whenever possible —
+    /// called on appear and whenever the set of loaded models changes
+    /// (e.g. the one you were talking to got unloaded from the Models tab).
+    func syncSelection() {
+        if let id = selectedModelID, sessions.isLoaded(modelID: id) { return }
+        selectedModelID = sessions.readySessions.first?.id
+    }
+
+    func exportMarkdown() -> String {
+        TranscriptFormatter.markdown(
+            modelName: selectedModelDisplayName ?? "model",
+            messages: messages
+        )
     }
 
     func send() async {
+        guard let id = selectedModelID, let endpoint = sessions.chatEndpoint(for: id) else {
+            errorMessage = "Pick a loaded model first"
+            return
+        }
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, isServerReady, !isSending else { return }
+        guard !text.isEmpty, !isSending else { return }
         inputText = ""
         errorMessage = nil
-        messages.append(ChatMessage(role: .user, content: text))
+
+        var history = conversations[id] ?? []
+        history.append(ChatMessage(role: .user, content: text))
+        conversations[id] = history
+
         isSending = true
         defer { isSending = false }
 
         do {
-            let baseURL = await server.baseURL
-            let reply = try await client.send(messages: messages, baseURL: baseURL, model: model.id)
-            messages.append(reply)
+            let reply = try await client.send(messages: history, baseURL: endpoint)
+            conversations[id, default: []].append(reply)
         } catch {
             errorMessage = error.localizedDescription
         }
-    }
-
-    func stop() async {
-        await server.stop()
-        isServerReady = false
     }
 }

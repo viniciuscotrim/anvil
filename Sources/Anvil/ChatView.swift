@@ -1,77 +1,132 @@
 import SwiftUI
+import AppKit
 import AnvilCore
 
-/// Phase 3's other half: not just a server for the persona proxies, but
-/// an actual place to talk to a loaded model yourself — pick a model,
-/// start talking to it, same as the brief's own zero-friction bar.
+/// An app-level chat window: pick which loaded model you're talking to,
+/// switch freely between them without losing history, select/copy any
+/// message, and export the whole thread as Markdown.
 struct ChatView: View {
+    @EnvironmentObject private var sessions: ModelSessionManager
     @StateObject private var viewModel: ChatViewModel
-    @ObservedObject private var router: AppRouter
 
-    init(model: ModelEntry, requirements: RequirementsManager, router: AppRouter) {
-        _viewModel = StateObject(wrappedValue: ChatViewModel(model: model, requirements: requirements))
-        self.router = router
+    init(sessions: ModelSessionManager) {
+        _viewModel = StateObject(wrappedValue: ChatViewModel(sessions: sessions))
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
+
             Divider()
-            messageList
+
+            if sessions.readySessions.isEmpty {
+                emptyState
+            } else if viewModel.messages.isEmpty {
+                Spacer()
+                Text("Say something to \(viewModel.selectedModelDisplayName ?? "the model").")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                messageList
+            }
+
             if let error = viewModel.errorMessage {
                 Text(error)
                     .font(.callout)
                     .foregroundStyle(.red)
                     .padding(.horizontal)
-                    .padding(.bottom, 4)
+                    .padding(.top, 4)
             }
+
             Divider()
             inputBar
         }
-        .frame(minWidth: 560, minHeight: 420)
-        .task { await viewModel.start() }
+        .frame(minWidth: 640, minHeight: 480)
+        .task { viewModel.syncSelection() }
+        .onChange(of: sessions.sessions) { _, _ in viewModel.syncSelection() }
+        .fileExporter(
+            isPresented: Binding(
+                get: { viewModel.isExportPresented },
+                set: { viewModel.isExportPresented = $0 }
+            ),
+            document: TranscriptDocument(text: viewModel.exportMarkdown()),
+            contentType: .markdownTranscript,
+            defaultFilename: (viewModel.selectedModelDisplayName ?? "conversation") + ".md"
+        ) { _ in }
     }
 
     private var header: some View {
         HStack {
-            Button("← Models") {
-                Task { await viewModel.stop() }
-                router.screen = .modelManager
+            if sessions.readySessions.isEmpty {
+                Text("Chat").font(.headline)
+            } else {
+                Picker("", selection: Binding(
+                    get: { viewModel.selectedModelID },
+                    set: { viewModel.selectedModelID = $0 }
+                )) {
+                    ForEach(sessions.readySessions) { session in
+                        Text(session.model.displayName).tag(Optional(session.id))
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 280)
             }
 
             Spacer()
 
-            Text(viewModel.model.displayName)
-                .font(.headline)
-
-            Spacer()
-
-            if viewModel.isLoadingModel {
-                ProgressView()
-                    .controlSize(.small)
-            } else if viewModel.isServerReady {
-                Label("Ready", systemImage: "circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-                    .labelStyle(.titleAndIcon)
+            Button {
+                copyAllToPasteboard()
+            } label: {
+                Label("Copy All", systemImage: "doc.on.doc")
             }
+            .disabled(viewModel.messages.isEmpty)
+
+            Button {
+                viewModel.isExportPresented = true
+            } label: {
+                Label("Export…", systemImage: "square.and.arrow.up")
+            }
+            .disabled(viewModel.messages.isEmpty)
         }
         .padding()
     }
 
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Text("No models loaded")
+                .font(.headline)
+            Text("Load a model from the Models tab first.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+    }
+
     private var messageList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                ForEach(viewModel.messages) { message in
-                    bubble(for: message)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(viewModel.messages) { message in
+                        bubble(for: message)
+                            .id(message.id)
+                    }
+                    if viewModel.isSending {
+                        ProgressView()
+                            .padding(.leading, 4)
+                            .id("sending-indicator")
+                    }
                 }
-                if viewModel.isSending {
-                    ProgressView()
-                        .padding(.leading, 4)
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .onChange(of: viewModel.messages) { _, _ in
+                let target: AnyHashable = viewModel.messages.last.map { AnyHashable($0.id) }
+                    ?? AnyHashable("sending-indicator")
+                withAnimation {
+                    proxy.scrollTo(target, anchor: .bottom)
                 }
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -83,6 +138,7 @@ struct ChatView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(message.content)
+                    .textSelection(.enabled)
             }
             .padding(10)
             .background(message.role == .user ? Color.accentColor.opacity(0.15) : Color.gray.opacity(0.12))
@@ -97,14 +153,21 @@ struct ChatView: View {
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...4)
                 .onSubmit { Task { await viewModel.send() } }
+                .disabled(sessions.readySessions.isEmpty)
 
             Button("Send") { Task { await viewModel.send() } }
                 .disabled(
-                    !viewModel.isServerReady
+                    sessions.readySessions.isEmpty
                     || viewModel.isSending
                     || viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
         }
         .padding()
+    }
+
+    private func copyAllToPasteboard() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(viewModel.exportMarkdown(), forType: .string)
     }
 }

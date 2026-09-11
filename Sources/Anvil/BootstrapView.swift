@@ -1,17 +1,18 @@
 import SwiftUI
 import AnvilCore
 
-/// Top-level switcher: shows the bootstrap screen until the bare
-/// minimum needed to browse models is installed (Phase 1 rule), then
-/// the model manager (Phase 2), then a real chat window once a model
-/// is picked to load (Phase 3) — pick a model, start talking to it,
-/// same as the brief's own "wait, that's it?" bar.
+/// Top-level switcher: bootstrap screen until the bare minimum needed
+/// to browse models is installed (Phase 1 rule), then a persistent
+/// Models / Chat tab bar — Chat is its own app-level section, not tied
+/// to whichever model you clicked into, so it stays put no matter which
+/// loaded model you're talking to.
 struct RootView: View {
     @EnvironmentObject private var requirements: RequirementsManager
+    @EnvironmentObject private var sessions: ModelSessionManager
     @StateObject private var router = AppRouter()
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             switch router.screen {
             case .bootstrap:
                 BootstrapProgressView(
@@ -19,10 +20,14 @@ struct RootView: View {
                     isInstalling: requirements.isInstalling,
                     errorMessage: requirements.lastError
                 )
-            case .modelManager:
-                ModelManagerView(requirements: requirements, router: router)
-            case .chat(let model):
-                ChatView(model: model, requirements: requirements, router: router)
+            case .modelManager, .chat:
+                tabBar
+                Divider()
+                if router.screen == .modelManager {
+                    ModelManagerView(requirements: requirements)
+                } else {
+                    ChatView(sessions: sessions)
+                }
             }
         }
         .task {
@@ -31,6 +36,23 @@ struct RootView: View {
                 router.screen = .modelManager
             }
         }
+    }
+
+    private var tabBar: some View {
+        HStack(spacing: 8) {
+            tabButton("Models", screen: .modelManager)
+            tabButton("Chat", screen: .chat)
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+    }
+
+    private func tabButton(_ title: String, screen: AppRouter.Screen) -> some View {
+        Button(title) { router.screen = screen }
+            .buttonStyle(.borderedProminent)
+            .tint(router.screen == screen ? .accentColor : .secondary)
     }
 }
 

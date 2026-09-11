@@ -11,11 +11,22 @@ public struct ChatClient: Sendable {
         self.session = session
     }
 
+    /// `model` defaults to `"default_model"` — the key `mlx_lm.server`
+    /// always maps back to whatever path it was launched with via
+    /// `--model`. Since `LLMServer` gives every loaded model its own
+    /// dedicated process/port, that default is always correct for our
+    /// own sessions and sidesteps a real bug: sending a model's registry
+    /// `id` here (a repo id, or `imported:/…` for local imports) makes
+    /// the server try to resolve it as a Hugging Face repo id instead of
+    /// using the already-loaded model, which 404s for anything that
+    /// isn't shaped like `namespace/name`. Only override this once
+    /// talking to something other than our own per-model server (e.g.
+    /// the eventual shared port-8000 server for the persona proxies).
     public func send(
         messages: [ChatMessage],
         baseURL: URL,
-        model: String,
-        maxTokens: Int = 512
+        model: String = "default_model",
+        maxTokens: Int = 1024
     ) async throws -> ChatMessage {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
         request.httpMethod = "POST"
@@ -54,14 +65,31 @@ public struct ChatClient: Sendable {
         guard let choice = decoded.choices.first else {
             throw ServingError.requestFailed("Response had no choices")
         }
-        return ChatMessage(role: .assistant, content: choice.message.content)
+        return ChatMessage(role: .assistant, content: Self.resolveContent(from: choice.message))
+    }
+
+    /// Reasoning models (this server reports them via an extra
+    /// `"reasoning"` field alongside `"content"`) can get cut off by
+    /// `max_tokens` before `content` ever appears — `content` is then
+    /// absent entirely, not just empty. Falling back to the reasoning
+    /// text beats silently dropping the reply or throwing a decode
+    /// error over a field most models don't even send.
+    private static func resolveContent(from message: ChatCompletionResponse.Choice.Message) -> String {
+        if let content = message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty {
+            return content
+        }
+        if let reasoning = message.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines), !reasoning.isEmpty {
+            return "_(cut off before an answer — reply with more tokens)_\n\n" + reasoning
+        }
+        return ""
     }
 }
 
 private struct ChatCompletionResponse: Decodable {
     struct Choice: Decodable {
         struct Message: Decodable {
-            let content: String
+            let content: String?
+            let reasoning: String?
         }
         let message: Message
     }

@@ -26,16 +26,31 @@ before moving on (see the brief for exact gates).
       oMLX model directory, both landing in the printed registry (see
       `swift run Anvil -- --phase2-gate`).
 - [~] **Phase 3 — LLM serving (in progress)**: `LLMServer` drives a real
-      `mlx_lm.server` subprocess (the same `/v1/chat/completions` +
-      `/v1/models` shape oMLX serves), `ChatClient` talks to it, and
-      there's now an actual in-app chat window — pick a registered
-      model, it loads, you talk to it. Verified for real on this Mac
-      (`swift run Anvil -- --phase3-gate`): real model loaded, real
-      `/v1/chat/completions` round trip, correct reply. **Not done yet**:
-      the brief's actual gate — the Sofia persona proxy (:8003) getting
-      a valid response through this backend with zero changes on its
-      side, then retiring oMLX. That's a deliberate, separate step since
-      it touches the live stack; not taken until asked for.
+      `mlx_lm.server` subprocess per loaded model (the same
+      `/v1/chat/completions` + `/v1/models` shape oMLX serves).
+      `ModelSessionManager` tracks what's actually loaded into memory —
+      Load/Unload per model from the Models tab, each on its own port
+      (checked against real open ports, not just Anvil's own bookkeeping).
+      Chat is its own app-level tab (not tied to how you navigated in),
+      with a model picker among whatever's loaded, per-model history,
+      text selection/copy, and Markdown export. A menu bar item
+      (`MenuBarExtra`) lists loaded models and quits the app; quitting by
+      any path (Cmd+Q, Dock, the menu bar) stops every loaded model's
+      subprocess first via `NSApplicationDelegateAdaptor` — nothing gets
+      left running in the background.
+      Fixed two real bugs found testing against an actual imported model:
+      sending a model's registry id as the chat request's `model` field
+      made `mlx_lm.server` try to resolve it as a Hugging Face repo id
+      and 404 (now always sends `"default_model"`, which maps back to
+      whatever the server was actually launched with); a reasoning
+      model's response can omit `content` entirely when cut off by
+      `max_tokens` (now falls back to the `reasoning` field instead of
+      throwing). Verified for real on this Mac against a locally-loaded
+      model, not just `--phase3-gate`. **Not done yet**: the brief's
+      actual gate — the Sofia persona proxy (:8003) getting a valid
+      response through this backend with zero changes on its side, then
+      retiring oMLX. That's a deliberate, separate step since it touches
+      the live stack; not taken until asked for.
 - [ ] Phase 4 — Image generation (Draw Things / flux_server.py replacement)
 - [ ] Phase 5 — Concurrent multi-model residency
 - [ ] Phase 6 — Voice chat

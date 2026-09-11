@@ -95,8 +95,7 @@ enum GateCheck {
             log("Sending a real chat completion…")
             let reply = try await client.send(
                 messages: [ChatMessage(role: .user, content: "Say hello in exactly three words.")],
-                baseURL: server.baseURL,
-                model: modelPath
+                baseURL: server.baseURL
             )
             result["chatReply"] = reply.content
             log("Reply: \(reply.content)")
