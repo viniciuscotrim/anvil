@@ -108,41 +108,51 @@ struct ModelManagerView: View {
     /// Where downloads land and where "scan for existing models" looks
     /// — a folder full of models downloaded outside Anvil (an old oMLX
     /// directory, say) can be pointed at directly; its subfolders get
-    /// read and registered right away.
+    /// read and registered right away. This only controls *future*
+    /// downloads and what Rescan looks at — it's not a filter on what's
+    /// shown below: a model registered from somewhere else stays
+    /// registered (and usable) no matter what this is set to. Move a
+    /// model into the current folder, or delete it, with the icons
+    /// next to it in the list.
     private var modelsFolderBar: some View {
-        HStack {
-            Image(systemName: "folder")
-                .foregroundStyle(.secondary)
-            Text("Models Folder:")
-                .foregroundStyle(.secondary)
-            Text(viewModel.modelsRootPath ?? "Default (Anvil's own folder)")
-                .lineLimit(1)
-                .truncationMode(.middle)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Image(systemName: "folder")
+                    .foregroundStyle(.secondary)
+                Text("Models Folder:")
+                    .foregroundStyle(.secondary)
+                Text(viewModel.modelsRootPath ?? "Default (Anvil's own folder)")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
 
-            Spacer()
+                Spacer()
 
-            Button("Rescan") { Task { await viewModel.rescanModelsRoot() } }
-                .disabled(viewModel.isBusy)
-            Button("Change…") { viewModel.isChoosingModelsFolder = true }
-                .disabled(viewModel.isBusy)
-                .fileImporter(
-                    isPresented: Binding(
-                        get: { viewModel.isChoosingModelsFolder },
-                        set: { viewModel.isChoosingModelsFolder = $0 }
-                    ),
-                    allowedContentTypes: [.folder]
-                ) { result in
-                    switch result {
-                    case .success(let url):
-                        Task { await viewModel.changeModelsRoot(to: url) }
-                    case .failure(let error):
-                        viewModel.errorMessage = error.localizedDescription
-                    }
-                }
-            if viewModel.modelsRootPath != nil {
-                Button("Reset") { viewModel.resetModelsRootToDefault() }
+                Button("Rescan") { Task { await viewModel.rescanModelsRoot() } }
                     .disabled(viewModel.isBusy)
+                Button("Change…") { viewModel.isChoosingModelsFolder = true }
+                    .disabled(viewModel.isBusy)
+                    .fileImporter(
+                        isPresented: Binding(
+                            get: { viewModel.isChoosingModelsFolder },
+                            set: { viewModel.isChoosingModelsFolder = $0 }
+                        ),
+                        allowedContentTypes: [.folder]
+                    ) { result in
+                        switch result {
+                        case .success(let url):
+                            Task { await viewModel.changeModelsRoot(to: url) }
+                        case .failure(let error):
+                            viewModel.errorMessage = error.localizedDescription
+                        }
+                    }
+                if viewModel.modelsRootPath != nil {
+                    Button("Reset") { Task { await viewModel.resetModelsRootToDefault() } }
+                        .disabled(viewModel.isBusy)
+                }
             }
+            Text("Controls new downloads and Rescan only — doesn't hide models registered from elsewhere. Move/delete those below.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .font(.callout)
     }

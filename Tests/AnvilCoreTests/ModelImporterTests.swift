@@ -130,6 +130,37 @@ struct ModelImporterTests {
     }
 
     @Test
+    func importFolderRefreshesAnAlreadyRegisteredPathInsteadOfDuplicatingIt() async throws {
+        // The real reported bug: a model downloaded via search (a
+        // stable Hugging Face repo id) that also happened to sit inside
+        // a folder later scanned ended up registered a second time
+        // under a path-derived "imported:" id for the exact same files.
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let modelDir = root.appendingPathComponent("some-org--some-model", isDirectory: true)
+        try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+        try "{}".write(to: modelDir.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        let registry = ModelRegistry(fileURL: root.appendingPathComponent("registry.json"))
+        let downloaded = ModelEntry(
+            id: "some-org/some-model",
+            displayName: "some-org/some-model",
+            source: .huggingFace(repoID: "some-org/some-model", revision: "main"),
+            localPath: modelDir.standardizedFileURL.path,
+            sizeBytes: 1
+        )
+        _ = try await registry.upsert(downloaded)
+
+        let importer = ModelImporter(registry: registry)
+        let imported = try await importer.importFolder(at: root)
+
+        #expect(imported.count == 1)
+        #expect(imported.first?.id == "some-org/some-model")
+        let all = await registry.all()
+        #expect(all.count == 1)
+    }
+
+    @Test
     func importFolderImportsTheFolderItselfWhenItIsDirectlyAModel() async throws {
         let dir = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

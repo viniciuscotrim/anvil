@@ -46,12 +46,21 @@ public struct ModelImporter: Sendable {
     /// model itself (never descends into a model's own component
     /// subfolders — `transformer/`, `vae/`, and friends for a diffusion
     /// pipeline), and is bounded to a sane depth so a stray symlink loop
-    /// or an enormous unrelated folder can't run away. A subdirectory
-    /// that's already registered (by path) is re-registered in place —
-    /// same path, so `upsert` just refreshes its metadata rather than
-    /// duplicating it — one that doesn't look like a model anywhere
-    /// below it is silently skipped, not an error: a models folder
-    /// legitimately has non-model clutter in it sometimes.
+    /// or an enormous unrelated folder can't run away.
+    ///
+    /// A directory that's already registered gets its metadata
+    /// refreshed in place rather than duplicated — including when it's
+    /// registered under a *different* id than this scan would generate
+    /// (a real, reported bug: a model downloaded through search first,
+    /// then swept up again by a later folder scan, ended up listed
+    /// twice — once under its stable Hugging Face repo id, once under a
+    /// second, path-derived "imported:" id for the exact same files —
+    /// because the old check only mattered once `upsert` had already
+    /// decided two ids were different entries). Matching is by
+    /// `localPath`, checked against the registry directly, before any
+    /// id is ever generated. One that doesn't look like a model
+    /// anywhere below it is silently skipped, not an error: a models
+    /// folder legitimately has non-model clutter in it sometimes.
     @discardableResult
     public func importFolder(at path: URL, maxDepth: Int = 4) async throws -> [ModelEntry] {
         var isDirectory: ObjCBool = false
@@ -61,9 +70,24 @@ public struct ModelImporter: Sendable {
         }
 
         let modelDirectories = Self.findModelDirectories(under: path, remainingDepth: maxDepth)
+        let existingByPath = Dictionary(
+            uniqueKeysWithValues: await registry.all().map {
+                (URL(fileURLWithPath: $0.localPath).standardizedFileURL.path, $0)
+            }
+        )
 
         var imported: [ModelEntry] = []
         for directory in modelDirectories.sorted(by: { $0.path < $1.path }) {
+            let standardizedPath = directory.standardizedFileURL.path
+            if let existing = existingByPath[standardizedPath] {
+                var refreshed = existing
+                refreshed.sizeBytes = DirectorySize.of(directory)
+                refreshed.kind = ModelKindDetector.detect(at: directory)
+                if let saved = try? await registry.upsert(refreshed) {
+                    imported.append(saved)
+                }
+                continue
+            }
             if let registered = try? await importModel(at: directory) {
                 imported.append(registered)
             }

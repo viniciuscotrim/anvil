@@ -123,6 +123,20 @@ final class ModelManagerViewModel: ObservableObject {
     }
 
     func loadRegistry() async {
+        // Self-heals a real, reported bug: the same model could end up
+        // registered twice (once via a stable Hugging Face repo id from
+        // a search download, once via a path-derived "imported:" id
+        // from a later folder scan sweeping up the same files) — see
+        // `ModelRegistry.deduplicateByLocalPath`. Cheap (a tiny JSON
+        // file) and a no-op once there's nothing left to merge, so it's
+        // safe to run on every load rather than only right after a scan.
+        _ = try? await registry.deduplicateByLocalPath()
+        // Same idea, for kind: an entry registered under an older,
+        // less accurate `ModelKindDetector` (the real case — a flat
+        // single-safetensors-file image model that got stuck showing
+        // as "text", with no image settings in its gear icon) picks up
+        // the current detection the next time the registry loads.
+        _ = try? await registry.refreshKinds()
         registeredModels = await registry.all()
     }
 
@@ -147,13 +161,20 @@ final class ModelManagerViewModel: ObservableObject {
         await rescanModelsRoot()
     }
 
-    /// Resets to Anvil's own default folder under Application Support —
-    /// does not move or delete anything already downloaded elsewhere.
-    func resetModelsRootToDefault() {
+    /// Resets to Anvil's own default folder under Application Support.
+    /// Like changing to any other folder, this only affects where new
+    /// downloads land and what Rescan looks at going forward — it does
+    /// not move, delete, or un-register anything already known about
+    /// from elsewhere. A model registered from another folder stays
+    /// registered (and usable) after resetting; use the tray icon next
+    /// to it to actually move its files here, or the trash icon to get
+    /// rid of it, if that's what's wanted instead.
+    func resetModelsRootToDefault() async {
         var settings = AppSettings.load()
         settings.modelsRootPath = nil
         try? settings.save()
         modelsRootPath = nil
+        await rescanModelsRoot()
     }
 
     /// Re-scans the current models folder for anything not yet

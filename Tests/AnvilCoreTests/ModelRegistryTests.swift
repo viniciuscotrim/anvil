@@ -97,4 +97,79 @@ struct ModelRegistryTests {
         #expect(await registry.all().isEmpty)
         #expect(await registry.contains(id: "org/model") == false)
     }
+
+    @Test
+    func deduplicateByLocalPathMergesDuplicatesPreferringTheHuggingFaceSourcedOne() async throws {
+        // The real reported bug: the same files ended up registered
+        // twice — once under a stable Hugging Face repo id (downloaded
+        // via search), once under a second, path-derived "imported:" id
+        // (a later models-folder scan sweeping up the same directory).
+        let registry = ModelRegistry(fileURL: tempRegistryFile())
+        let downloaded = ModelEntry(
+            id: "black-forest-labs/FLUX.2-klein-4b-nvfp4",
+            displayName: "black-forest-labs/FLUX.2-klein-4b-nvfp4",
+            source: .huggingFace(repoID: "black-forest-labs/FLUX.2-klein-4b-nvfp4", revision: "main"),
+            localPath: "/tmp/flux",
+            sizeBytes: 100,
+            addedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let scannedDuplicate = ModelEntry(
+            id: "imported:/tmp/flux",
+            displayName: "flux",
+            source: .imported(originalPath: "/tmp/flux"),
+            localPath: "/tmp/flux",
+            sizeBytes: 100,
+            addedAt: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+        _ = try await registry.upsert(downloaded)
+        _ = try await registry.upsert(scannedDuplicate)
+        #expect(await registry.all().count == 2)
+
+        let removedCount = try await registry.deduplicateByLocalPath()
+
+        let all = await registry.all()
+        #expect(removedCount == 1)
+        #expect(all.count == 1)
+        #expect(all.first?.id == "black-forest-labs/FLUX.2-klein-4b-nvfp4")
+    }
+
+    @Test
+    func refreshKindsUpdatesAnEntryWhoseDetectionHasChanged() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("anvil-refresh-kind-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try "{}".write(to: dir.appendingPathComponent("model_index.json"), atomically: true, encoding: .utf8)
+
+        let registry = ModelRegistry(fileURL: tempRegistryFile())
+        // Registered with a stale/wrong kind, as if by an older,
+        // less accurate detector.
+        let entry = ModelEntry(
+            id: "imported:\(dir.path)", displayName: dir.lastPathComponent,
+            source: .imported(originalPath: dir.path),
+            localPath: dir.path, sizeBytes: nil, kind: .text
+        )
+        _ = try await registry.upsert(entry)
+
+        let changedCount = try await registry.refreshKinds()
+
+        #expect(changedCount == 1)
+        #expect(await registry.all().first?.kind == .image)
+    }
+
+    @Test
+    func deduplicateByLocalPathIsANoOpWithNothingToMerge() async throws {
+        let registry = ModelRegistry(fileURL: tempRegistryFile())
+        let entry = ModelEntry(
+            id: "org/model", displayName: "org/model",
+            source: .huggingFace(repoID: "org/model", revision: "main"),
+            localPath: "/tmp/a", sizeBytes: nil
+        )
+        _ = try await registry.upsert(entry)
+
+        let removedCount = try await registry.deduplicateByLocalPath()
+
+        #expect(removedCount == 0)
+        #expect(await registry.all().count == 1)
+    }
 }

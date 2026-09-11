@@ -359,6 +359,54 @@ loaded, rather than loading a second one just to satisfy an unmet
 preference; otherwise the default from the registry, loaded on demand;
 otherwise the first registered image model, same as before this existed.
 
+## Two real registry bugs: duplicate models, and a wrongly-detected kind
+
+Reported after actually using the models-folder feature: a duplicate
+"FLUX.2 4b" entry with only one real copy on disk, and its gear icon
+showing nothing but port/access — no image-model chat settings at all.
+Both traced to real bugs, not the folder-scoping question they first
+looked like (see below).
+
+- **Duplicate registration.** `ModelImporter.importFolder` generated a
+  fresh `"imported:<path>"` id for every directory it found, without
+  checking whether that exact path was *already* registered under a
+  different id — which happens as soon as a model is both downloaded
+  through search (a stable Hugging Face repo id) and later swept up by
+  a folder scan of wherever it landed (a second, path-derived id for
+  the same files). Fixed at the source: the scan now checks the
+  registry by `localPath` before generating any id, and refreshes the
+  existing entry in place instead. `ModelRegistry.deduplicateByLocalPath`
+  additionally repairs a registry that already has a duplicate in it
+  from before this fix — merging by `localPath`, preferring the
+  Hugging-Face-sourced entry over the path-derived one — and runs
+  automatically whenever the Models tab loads the registry, so an
+  existing duplicate self-heals rather than needing a manual fix.
+  Applied for real to this Mac's own registry: found and merged exactly
+  the reported duplicate.
+- **Wrong kind.** `black-forest-labs/FLUX.2-klein-4b-nvfp4` ships as one
+  flat `*.safetensors` file — no `config.json`, no diffusers-pipeline
+  directory structure — so the original structural-only detector always
+  fell through to `.text` for it, which is why its gear icon showed
+  none of the image-model chat settings. `ModelKindDetector` now also
+  checks the repo/folder name against known diffusion-family keywords
+  ("flux", "stable-diffusion", "sdxl", …) and, failing that, peeks at a
+  flat safetensors file's own JSON header — present at the very start
+  of the file, no need to read any tensor data — for architecture-
+  specific tensor-name patterns (FLUX-style `img_in`/`double_blocks`, a
+  `vae.`/`text_encoder.` prefix) that a causal LM's tensor names never
+  have. `ModelRegistry.refreshKinds` re-detects every entry's kind
+  against its real files and updates whatever changed, run automatically
+  the same way as the dedup pass. Verified for real against the actual
+  previously-broken file on this Mac: now detects `.image` correctly.
+- **Folder-scoping clarified, not changed.** Changing (or resetting)
+  the models folder only ever affected new downloads and what Rescan
+  looks at — it was never meant to hide or remove models already
+  registered from elsewhere, and still doesn't; that's what Move/Delete
+  (previous round) are for. Reset now also re-scans the (now current)
+  default folder for symmetry with Change, and the folder bar's copy
+  spells out the scope directly so it doesn't read as broken when
+  nothing visibly changes.
+
 ## Architecture
 
 - Single SwiftUI macOS app (`Anvil` target), built with Swift Package Manager
