@@ -86,6 +86,21 @@ already in the code/commands above — neither needs Xcode.app installed:
   the explicit `-F` flag above. `swift build`/`swift run` for the app
   itself are unaffected — only `swift test` needs this.
 
+## Packaging a signed, notarized .dmg
+
+```bash
+scripts/package-dmg.sh              # build, bundle, sign the .app and the .dmg
+scripts/notarize-dmg.sh dist/Anvil-<version>.dmg   # submit, wait, staple
+```
+
+`package-dmg.sh` needs the `Developer ID Application: Vinicius Luciano
+Menezes Cotrim (U3H5DHZP65)` certificate in the login keychain (already
+there on this Mac) — no credentials needed, it's a local signing
+operation. `notarize-dmg.sh` needs a one-time keychain credential
+profile only the account holder can create (Apple ID + app-specific
+password, or an API key) — see the comment at the top of that script.
+Once that profile exists, notarization is fully scriptable from then on.
+
 ## Repo conventions
 
 - `main` is always buildable and testable (`swift build && swift test`).
