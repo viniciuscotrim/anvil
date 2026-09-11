@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+*.xcodeproj
+.DS_Store
+dist/
+*.dmg
+*.dSYM/
+Package.resolved.bak
