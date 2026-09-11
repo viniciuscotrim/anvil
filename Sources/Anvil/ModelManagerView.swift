@@ -6,9 +6,11 @@ import UniformTypeIdentifiers
 /// importing an already-downloaded model folder without re-fetching it.
 struct ModelManagerView: View {
     @StateObject private var viewModel: ModelManagerViewModel
+    @ObservedObject private var router: AppRouter
 
-    init(requirements: RequirementsManager) {
+    init(requirements: RequirementsManager, router: AppRouter) {
         _viewModel = StateObject(wrappedValue: ModelManagerViewModel(requirements: requirements))
+        self.router = router
     }
 
     var body: some View {
@@ -99,21 +101,24 @@ struct ModelManagerView: View {
                     .foregroundStyle(.secondary)
             } else {
                 List(viewModel.registeredModels) { entry in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(entry.displayName)
-                            Spacer()
-                            if let size = entry.sizeBytes {
-                                Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(entry.displayName)
+                                Spacer()
+                                if let size = entry.sizeBytes {
+                                    Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                            Text(entry.localPath)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
-                        Text(entry.localPath)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        Button("Chat") { router.screen = .chat(entry) }
                     }
                 }
                 .frame(minHeight: 140)

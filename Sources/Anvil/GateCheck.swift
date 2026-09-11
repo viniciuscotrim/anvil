@@ -56,4 +56,64 @@ enum GateCheck {
 
         return true
     }
+
+    /// Loads one model into a real `mlx_lm.server` process and sends it
+    /// a real chat completion — the mechanism the persona proxies will
+    /// use unmodified once this replaces oMLX on port 8000. Doesn't
+    /// touch the live proxies itself; that handoff is a separate,
+    /// explicit step once this half is trusted.
+    static func runPhase3GateIfRequested() async -> Bool {
+        guard CommandLine.arguments.contains("--phase3-gate") else { return false }
+
+        let env = ProcessInfo.processInfo.environment
+        guard let modelPath = env["ANVIL_GATE_MODEL_PATH"] else {
+            log("ANVIL_GATE_MODEL_PATH must be set to a local model directory")
+            print("{}")
+            return true
+        }
+
+        let python = PythonEnvironment()
+        let server = LLMServer()
+        let client = ChatClient()
+
+        var result: [String: Any] = ["modelPath": modelPath]
+
+        do {
+            if !(await python.isPackageInstalled("mlx_lm")) {
+                log("Setting up text generation…")
+                try await python.pipInstall(["mlx-lm"])
+            }
+
+            log("Starting mlx_lm.server with \(modelPath)…")
+            try await server.start(modelPath: modelPath) { log($0) }
+            result["serverStarted"] = true
+
+            let modelsURL = await server.baseURL.appendingPathComponent("v1/models")
+            let (modelsData, _) = try await URLSession.shared.data(from: modelsURL)
+            result["modelsEndpointResponse"] = String(data: modelsData, encoding: .utf8) ?? ""
+
+            log("Sending a real chat completion…")
+            let reply = try await client.send(
+                messages: [ChatMessage(role: .user, content: "Say hello in exactly three words.")],
+                baseURL: server.baseURL,
+                model: modelPath
+            )
+            result["chatReply"] = reply.content
+            log("Reply: \(reply.content)")
+        } catch {
+            result["error"] = error.localizedDescription
+            log("Gate check failed: \(error.localizedDescription)")
+        }
+
+        await server.stop()
+
+        if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            print(json)
+        } else {
+            print("{}")
+        }
+
+        return true
+    }
 }

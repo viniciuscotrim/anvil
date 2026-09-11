@@ -1,38 +1,35 @@
 import SwiftUI
 import AnvilCore
 
-/// Holds this view's own transient state via `@StateObject` instead of
-/// `@State`. On this toolchain (Command Line Tools only, no Xcode.app),
-/// `@State`'s macro implementation lives in a plugin that ships inside
-/// Xcode.app and isn't available — `@StateObject`/`ObservableObject`
-/// are plain Combine-based property wrappers and build fine. Keep this
-/// pattern for any future view-local state rather than reaching for
-/// `@State`.
-final class BootstrapViewState: ObservableObject {
-    @Published var isReady = false
-}
-
 /// Top-level switcher: shows the bootstrap screen until the bare
 /// minimum needed to browse models is installed (Phase 1 rule), then
-/// hands off to the model manager (Phase 2).
+/// the model manager (Phase 2), then a real chat window once a model
+/// is picked to load (Phase 3) — pick a model, start talking to it,
+/// same as the brief's own "wait, that's it?" bar.
 struct RootView: View {
     @EnvironmentObject private var requirements: RequirementsManager
-    @StateObject private var bootstrapState = BootstrapViewState()
+    @StateObject private var router = AppRouter()
 
     var body: some View {
         Group {
-            if bootstrapState.isReady {
-                ModelManagerView(requirements: requirements)
-            } else {
+            switch router.screen {
+            case .bootstrap:
                 BootstrapProgressView(
                     statusMessage: requirements.statusMessage,
                     isInstalling: requirements.isInstalling,
                     errorMessage: requirements.lastError
                 )
+            case .modelManager:
+                ModelManagerView(requirements: requirements, router: router)
+            case .chat(let model):
+                ChatView(model: model, requirements: requirements, router: router)
             }
         }
         .task {
-            bootstrapState.isReady = await requirements.ensure(HuggingFaceClientDependency())
+            let ready = await requirements.ensure(HuggingFaceClientDependency())
+            if ready {
+                router.screen = .modelManager
+            }
         }
     }
 }
