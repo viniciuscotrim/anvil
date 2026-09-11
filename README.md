@@ -46,11 +46,41 @@ before moving on (see the brief for exact gates).
       model's response can omit `content` entirely when cut off by
       `max_tokens` (now falls back to the `reasoning` field instead of
       throwing). Verified for real on this Mac against a locally-loaded
-      model, not just `--phase3-gate`. **Not done yet**: the brief's
-      actual gate — the Sofia persona proxy (:8003) getting a valid
-      response through this backend with zero changes on its side, then
-      retiring oMLX. That's a deliberate, separate step since it touches
-      the live stack; not taken until asked for.
+      model, not just `--phase3-gate` — including catching a live,
+      real-world instance of the "orphaned background process" bug: the
+      app had quit but its `mlx_lm.server` child was still running,
+      still holding port 8000. That's exactly what the menu bar +
+      `applicationShouldTerminate` cleanup now prevents.
+      Chat is now properly persistent: `ChatThread`/`ChatThreadStore`
+      save every conversation to `chats/threads.json`, and chat state
+      moved from a view-local `@StateObject` to `AppState` (owned once,
+      alongside `RequirementsManager`/`ModelSessionManager`) so
+      navigating to Models and back no longer loses the conversation —
+      that view-lifecycle mismatch was the actual root cause. A Chat
+      History window (separate `WindowGroup`) lists/opens/deletes
+      threads; a temporary-chat toggle (user-activated only) skips
+      persistence entirely and blocks starting/switching threads while
+      it's on. Messages record which model answered them, so switching
+      the active model mid-thread only affects new messages. A
+      collapsible side panel holds everything about the conversation
+      (threads, temporary mode, hide-reasoning toggle, generation
+      settings — max tokens/temperature/top-p/top-k/min-p, sent
+      per-request) except the model picker and tok/s, which stay in the
+      always-visible header per spec.
+      **Known limitation, investigated and confirmed structural**: each
+      loaded model's process shows as "Python" in Activity Monitor, not
+      a custom name — Homebrew's framework Python build unconditionally
+      re-execs itself into `Python.app/Contents/MacOS/Python` for Metal/
+      GPU access (confirmed via a real test; `PYTHONEXECUTABLE`, the
+      documented escape hatch, didn't stop it either). Each loaded model
+      is already its own real OS process/PID, just not relabeled. Fixing
+      the label would mean shipping a custom native launcher — not
+      pursued yet given the cost/benefit.
+      **Not done yet**: the brief's actual gate — the Sofia persona
+      proxy (:8003) getting a valid response through this backend with
+      zero changes on its side, then retiring oMLX. That's a deliberate,
+      separate step since it touches the live stack; not taken until
+      asked for.
 - [ ] Phase 4 — Image generation (Draw Things / flux_server.py replacement)
 - [ ] Phase 5 — Concurrent multi-model residency
 - [ ] Phase 6 — Voice chat

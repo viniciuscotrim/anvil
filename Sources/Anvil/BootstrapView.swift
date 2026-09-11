@@ -8,7 +8,6 @@ import AnvilCore
 /// loaded model you're talking to.
 struct RootView: View {
     @EnvironmentObject private var requirements: RequirementsManager
-    @EnvironmentObject private var sessions: ModelSessionManager
     @StateObject private var router = AppRouter()
 
     var body: some View {
@@ -26,7 +25,7 @@ struct RootView: View {
                 if router.screen == .modelManager {
                     ModelManagerView(requirements: requirements)
                 } else {
-                    ChatView(sessions: sessions)
+                    ChatView()
                 }
             }
         }

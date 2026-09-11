@@ -26,20 +26,39 @@ public struct ChatClient: Sendable {
         messages: [ChatMessage],
         baseURL: URL,
         model: String = "default_model",
-        maxTokens: Int = 1024
+        modelDisplayName: String = "",
+        settings: GenerationSettings = .default
     ) async throws -> ChatMessage {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
+        struct WireMessage: Encodable {
+            let role: String
+            let content: String
+        }
         struct RequestBody: Encodable {
             let model: String
-            let messages: [ChatMessage]
+            let messages: [WireMessage]
             let max_tokens: Int
+            let temperature: Double
+            let top_p: Double
+            let top_k: Int
+            let min_p: Double
         }
         request.httpBody = try JSONEncoder().encode(
-            RequestBody(model: model, messages: messages, max_tokens: maxTokens)
+            RequestBody(
+                model: model,
+                messages: messages.map { WireMessage(role: $0.role.rawValue, content: $0.content) },
+                max_tokens: settings.maxTokens,
+                temperature: settings.temperature,
+                top_p: settings.topP,
+                top_k: settings.topK,
+                min_p: settings.minP
+            )
         )
+
+        let start = Date()
 
         let data: Data
         let response: URLResponse
@@ -48,6 +67,7 @@ public struct ChatClient: Sendable {
         } catch {
             throw ServingError.requestFailed(error.localizedDescription)
         }
+        let elapsedSeconds = Date().timeIntervalSince(start)
 
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -65,23 +85,19 @@ public struct ChatClient: Sendable {
         guard let choice = decoded.choices.first else {
             throw ServingError.requestFailed("Response had no choices")
         }
-        return ChatMessage(role: .assistant, content: Self.resolveContent(from: choice.message))
-    }
 
-    /// Reasoning models (this server reports them via an extra
-    /// `"reasoning"` field alongside `"content"`) can get cut off by
-    /// `max_tokens` before `content` ever appears — `content` is then
-    /// absent entirely, not just empty. Falling back to the reasoning
-    /// text beats silently dropping the reply or throwing a decode
-    /// error over a field most models don't even send.
-    private static func resolveContent(from message: ChatCompletionResponse.Choice.Message) -> String {
-        if let content = message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty {
-            return content
-        }
-        if let reasoning = message.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines), !reasoning.isEmpty {
-            return "_(cut off before an answer — reply with more tokens)_\n\n" + reasoning
-        }
-        return ""
+        let completionTokens = decoded.usage?.completionTokens ?? 0
+        let tokensPerSecond = (completionTokens > 0 && elapsedSeconds > 0)
+            ? Double(completionTokens) / elapsedSeconds
+            : nil
+
+        return ChatMessage(
+            role: .assistant,
+            content: choice.message.content?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            reasoning: choice.message.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            modelDisplayName: modelDisplayName.nilIfEmpty,
+            tokensPerSecond: tokensPerSecond
+        )
     }
 }
 
@@ -93,5 +109,16 @@ private struct ChatCompletionResponse: Decodable {
         }
         let message: Message
     }
+    struct Usage: Decodable {
+        let completionTokens: Int
+        enum CodingKeys: String, CodingKey {
+            case completionTokens = "completion_tokens"
+        }
+    }
     let choices: [Choice]
+    let usage: Usage?
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

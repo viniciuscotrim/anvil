@@ -1,6 +1,10 @@
 import Foundation
 
-public struct ChatMessage: Identifiable, Equatable, Sendable {
+/// A single turn in a conversation, fully persisted (not just the wire
+/// fields) — which model answered, its reasoning/thinking text if any,
+/// and measured tokens/sec, so the UI can show them long after the
+/// request that produced them.
+public struct ChatMessage: Codable, Identifiable, Equatable, Sendable {
     public enum Role: String, Codable, Sendable {
         case system
         case user
@@ -10,25 +14,30 @@ public struct ChatMessage: Identifiable, Equatable, Sendable {
     public let id: UUID
     public var role: Role
     public var content: String
+    /// A reasoning/"thinking" model's separate chain-of-thought text,
+    /// if the server sent one. Independent of `content` so the UI can
+    /// show/hide it without losing the actual answer.
+    public var reasoning: String?
+    /// Which loaded model produced this reply — nil for user messages.
+    public var modelDisplayName: String?
+    public var tokensPerSecond: Double?
+    public var createdAt: Date
 
-    public init(id: UUID = UUID(), role: Role, content: String) {
+    public init(
+        id: UUID = UUID(),
+        role: Role,
+        content: String,
+        reasoning: String? = nil,
+        modelDisplayName: String? = nil,
+        tokensPerSecond: Double? = nil,
+        createdAt: Date = Date()
+    ) {
         self.id = id
         self.role = role
         self.content = content
-    }
-}
-
-// Wire format only needs role/content — `id` is a local UI concern, so
-// this is Encodable-only rather than full Codable.
-extension ChatMessage: Encodable {
-    private enum CodingKeys: String, CodingKey {
-        case role
-        case content
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(role, forKey: .role)
-        try container.encode(content, forKey: .content)
+        self.reasoning = reasoning
+        self.modelDisplayName = modelDisplayName
+        self.tokensPerSecond = tokensPerSecond
+        self.createdAt = createdAt
     }
 }

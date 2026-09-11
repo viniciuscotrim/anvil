@@ -15,14 +15,7 @@ struct MenuBarContentView: View {
             Text("No models loaded")
         } else {
             ForEach(sessions.sessions) { session in
-                Button {
-                    Task { await sessions.unload(modelID: session.id) }
-                } label: {
-                    HStack {
-                        statusSymbol(for: session.status)
-                        Text(session.model.displayName)
-                    }
-                }
+                sessionRow(session)
             }
         }
 
@@ -39,6 +32,22 @@ struct MenuBarContentView: View {
             NSApp.terminate(nil)
         }
         .keyboardShortcut("q")
+    }
+
+    /// Plain text label (not a tappable row) plus an explicit "Unload"
+    /// button — an earlier version made the whole row the unload
+    /// action, which wasn't discoverable as clickable inside a menu.
+    private func sessionRow(_ session: ModelSessionManager.Session) -> some View {
+        HStack {
+            statusSymbol(for: session.status)
+            Text(session.model.displayName)
+            Spacer()
+            if session.status == .ready {
+                Button("Unload") {
+                    Task { await sessions.unload(modelID: session.id) }
+                }
+            }
+        }
     }
 
     private func statusSymbol(for status: ModelSessionManager.Status) -> some View {

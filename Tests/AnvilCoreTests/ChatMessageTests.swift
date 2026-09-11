@@ -4,31 +4,26 @@ import Testing
 
 @Suite("ChatMessage")
 struct ChatMessageTests {
+    /// Full round trip through JSON — this is the shape persisted to a
+    /// thread's file on disk, so every field (not just role/content)
+    /// must survive. The wire format sent to `mlx_lm.server` is a
+    /// separate, narrower thing `ChatClient` builds itself; see
+    /// `ChatClientTests`.
     @Test
-    func encodesOnlyRoleAndContent() throws {
-        let message = ChatMessage(role: .user, content: "hello")
+    func roundTripsAllFieldsThroughJSON() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "hello",
+            reasoning: "because you said hi",
+            modelDisplayName: "SmolLM2-135M",
+            tokensPerSecond: 42.5,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
 
-        let data = try JSONEncoder().encode(message)
-        let object = try JSONSerialization.jsonObject(with: data) as? [String: String]
+        let data = try JSONEncoder.anvil.encode(message)
+        let decoded = try JSONDecoder.anvil.decode(ChatMessage.self, from: data)
 
-        #expect(object?.count == 2)
-        #expect(object?["role"] == "user")
-        #expect(object?["content"] == "hello")
-    }
-
-    @Test
-    func encodesAnArrayOfMessagesInOrder() throws {
-        let messages = [
-            ChatMessage(role: .system, content: "You are helpful."),
-            ChatMessage(role: .user, content: "Hi")
-        ]
-
-        let data = try JSONEncoder().encode(messages)
-        let array = try JSONSerialization.jsonObject(with: data) as? [[String: String]]
-
-        #expect(array?.count == 2)
-        #expect(array?[0]["role"] == "system")
-        #expect(array?[1]["role"] == "user")
+        #expect(decoded == message)
     }
 }
 
@@ -76,14 +71,39 @@ struct ChatClientTests {
         #expect(object["model"] as? String == "default_model")
     }
 
+    /// The wire format `ChatClient` actually sends is narrower than the
+    /// full `ChatMessage` model — only role/content per message, none
+    /// of the locally-persisted extras (id, reasoning, modelDisplayName,
+    /// tokensPerSecond, createdAt).
+    @Test
+    func wireMessagesCarryOnlyRoleAndContent() async throws {
+        let recorder = RequestRecorder()
+        MockURLProtocol.onRequest = { request in recorder.record(request) }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let client = ChatClient(session: URLSession(configuration: config))
+
+        _ = try? await client.send(
+            messages: [ChatMessage(role: .user, content: "hi", reasoning: "irrelevant")],
+            baseURL: URL(string: "http://127.0.0.1:9")!
+        )
+
+        let body = recorder.capturedBody
+        let object = try #require(body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+        let wireMessages = try #require(object["messages"] as? [[String: String]])
+        #expect(wireMessages == [["role": "user", "content": "hi"]])
+    }
+
     /// Regression test for a real bug seen against a reasoning model:
     /// when `max_tokens` cuts the response off before the model reaches
     /// its final answer, `mlx_lm.server` sends `"reasoning"` but omits
     /// `"content"` entirely (not even an empty string) — decoding must
-    /// not throw, and the reasoning text should surface rather than
-    /// silently vanishing.
+    /// not throw. `content` and `reasoning` are kept as separate fields
+    /// (the UI has its own hide/show toggle for reasoning) rather than
+    /// merged, so a truncated reply surfaces as empty content with the
+    /// reasoning preserved on the side.
     @Test
-    func fallsBackToReasoningWhenContentIsAbsent() async throws {
+    func keepsReasoningSeparateWhenContentIsAbsent() async throws {
         MockURLProtocol.responseBody = Data(
             #"{"choices":[{"message":{"role":"assistant","reasoning":"still thinking…"}}]}"#.utf8
         )
@@ -96,11 +116,12 @@ struct ChatClientTests {
             baseURL: URL(string: "http://127.0.0.1:9")!
         )
 
-        #expect(reply.content.contains("still thinking…"))
+        #expect(reply.content.isEmpty)
+        #expect(reply.reasoning == "still thinking…")
     }
 
     @Test
-    func prefersContentOverReasoningWhenBothArePresent() async throws {
+    func keepsBothContentAndReasoningWhenBothArePresent() async throws {
         MockURLProtocol.responseBody = Data(
             #"{"choices":[{"message":{"role":"assistant","content":"the answer","reasoning":"how I got there"}}]}"#.utf8
         )
@@ -114,6 +135,26 @@ struct ChatClientTests {
         )
 
         #expect(reply.content == "the answer")
+        #expect(reply.reasoning == "how I got there")
+    }
+
+    @Test
+    func recordsWhichModelAnsweredAndAMeasuredTokensPerSecond() async throws {
+        MockURLProtocol.responseBody = Data(
+            #"{"choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"completion_tokens":10}}"#.utf8
+        )
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let client = ChatClient(session: URLSession(configuration: config))
+
+        let reply = try await client.send(
+            messages: [ChatMessage(role: .user, content: "hi")],
+            baseURL: URL(string: "http://127.0.0.1:9")!,
+            modelDisplayName: "SmolLM2-135M"
+        )
+
+        #expect(reply.modelDisplayName == "SmolLM2-135M")
+        #expect(reply.tokensPerSecond != nil)
     }
 }
 

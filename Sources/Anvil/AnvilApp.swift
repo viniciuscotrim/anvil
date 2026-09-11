@@ -7,21 +7,26 @@ import AnvilCore
 // the process entirely.
 struct AnvilApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var requirements = RequirementsManager()
-    @StateObject private var sessions = ModelSessionManager()
+    @StateObject private var appState = AppState()
 
     var body: some Scene {
         WindowGroup("Anvil", id: "main") {
             RootView()
-                .environmentObject(requirements)
-                .environmentObject(sessions)
-                .onAppear { appDelegate.sessions = sessions }
+                .environmentObject(appState.requirements)
+                .environmentObject(appState.sessions)
+                .environmentObject(appState.chat)
+                .onAppear { appDelegate.sessions = appState.sessions }
         }
         .windowResizability(.contentSize)
 
+        WindowGroup("Chat History", id: "threads") {
+            ThreadsListView()
+                .environmentObject(appState.chat)
+        }
+
         MenuBarExtra("Anvil", systemImage: "hammer.fill") {
             MenuBarContentView()
-                .environmentObject(sessions)
+                .environmentObject(appState.sessions)
         }
         .menuBarExtraStyle(.menu)
     }
