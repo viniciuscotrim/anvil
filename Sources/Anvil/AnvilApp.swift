@@ -18,6 +18,7 @@ struct AnvilApp: App {
                 .environmentObject(appState.chat)
                 .environmentObject(appState.imageGeneration)
                 .environmentObject(appState.profiles)
+                .environmentObject(appState.promptToModel)
                 .onAppear {
                     appDelegate.sessions = appState.sessions
                     appDelegate.imageSessions = appState.imageSessions

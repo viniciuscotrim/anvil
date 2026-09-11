@@ -26,6 +26,13 @@ final class ModelManagerViewModel: ObservableObject {
     /// Pause/Stop controls next to the search result and blocks
     /// starting a second download at the same time.
     @Published private(set) var activeDownloadRepoID: String?
+    /// 0...1, when the active download's own progress lines carry a
+    /// real percentage — nil otherwise (nothing downloading, or a
+    /// stretch of output with no percentage in it, e.g. between files).
+    @Published private(set) var downloadProgress: Double?
+    /// Repos waiting their turn — never simultaneous, downloads always
+    /// happen one at a time, draining this queue as each finishes.
+    @Published private(set) var downloadQueue: [HFModelSummary] = []
     /// Which registered image model `generate_image` tool calls in
     /// chat should prefer when more than one is loaded/registered —
     /// see `AppSettings.defaultChatImageModelID`. Loaded from
@@ -229,15 +236,34 @@ final class ModelManagerViewModel: ObservableObject {
     }
 
     /// Fire-and-forget by design — not `async` — so the caller (a
-    /// button) doesn't hold the download's `Task` itself; `pauseDownload()`
-    /// /`stopDownload()` cancel the one this method stores instead.
-    /// One download at a time: a second call while one is already
-    /// running is a no-op.
+    /// button) doesn't hold the download's `Task` itself;
+    /// `pauseDownload()`/`stopDownload()` cancel the one this method
+    /// stores instead. Never simultaneous: a second call while one is
+    /// already running enqueues instead of starting it — the queue
+    /// drains one at a time as each download finishes (however it
+    /// finishes: completed, paused, or stopped).
     func download(_ summary: HFModelSummary) {
-        guard downloadTask == nil else { return }
+        guard downloadTask == nil else {
+            guard summary.modelID != activeDownloadRepoID,
+                  !downloadQueue.contains(where: { $0.modelID == summary.modelID }) else { return }
+            downloadQueue.append(summary)
+            return
+        }
+        startDownload(summary)
+    }
+
+    /// Removes a not-yet-started download from the queue — no effect
+    /// on the one currently in progress; use `pauseDownload()`/
+    /// `stopDownload()` for that.
+    func removeFromQueue(_ summary: HFModelSummary) {
+        downloadQueue.removeAll { $0.modelID == summary.modelID }
+    }
+
+    private func startDownload(_ summary: HFModelSummary) {
         errorMessage = nil
         isBusy = true
         activeDownloadRepoID = summary.modelID
+        downloadProgress = nil
         deletePartialOnCancel = false
 
         downloadTask = Task { [weak self] in
@@ -251,7 +277,15 @@ final class ModelManagerViewModel: ObservableObject {
 
             do {
                 _ = try await self.downloader.download(repoID: summary.modelID) { line in
-                    Task { @MainActor in self.statusMessage = line }
+                    Task { @MainActor in
+                        self.statusMessage = line
+                        // huggingface_hub's own tqdm-style progress
+                        // lines carry a real percentage — a fillable
+                        // bar instead of just a scrolling status line.
+                        if let fraction = DownloadProgressParser.fraction(from: line) {
+                            self.downloadProgress = fraction
+                        }
+                    }
                 }
                 await self.loadRegistry()
             } catch is CancellationError {
@@ -287,8 +321,12 @@ final class ModelManagerViewModel: ObservableObject {
     private func finishDownload() {
         isBusy = false
         statusMessage = ""
+        downloadProgress = nil
         downloadTask = nil
         activeDownloadRepoID = nil
+        if !downloadQueue.isEmpty {
+            startDownload(downloadQueue.removeFirst())
+        }
     }
 
     // MARK: - Moving / deleting a registered model's files

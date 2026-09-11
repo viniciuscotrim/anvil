@@ -20,6 +20,7 @@ final class AppState: ObservableObject {
     let chat: ChatViewModel
     let imageGeneration: ImageGenerationViewModel
     let profiles: ProfilesViewModel
+    let promptToModel: PromptToModelViewModel
 
     init() {
         let requirements = RequirementsManager()
@@ -47,5 +48,12 @@ final class AppState: ObservableObject {
             requirements: requirements
         )
         self.profiles = ProfilesViewModel(store: profileStore, registry: modelRegistry)
+        self.promptToModel = PromptToModelViewModel(
+            sessions: sessions,
+            imageSessions: imageSessions,
+            modelRegistry: modelRegistry,
+            requirements: requirements,
+            generatedImageStore: generatedImageStore
+        )
     }
 }

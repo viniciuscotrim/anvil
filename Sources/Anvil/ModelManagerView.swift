@@ -36,8 +36,21 @@ struct ModelManagerView: View {
             }
 
             if viewModel.isBusy {
-                ProgressView(viewModel.statusMessage.isEmpty ? "Working…" : viewModel.statusMessage)
-                    .progressViewStyle(.linear)
+                if let progress = viewModel.downloadProgress {
+                    ProgressView(
+                        value: progress,
+                        label: { Text(viewModel.statusMessage.isEmpty ? "Working…" : viewModel.statusMessage) },
+                        currentValueLabel: { Text("\(Int(progress * 100))%") }
+                    )
+                } else {
+                    ProgressView(viewModel.statusMessage.isEmpty ? "Working…" : viewModel.statusMessage)
+                        .progressViewStyle(.linear)
+                }
+                if !viewModel.downloadQueue.isEmpty {
+                    Text("\(viewModel.downloadQueue.count) more queued")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Divider()
@@ -208,15 +221,42 @@ struct ModelManagerView: View {
                 }
                 Spacer()
                 if viewModel.activeDownloadRepoID == summary.modelID {
-                    Button("Pause") { viewModel.pauseDownload() }
-                    Button("Stop", role: .destructive) { viewModel.stopDownload() }
+                    downloadProgressControl
+                } else if let queuePosition = viewModel.downloadQueue.firstIndex(where: { $0.modelID == summary.modelID }) {
+                    Text("Queued (#\(queuePosition + 1))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Remove") { viewModel.removeFromQueue(summary) }
                 } else {
-                    Button("Download") { viewModel.download(summary) }
-                        .disabled(viewModel.isBusy)
+                    // Not disabled while something else is downloading
+                    // — clicking then enqueues instead of starting a
+                    // second, simultaneous download.
+                    Button(viewModel.isBusy ? "Queue" : "Download") { viewModel.download(summary) }
                 }
             }
         }
         .frame(minHeight: 160, maxHeight: 220)
+    }
+
+    /// A real fillable bar + percentage while `huggingface_hub`'s own
+    /// progress lines carry one — falls back to an indeterminate spinner
+    /// for the stretches that don't (between files, right at the start).
+    private var downloadProgressControl: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            if let progress = viewModel.downloadProgress {
+                ProgressView(value: progress)
+                    .frame(width: 120)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            HStack(spacing: 8) {
+                Button("Pause") { viewModel.pauseDownload() }
+                Button("Stop", role: .destructive) { viewModel.stopDownload() }
+            }
+        }
     }
 
     private var registeredModelsSection: some View {

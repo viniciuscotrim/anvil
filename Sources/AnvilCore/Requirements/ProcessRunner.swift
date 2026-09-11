@@ -119,12 +119,18 @@ public enum ProcessRunner {
             buffer.append(data)
             pending.append(data)
             var lines: [String] = []
-            while let newlineRange = pending.range(of: Data([0x0A])) {
-                let lineData = pending.subdata(in: pending.startIndex..<newlineRange.lowerBound)
-                if let line = String(data: lineData, encoding: .utf8) {
+            // Split on `\r` as well as `\n` — a real, reported need:
+            // `huggingface_hub`'s own download progress bars (tqdm)
+            // update in place with `\r`, not `\n`, between ticks, so a
+            // `\n`-only split let every intermediate percentage glue
+            // together into one blob instead of arriving as its own
+            // line for a caller (a download progress bar) to read.
+            while let boundary = Self.nextLineBoundary(in: pending) {
+                let lineData = pending.subdata(in: pending.startIndex..<boundary.lowerBound)
+                if let line = String(data: lineData, encoding: .utf8), !line.isEmpty {
                     lines.append(line)
                 }
-                pending.removeSubrange(pending.startIndex..<newlineRange.upperBound)
+                pending.removeSubrange(pending.startIndex..<boundary.upperBound)
             }
             lock.unlock()
             for line in lines {
@@ -136,6 +142,19 @@ public enum ProcessRunner {
             lock.lock()
             defer { lock.unlock() }
             return String(data: buffer, encoding: .utf8) ?? ""
+        }
+
+        /// The earliest `\n` or `\r` in `data`, whichever comes first —
+        /// nil if there's neither yet.
+        private static func nextLineBoundary(in data: Data) -> Range<Data.Index>? {
+            let newline = data.range(of: Data([0x0A]))
+            let carriageReturn = data.range(of: Data([0x0D]))
+            switch (newline, carriageReturn) {
+            case (nil, nil): return nil
+            case (let range?, nil): return range
+            case (nil, let range?): return range
+            case (let n?, let r?): return n.lowerBound <= r.lowerBound ? n : r
+            }
         }
     }
 }

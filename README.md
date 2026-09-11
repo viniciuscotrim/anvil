@@ -441,6 +441,66 @@ behind it:
   failure text (a Python traceback can run well past what a tooltip
   can show), while the hover tooltip stays for a quicker glance.
 
+## Real download progress, a real download queue
+
+- **A fillable bar and a real percentage**, not just a scrolling status
+  line. `huggingface_hub`'s own progress bars (tqdm) update in place
+  with `\r`, not `\n` — `ProcessRunner`'s line buffering only ever split
+  on `\n`, so every intermediate tick glued into one blob until the next
+  real newline instead of arriving as its own line. Now splits on
+  either. `DownloadProgressParser` pulls the `NN%` straight out of
+  tqdm's own bar format. Verified deterministically end to end: a
+  synthetic script emitting six `\r`-separated ticks (0/20/40/60/80/100%)
+  produced six distinct lines through the real `ProcessRunner`, each
+  parsed to its exact percentage.
+- **A real download queue — never simultaneous.** Clicking Download
+  while one is already running now queues it (shown as "Queued (#N)"
+  with its own Remove button) instead of doing nothing; the queue
+  drains one at a time as each finishes, however it finishes —
+  completed, paused, or stopped.
+
+## The Images tab, Draw-Things-style: version history
+
+Generating again from an image no longer means starting over or
+overwriting it. Every generated image now belongs to a **lineage**
+(`GeneratedImage.lineageID`/`versionNumber`) — a fresh generation starts
+its own; clicking into an existing one and generating again (with an
+edited prompt, a different model, or both) adds a new **version** to
+that same lineage instead.
+
+- The gallery grid shows one tile per lineage — its latest version.
+  Clicking one opens a **detail canvas**: the image large, its prompt
+  (loaded back into the input field, editable), and a vertical
+  **version-history carousel** of every version in that lineage,
+  newest at the top — clicking a thumbnail there switches which version
+  is showing, each with its own prompt/model/seed.
+- The model picker in the header is what the *next* generation uses —
+  pick a different one, hit "New Version", and it's added to the same
+  lineage under the new model rather than replacing anything.
+- Deleting a version falls back to the next-latest surviving one in
+  that lineage, or back to the gallery if none are left.
+- An image saved before lineages existed just becomes its own
+  singleton lineage (version 1) on next load — no migration step.
+
+## Prompt to Model
+
+A new tab: describe an image idea in plain language, pick a loaded text
+model to interpret it, and get one tailored, **editable** prompt per
+registered image model — written by that text model, which is told
+every registered image model's name and asked to reply with one JSON
+object mapping each to its own prompt (`PromptToModelViewModel.interpret`).
+Local models don't always follow a JSON contract exactly, so parsing is
+deliberately forgiving: it extracts the outermost `{...}` regardless of
+surrounding text (a stray sentence, a markdown fence), matches a model's
+name case/whitespace-insensitively if an exact key isn't there, and —
+if a given model still isn't named in the response — falls back to the
+raw idea verbatim for that one row rather than leaving it blank. Every
+row gets its own Generate button: loads that model on demand if it
+isn't already resident, generates with whatever the prompt now reads
+(hand edits included), and saves into the same `GeneratedImageStore`
+the Images tab's gallery/version-history reads from — it shows up there
+immediately, like any other generation.
+
 ## Architecture
 
 - Single SwiftUI macOS app (`Anvil` target), built with Swift Package Manager
