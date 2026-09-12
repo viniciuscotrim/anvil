@@ -534,7 +534,7 @@ struct NativeChatView: View {
 
     private var connectionsSheet: some View {
         NavigationStack {
-            RemoteConnectionsListView(connectionsModel: connectionsModel, kind: .text) { connection in
+            RemoteConnectionsListView(connectionsModel: connectionsModel, preferredKind: .text) { connection in
                 Task { await threads.selectSource(.mac(connection), profilesViewModel: profilesViewModel) }
                 isConnectionsSheetPresented = false
             }

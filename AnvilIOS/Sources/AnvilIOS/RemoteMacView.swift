@@ -186,7 +186,7 @@ struct RemoteMacView: View {
 
     private var connectionsSheet: some View {
         NavigationStack {
-            RemoteConnectionsListView(connectionsModel: connectionsModel, kind: .image) { connection in
+            RemoteConnectionsListView(connectionsModel: connectionsModel, preferredKind: .image) { connection in
                 imagesModel.selectedImageConnectionID = connection.id
                 isManagingConnections = false
             }

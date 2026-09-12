@@ -3,8 +3,12 @@ import SwiftUI
 
 /// Reusable pieces of "manage the Macs this phone knows about" — shared
 /// by Chat's "On Your Mac" source picker and the Images tab's own
-/// connections sheet, so there's exactly one look for this instead of
-/// two screens that could drift apart.
+/// connections sheet, so there's exactly one list, one "Add Manually"
+/// flow, and one saved-connections store to look at — not two separate,
+/// kind-locked screens that made the same Mac look like two different
+/// things depending on which tab you opened it from (a real, reported
+/// complaint: adding a Mac's text and image connections used to mean
+/// two completely separate "Manage Connections" sheets).
 
 /// A discovered-but-not-yet-saved model, with its one-tap "Remote"
 /// button straight into use.
@@ -55,29 +59,26 @@ struct SavedConnectionRow: View {
     }
 }
 
-/// The full "found / saved / add manually" management list, filtered to
-/// one connection `kind` (a Chat source picker only wants `.text`, the
-/// Images tab only wants `.image`).
+/// The full "found / saved / add manually" management list — every
+/// connection on every Mac this phone knows about, text and image
+/// together, in one place. `preferredKind` only steers which section a
+/// freshly-discovered/added connection is offered under by default and
+/// which one `onSelect` is most likely called for; it never hides the
+/// other kind — the whole point is that adding your Mac once, here,
+/// covers both its text and image servers.
 struct RemoteConnectionsListView: View {
     @ObservedObject var connectionsModel: RemoteConnectionsViewModel
-    let kind: ModelKind
+    var preferredKind: ModelKind = .text
     /// Called after a discovered model is connected-to, or a manual one
     /// is added — lets the caller select it immediately.
     var onSelect: (RemoteMacConnection) -> Void = { _ in }
     @State private var isAddingConnection = false
 
-    private var discovered: [DiscoveredMacModel] {
-        connectionsModel.discoveredModels.filter { $0.kind == kind }
-    }
-    private var saved: [RemoteMacConnection] {
-        kind == .text ? connectionsModel.textConnections : connectionsModel.imageConnections
-    }
-
     var body: some View {
         List {
-            if !discovered.isEmpty {
+            if !connectionsModel.discoveredModels.isEmpty {
                 Section("Found on Your Network") {
-                    ForEach(discovered) { model in
+                    ForEach(connectionsModel.discoveredModels) { model in
                         DiscoveredConnectionRow(discovered: model) {
                             onSelect(connectionsModel.connect(to: model))
                         }
@@ -86,11 +87,11 @@ struct RemoteConnectionsListView: View {
             }
 
             Section("Saved") {
-                if saved.isEmpty {
+                if connectionsModel.connections.isEmpty {
                     Text("None yet — connect to something found above, or add one manually.")
                         .foregroundStyle(.secondary)
                 }
-                ForEach(saved) { connection in
+                ForEach(connectionsModel.connections) { connection in
                     Button {
                         onSelect(connection)
                     } label: {
@@ -101,14 +102,15 @@ struct RemoteConnectionsListView: View {
                     .buttonStyle(.plain)
                 }
                 .onDelete { indexSet in
-                    for index in indexSet { connectionsModel.deleteConnection(saved[index]) }
+                    for index in indexSet { connectionsModel.deleteConnection(connectionsModel.connections[index]) }
                 }
             }
 
             Section {
                 Button("Add Manually…") { isAddingConnection = true }
             } footer: {
-                Text("For a Mac the scan can't see — a different subnet, or a VPN.")
+                Text("For a Mac the scan can't see — a different subnet, or a VPN. "
+                    + "A Mac with both a text and an image model running needs one entry for each (they're separate servers, separate ports) — add both here.")
             }
         }
         .toolbar {
@@ -123,24 +125,35 @@ struct RemoteConnectionsListView: View {
             }
         }
         .sheet(isPresented: $isAddingConnection) {
-            AddConnectionView(connectionsModel: connectionsModel, kind: kind, onAdd: onSelect)
+            AddConnectionView(connectionsModel: connectionsModel, kind: preferredKind, onAdd: onSelect)
         }
     }
 }
 
 struct AddConnectionView: View {
     @ObservedObject var connectionsModel: RemoteConnectionsViewModel
-    let kind: ModelKind
     var onAdd: (RemoteMacConnection) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var displayName = ""
     @State private var host = ""
     @State private var port: String
+    @State private var kind: ModelKind
 
-    init(connectionsModel: RemoteConnectionsViewModel, kind: ModelKind, onAdd: @escaping (RemoteMacConnection) -> Void = { _ in }) {
+    /// A host of "0.0.0.0" (or blank/loopback) is the single most common
+    /// mistake here — it's the Mac's own *bind* address for "Network"
+    /// access (what the Mac listens on), never a real destination
+    /// another device can connect to. Caught explicitly with a plain-
+    /// language explanation instead of letting it fail later as a
+    /// confusing ATS/"secure connection" error with no obvious cause.
+    private var hostLooksInvalid: Bool {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == "0.0.0.0" || trimmed == "127.0.0.1" || trimmed == "localhost"
+    }
+
+    init(connectionsModel: RemoteConnectionsViewModel, kind: ModelKind = .text, onAdd: @escaping (RemoteMacConnection) -> Void = { _ in }) {
         self.connectionsModel = connectionsModel
-        self.kind = kind
         self.onAdd = onAdd
+        _kind = State(initialValue: kind)
         _port = State(initialValue: kind == .image ? "8200" : "8100")
     }
 
@@ -154,11 +167,29 @@ struct AddConnectionView: View {
                 }
                 Section("Connection") {
                     TextField("Name (e.g. Qwen3.5 on Mac)", text: $displayName)
-                    TextField("Mac IP address", text: $host)
+                    TextField("Mac IP address (e.g. 192.168.1.42)", text: $host)
                         .keyboardType(.decimalPad)
                         .autocapitalization(.none)
+                    if hostLooksInvalid {
+                        Text("That's the Mac's own bind address, not something another device can connect to — "
+                            + "use the Mac's actual IP on your Wi-Fi network instead (System Settings ▸ Wi-Fi ▸ Details…, or the top of the discovered-Mac name here).")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                     TextField("Port", text: $port)
                         .keyboardType(.numberPad)
+                    Picker("Kind", selection: $kind) {
+                        Text("Text").tag(ModelKind.text)
+                        Text("Image").tag(ModelKind.image)
+                    }
+                    .onChange(of: kind) { _, newKind in
+                        // Only nudge the port to that kind's usual
+                        // default while it still looks untouched —
+                        // never overwrite a port the user already typed.
+                        if port == "8100" || port == "8200" {
+                            port = newKind == .image ? "8200" : "8100"
+                        }
+                    }
                 }
             }
             .navigationTitle("Add Connection")
@@ -179,7 +210,7 @@ struct AddConnectionView: View {
                         onAdd(connection)
                         dismiss()
                     }
-                    .disabled(host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Int(port) == nil)
+                    .disabled(host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Int(port) == nil || hostLooksInvalid)
                 }
             }
             .dismissKeyboardOnTap()

@@ -74,6 +74,21 @@ final class BonjourMacDiscovery: NSObject {
             for type in Self.serviceTypes {
                 let browser = NetServiceBrowser()
                 browser.delegate = self
+                // The actual bug that made this find nothing, ever,
+                // confirmed for real (not guessed): `NetServiceBrowser`/
+                // `NetService` are old, RunLoop-based APIs — their
+                // delegate callbacks only fire while *something* is
+                // pumping the RunLoop they're scheduled on. Called from
+                // an `async` context like this one, the calling thread
+                // is one of Swift concurrency's cooperative pool
+                // threads, which never runs a RunLoop at all — so
+                // without this explicit `schedule(in:forMode:)`, every
+                // callback (`didFind`, `didResolveAddress`, …) silently
+                // never happens, no matter what the Mac actually
+                // advertises. Scheduling explicitly on the main
+                // RunLoop (always pumped, by SwiftUI itself) fixes that
+                // regardless of which thread started the scan.
+                browser.schedule(in: .main, forMode: .common)
                 browsers.append(browser)
                 browser.searchForServices(ofType: type, inDomain: "local.")
             }
@@ -100,6 +115,10 @@ final class BonjourMacDiscovery: NSObject {
 extension BonjourMacDiscovery: NetServiceBrowserDelegate {
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
         service.delegate = self
+        // Same fix as the browser above — resolution is its own
+        // RunLoop-driven operation and needs the same explicit
+        // scheduling to ever actually call back.
+        service.schedule(in: .main, forMode: .common)
         resolvingServices.insert(service)
         service.resolve(withTimeout: 3.0)
     }
