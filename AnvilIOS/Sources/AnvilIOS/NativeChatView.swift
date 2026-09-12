@@ -2,16 +2,6 @@ import SwiftUI
 import MLXLMCommon
 import AnvilCore
 
-/// Which engine answers the *next* message — a thread itself never pins
-/// one (`ChatThread` doesn't, `ChatMessage.modelDisplayName` records per-
-/// message instead), exactly like switching which model answers already
-/// works on the Mac app. Switching source mid-conversation only changes
-/// what happens next; existing messages/history are untouched.
-enum ChatSource: Equatable {
-    case local
-    case remote(RemoteMacConnection)
-}
-
 /// A real chat screen — either on-device inference via `NativeChatEngine`
 /// (no server, no network round trip once the model is loaded) or a
 /// model already loaded on a Mac on the same network via
@@ -20,9 +10,14 @@ enum ChatSource: Equatable {
 /// second, separate chat screen. Conversations persist via
 /// `ChatThreadsViewModel`/`ChatThreadStore`, the same cross-platform
 /// store the Mac app's Chat uses, and Memory/Profiles apply to either
-/// source identically. The model ID field takes any Hugging Face
-/// MLX-format repo (e.g. `mlx-community/Qwen3-0.6B-4bit`), or pick one
-/// already downloaded in the Models tab from the menu next to it.
+/// source identically. Picking a Mac with sync enabled (`AnvilSyncServer`
+/// running there) goes further: `ChatThreadsViewModel.activeSource`
+/// governs Profiles/Memory too, so all three tabs show that Mac's own
+/// data — the same threads, profiles, and memories the Mac app itself
+/// would show, kept in sync there even though the iPhone is typing. The
+/// model ID field takes any Hugging Face MLX-format repo (e.g.
+/// `mlx-community/Qwen3-0.6B-4bit`), or pick one already downloaded in
+/// the Models tab from the menu next to it.
 struct NativeChatView: View {
     @Environment(ModelsViewModel.self) private var modelsViewModel
     @Environment(ProfilesViewModel.self) private var profilesViewModel
@@ -30,7 +25,6 @@ struct NativeChatView: View {
     @EnvironmentObject private var engine: NativeChatEngine
     @StateObject private var remoteEngine = RemoteChatEngine()
     @StateObject private var connectionsModel = RemoteConnectionsViewModel()
-    @State private var source: ChatSource = .local
     @State private var selectedImageConnectionID: UUID?
     @State private var isConnectionsSheetPresented = false
     @State private var modelID = "mlx-community/Qwen3-0.6B-4bit"
@@ -48,6 +42,8 @@ struct NativeChatView: View {
     @State private var isSettingsPresented = false
     @State private var lastTokensPerSecond: Double?
 
+    private var source: ChatSourceSelection { threads.activeSource }
+
     /// Only true before the first message — same restriction
     /// `ChatViewModel.canChangeProfile` documents: once a reply exists
     /// under a given profile, switching it would mix instructions with
@@ -62,7 +58,7 @@ struct NativeChatView: View {
     private var isGenerating: Bool {
         switch source {
         case .local: return isLocalGenerating
-        case .remote: return remoteEngine.isSending
+        case .mac: return remoteEngine.isSending
         }
     }
 
@@ -73,7 +69,7 @@ struct NativeChatView: View {
     private var canSend: Bool {
         switch source {
         case .local: return engine.isLoaded
-        case .remote: return true
+        case .mac: return true
         }
     }
 
@@ -94,6 +90,8 @@ struct NativeChatView: View {
 
                 if let errorMessage = source == .local ? engine.errorMessage : remoteEngine.errorMessage {
                     Text(errorMessage).foregroundStyle(.red).font(.caption).padding(8)
+                } else if let syncError = threads.errorMessage {
+                    Text(syncError).foregroundStyle(.red).font(.caption).padding(8)
                 }
 
                 if threads.isTemporaryModeActive {
@@ -112,7 +110,7 @@ struct NativeChatView: View {
                             }
                             if isLocalGenerating {
                                 ProgressView().padding(.leading, 8)
-                            } else if case .remote = source, remoteEngine.generationPhase != .idle {
+                            } else if case .mac = source, remoteEngine.generationPhase != .idle {
                                 remoteGeneratingIndicator
                             }
                         }
@@ -147,7 +145,7 @@ struct NativeChatView: View {
                         Button { threads.toggleTemporaryMode() } label: {
                             Image(systemName: threads.isTemporaryModeActive ? "eyeglasses" : "eyeglasses.slash")
                         }
-                        .disabled(isGenerating)
+                        .disabled(isGenerating || source != .local)
                         exportMenu
                         Button { isSettingsPresented = true } label: { Image(systemName: "slider.horizontal.3") }
                         Button { newChat() } label: { Image(systemName: "square.and.pencil") }
@@ -399,12 +397,13 @@ struct NativeChatView: View {
     /// network or previously saved — one tap from a discovered model
     /// straight into use, the same frictionless flow the Mac tab already
     /// had, just relocated here instead of living behind a second chat
-    /// screen.
+    /// screen. Picking a Mac also switches Profiles/Memory to its data —
+    /// see `ChatThreadsViewModel.selectSource`.
     private var sourceBar: some View {
         HStack {
             Menu {
                 Button {
-                    source = .local
+                    Task { await threads.selectSource(.local, profilesViewModel: profilesViewModel) }
                 } label: {
                     Label("This iPhone", systemImage: "iphone")
                 }
@@ -412,7 +411,7 @@ struct NativeChatView: View {
                     Divider()
                     ForEach(connectionsModel.textConnections) { connection in
                         Button {
-                            source = .remote(connection)
+                            Task { await threads.selectSource(.mac(connection), profilesViewModel: profilesViewModel) }
                         } label: {
                             Label(connection.displayName, systemImage: "network")
                         }
@@ -422,7 +421,8 @@ struct NativeChatView: View {
                     Divider()
                     ForEach(connectionsModel.discoveredModels.filter { $0.kind == .text }) { discovered in
                         Button {
-                            source = .remote(connectionsModel.connect(to: discovered))
+                            let connection = connectionsModel.connect(to: discovered)
+                            Task { await threads.selectSource(.mac(connection), profilesViewModel: profilesViewModel) }
                         } label: {
                             Label("Remote: \(discovered.displayName)", systemImage: "bolt.horizontal")
                         }
@@ -449,7 +449,7 @@ struct NativeChatView: View {
             switch source {
             case .local:
                 localModelControls
-            case .remote:
+            case .mac:
                 remoteSourceControls
             }
         }
@@ -459,14 +459,14 @@ struct NativeChatView: View {
     private var sourceIcon: String {
         switch source {
         case .local: return "iphone"
-        case .remote: return "network"
+        case .mac: return "network"
         }
     }
 
     private var sourceLabel: String {
         switch source {
         case .local: return engine.loadedModelID ?? "This iPhone"
-        case .remote(let connection): return connection.displayName
+        case .mac(let connection): return connection.displayName
         }
     }
 
@@ -514,7 +514,7 @@ struct NativeChatView: View {
     /// calls should go to.
     private var remoteSourceControls: some View {
         HStack(spacing: 6) {
-            if case .remote(let connection) = source {
+            if case .mac(let connection) = source {
                 Circle()
                     .fill(connectionsModel.reachableConnectionIDs.contains(connection.id) ? .green : .secondary)
                     .frame(width: 6, height: 6)
@@ -535,7 +535,7 @@ struct NativeChatView: View {
     private var connectionsSheet: some View {
         NavigationStack {
             RemoteConnectionsListView(connectionsModel: connectionsModel, kind: .text) { connection in
-                source = .remote(connection)
+                Task { await threads.selectSource(.mac(connection), profilesViewModel: profilesViewModel) }
                 isConnectionsSheetPresented = false
             }
             .navigationTitle("Mac Connections")
@@ -589,7 +589,7 @@ struct NativeChatView: View {
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...4)
                 .disabled(!canSend)
-            if case .remote = source, remoteEngine.isSending {
+            if case .mac = source, remoteEngine.isSending {
                 Button("Stop", role: .destructive) { remoteEngine.stopGeneration() }
             } else {
                 Button("Send") { send() }
@@ -615,7 +615,7 @@ struct NativeChatView: View {
         switch source {
         case .local:
             sendLocal()
-        case .remote(let connection):
+        case .mac(let connection):
             remoteEngine.send(
                 text: inputText,
                 threads: threads,

@@ -1,12 +1,30 @@
 import AnvilCore
 import Foundation
 
+/// Which data Chat/Profiles/Memory currently read and write — "This
+/// iPhone" (this device's own local files) or a specific Mac with
+/// `AnvilSyncServer` turned on, in which case the Mac's own threads,
+/// profiles, and memories become the ones shown here, updated on the
+/// Mac even though the iPhone is doing the typing. Switching this is the
+/// one action (Chat's source menu) that puts every one of those three
+/// tabs into "Mac mode" together, and back, symmetrically.
+enum ChatSourceSelection: Equatable {
+    case local
+    case mac(RemoteMacConnection)
+
+    var host: String? {
+        if case .mac(let connection) = self { return connection.host }
+        return nil
+    }
+}
+
 /// Chat's thread list + persistence, mirroring the threading half of
 /// the Mac app's `ChatViewModel` (the model-serving half stays in
 /// `NativeChatEngine`/`RemoteChatEngine` here since iOS talks to either
 /// an in-process `ChatSession` or an HTTP `ChatClient` depending on the
-/// chosen source). Owned by `NativeChatView` via `@State` so it
-/// survives tab switches the same way `engine` does.
+/// chosen source). Owned once at the app level (`AnvilIOSApp`) and
+/// shared via `.environment`, not per-view — Memory and Profiles need to
+/// see the exact same `activeSource`/`currentThread` Chat does.
 ///
 /// Also owns Memory (`ChatMemory`/`ChatMemoryStore`) — the Mac-side
 /// feature iOS was missing entirely — kept here rather than in a
@@ -19,18 +37,25 @@ final class ChatThreadsViewModel {
     private(set) var memories: [ChatMemory] = []
     private(set) var memorySuggestions: [ChatMemorySuggestion] = []
     private(set) var isSuggestingMemories = false
-    /// Memory-suggestion errors only — each engine (local/remote) tracks
-    /// its own send errors separately.
+    /// "This iPhone" or a specific Mac — see `ChatSourceSelection`.
+    /// Change it via `selectSource(_:)`, not directly, so the switch
+    /// actually reloads threads/memories from the newly active side.
+    private(set) var activeSource: ChatSourceSelection = .local
+    /// Memory-suggestion / source-switch errors. Each engine (local/
+    /// remote) tracks its own send errors separately.
     var errorMessage: String?
     /// While on, the active conversation is never saved to disk — same
     /// restriction and behavior as the Mac app's own temporary mode:
     /// blocks `newThread`/`selectThread` (turn it off first) and every
-    /// persist call becomes a no-op until it's off again.
+    /// persist call becomes a no-op until it's off again. Only
+    /// meaningful for `.local` — a Mac source is never temporary, since
+    /// the whole point of picking one is durable continuity with the Mac.
     private(set) var isTemporaryModeActive = false
     private var threadBeforeTemporaryMode: ChatThread?
 
     private let store = ChatThreadStore()
     private let memoryStore = ChatMemoryStore()
+    private let syncClient = AnvilSyncClient()
     /// `.task` on the view reruns every time it re-enters the hierarchy
     /// (switching tabs and back) — only the first call should pick the
     /// initial thread; later calls just refresh `allThreads`, the same
@@ -39,11 +64,38 @@ final class ChatThreadsViewModel {
     private var hasLoadedInitialState = false
 
     func loadInitialState() async {
-        allThreads = await store.all()
-        memories = await memoryStore.all()
+        await reloadThreadsAndMemories()
         if !hasLoadedInitialState {
             currentThread = allThreads.first ?? ChatThread()
             hasLoadedInitialState = true
+        }
+    }
+
+    /// The one place `activeSource` changes — reloads threads and
+    /// memories from the newly active side and points `currentThread`
+    /// at its most-recent thread (or a blank one), same as a fresh
+    /// launch would. `profilesViewModel` is updated in lock-step so all
+    /// three tabs agree on which side they're showing.
+    func selectSource(_ source: ChatSourceSelection, profilesViewModel: ProfilesViewModel) async {
+        activeSource = source
+        errorMessage = nil
+        await profilesViewModel.setActiveHost(source.host)
+        await reloadThreadsAndMemories()
+        currentThread = allThreads.first ?? ChatThread()
+    }
+
+    private func reloadThreadsAndMemories() async {
+        switch activeSource {
+        case .local:
+            allThreads = await store.all()
+            memories = await memoryStore.all()
+        case .mac(let connection):
+            do {
+                allThreads = try await syncClient.threads(host: connection.host)
+                memories = try await syncClient.memories(host: connection.host)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -58,19 +110,32 @@ final class ChatThreadsViewModel {
     ) async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        _ = try? await memoryStore.upsert(ChatMemory(
-            content: trimmed, kind: kind, source: source, confidence: confidence, profileID: profileID))
-        memories = await memoryStore.all()
+        let memory = ChatMemory(content: trimmed, kind: kind, source: source, confidence: confidence, profileID: profileID)
+        await upsertMemory(memory)
     }
 
     func updateMemory(_ memory: ChatMemory) async {
-        _ = try? await memoryStore.upsert(memory)
-        memories = await memoryStore.all()
+        await upsertMemory(memory)
+    }
+
+    private func upsertMemory(_ memory: ChatMemory) async {
+        switch activeSource {
+        case .local:
+            _ = try? await memoryStore.upsert(memory)
+        case .mac(let connection):
+            _ = try? await syncClient.upsertMemory(memory, host: connection.host)
+        }
+        await reloadThreadsAndMemories()
     }
 
     func deleteMemory(_ memory: ChatMemory) async {
-        try? await memoryStore.delete(id: memory.id)
-        memories = await memoryStore.all()
+        switch activeSource {
+        case .local:
+            try? await memoryStore.delete(id: memory.id)
+        case .mac(let connection):
+            try? await syncClient.deleteMemory(id: memory.id, host: connection.host)
+        }
+        await reloadThreadsAndMemories()
     }
 
     /// Analyzes the current thread for durable memory — source-agnostic:
@@ -128,6 +193,8 @@ final class ChatThreadsViewModel {
         return String(text[start...end])
     }
 
+    // MARK: - Threads
+
     func newThread() {
         guard !isTemporaryModeActive else { return }
         currentThread = ChatThread()
@@ -139,7 +206,12 @@ final class ChatThreadsViewModel {
     }
 
     func deleteThread(_ thread: ChatThread) async {
-        try? await store.delete(id: thread.id)
+        switch activeSource {
+        case .local:
+            try? await store.delete(id: thread.id)
+        case .mac(let connection):
+            try? await syncClient.deleteThread(id: thread.id, host: connection.host)
+        }
         allThreads.removeAll { $0.id == thread.id }
         if currentThread.id == thread.id {
             currentThread = allThreads.first ?? ChatThread()
@@ -148,8 +220,11 @@ final class ChatThreadsViewModel {
 
     /// Only the caller flips this — nothing else enters or exits
     /// temporary mode on its own. Turning it back off restores whatever
-    /// thread was active before, exactly where it was left.
+    /// thread was active before, exactly where it was left. A no-op
+    /// while a Mac source is active (see `isTemporaryModeActive`'s own
+    /// doc comment).
     func toggleTemporaryMode() {
+        guard activeSource == .local else { return }
         if isTemporaryModeActive {
             isTemporaryModeActive = false
             currentThread = threadBeforeTemporaryMode ?? allThreads.first ?? ChatThread()
@@ -166,11 +241,19 @@ final class ChatThreadsViewModel {
     /// while temporary mode is active.
     func persistCurrentThread() async {
         guard !isTemporaryModeActive else { return }
-        guard let saved = try? await store.upsert(currentThread) else { return }
+        let threadToSave = currentThread
+        let saved: ChatThread?
+        switch activeSource {
+        case .local:
+            saved = try? await store.upsert(threadToSave)
+        case .mac(let connection):
+            saved = try? await syncClient.upsertThread(threadToSave, host: connection.host)
+        }
+        guard let saved else { return }
         if currentThread.id == saved.id {
             currentThread = saved
         }
-        allThreads = await store.all()
+        await reloadThreadsAndMemories()
     }
 
     /// Write-only: saves to disk without reassigning `currentThread`, so
@@ -182,8 +265,14 @@ final class ChatThreadsViewModel {
     func persistCurrentThreadForDurability() {
         guard !isTemporaryModeActive else { return }
         let threadToSave = currentThread
+        let source = activeSource
         Task {
-            _ = try? await store.upsert(threadToSave)
+            switch source {
+            case .local:
+                _ = try? await store.upsert(threadToSave)
+            case .mac(let connection):
+                _ = try? await syncClient.upsertThread(threadToSave, host: connection.host)
+            }
         }
     }
 }
