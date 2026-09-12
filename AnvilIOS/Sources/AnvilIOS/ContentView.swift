@@ -9,8 +9,10 @@ struct ContentView: View {
         TabView {
             DeviceInfoView()
                 .tabItem { Label("Info", systemImage: "info.circle") }
-            ModelsView()
-                .tabItem { Label("Models", systemImage: "square.grid.2x2") }
+            ModelSearchView()
+                .tabItem { Label("Search", systemImage: "magnifyingglass") }
+            ModelLibraryView()
+                .tabItem { Label("Library", systemImage: "square.stack.3d.up") }
             NativeChatView()
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
             NativeImageView()

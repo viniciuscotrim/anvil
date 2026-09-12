@@ -1,20 +1,16 @@
 import SwiftUI
 import AnvilCore
 
-/// Search, download, and manage models — real feature parity with the
-/// Mac app's Model Manager (a source picker between Hugging Face and
-/// CivitAI, same as the Mac's, minus the folder-mapping UI, not yet
-/// ported), sharing the exact same `AnvilCore` catalog/registry code.
-///
-/// Both sources share one `.searchable` bar and one filter row — HF and
-/// CivitAI used to each own a structurally different search control (a
-/// native `.searchable` field for one, an inline `TextField`+`Button`
-/// row for the other), so switching sources visibly reshuffled the
-/// whole screen. Routing both through the same `.searchable` field via
-/// `viewModel.performSearch()` fixes that.
-struct ModelsView: View {
+/// Search and download — Hugging Face or CivitAI, one consistent
+/// `.searchable` bar for both (switching sources used to reshuffle the
+/// whole screen: HF had a native search field, CivitAI an inline
+/// `TextField`+`Button` row instead), with a filter row and a real
+/// fillable-bar-plus-percentage download control. Registered models
+/// live on their own screen (`ModelLibraryView`) — see
+/// `ModelsViewModel`'s header comment for why this used to be one
+/// crowded tab and isn't anymore.
+struct ModelSearchView: View {
     @Environment(ModelsViewModel.self) private var viewModel
-    @EnvironmentObject private var chatEngine: NativeChatEngine
 
     var body: some View {
         @Bindable var viewModel = viewModel
@@ -35,53 +31,44 @@ struct ModelsView: View {
                 }
 
                 if viewModel.source == .huggingFace {
-                    if !viewModel.filteredSearchResults.isEmpty {
-                        Section("Search Results") {
-                            ForEach(viewModel.filteredSearchResults) { summary in
-                                searchResultRow(summary)
-                            }
-                        }
-                    } else if !viewModel.searchResults.isEmpty {
-                        Text("No results match the current filters.")
-                            .foregroundStyle(.secondary)
-                    }
+                    resultsSection(
+                        results: viewModel.filteredSearchResults,
+                        rawCount: viewModel.searchResults.count,
+                        row: searchResultRow
+                    )
                 } else {
-                    if !viewModel.filteredCivitAIResults.isEmpty {
-                        Section("Search Results") {
-                            ForEach(viewModel.filteredCivitAIResults) { summary in
-                                civitaiResultRow(summary)
-                            }
-                        }
-                    } else if !viewModel.civitaiResults.isEmpty {
-                        Text("No results match the current filters.")
-                            .foregroundStyle(.secondary)
-                    }
+                    resultsSection(
+                        results: viewModel.filteredCivitAIResults,
+                        rawCount: viewModel.civitaiResults.count,
+                        row: civitaiResultRow
+                    )
                     Text("CivitAI checkpoints download and register, but only the built-in "
                         + "SDXL Turbo can be used for generation today — see the Images tab.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-
-                Section("Registered Models") {
-                    if viewModel.registeredModels.isEmpty {
-                        Text("None yet — search above and download one.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(viewModel.registeredModels) { entry in
-                            registeredModelRow(entry)
-                        }
-                    }
-                }
             }
             .searchable(text: $viewModel.query, prompt: searchPrompt)
             .onSubmit(of: .search) { Task { await viewModel.performSearch() } }
-            .navigationTitle("Models")
+            .navigationTitle("Search Models")
             .overlay {
                 if viewModel.isSearching { ProgressView() }
             }
-            .task { await viewModel.loadRegistry() }
-            .onAppear { Task { await viewModel.loadRegistry() } }
             .dismissKeyboardOnTap()
+        }
+    }
+
+    @ViewBuilder
+    private func resultsSection<Result: Identifiable, Row: View>(
+        results: [Result], rawCount: Int, @ViewBuilder row: @escaping (Result) -> Row
+    ) -> some View {
+        if !results.isEmpty {
+            Section("Search Results") {
+                ForEach(results) { row($0) }
+            }
+        } else if rawCount > 0 {
+            Text("No results match the current filters.")
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -89,10 +76,7 @@ struct ModelsView: View {
         viewModel.source == .huggingFace ? "Search Hugging Face models…" : "Search CivitAI checkpoints…"
     }
 
-    /// One consistent filter row for both sources — "Compatible only"
-    /// only makes sense for HF (see `ModelsViewModel.filteredCivitAIResults`),
-    /// the size limit applies to either. `viewModel` is a class, so every
-    /// mutation here (`viewModel.maxSizeClass = …`) writes straight
+    /// `viewModel` is a class, so every mutation here writes straight
     /// through to the `@Environment`-provided instance directly; only
     /// `Toggle` needs an actual `Binding`, built explicitly rather than
     /// relying on `$viewModel` sugar (which only exists inside `body`'s
@@ -135,8 +119,11 @@ struct ModelsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(summary.modelID).font(.headline)
                 HStack(spacing: 6) {
+                    if let downloads = summary.downloads {
+                        Text("\(downloads) downloads")
+                    }
                     if let bytes = summary.sizeBytes {
-                        Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                        Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                         Text("· \(ModelSizeClass.classify(sizeBytes: bytes).label)")
                     }
                     switch summary.compatibility {
@@ -164,6 +151,9 @@ struct ModelsView: View {
                     Text(summary.type)
                     if let baseModel = summary.baseModel {
                         Text("· \(baseModel)")
+                    }
+                    if let downloads = summary.downloadCount {
+                        Text("· \(downloads) downloads")
                     }
                     if let bytes = summary.primaryFile?.sizeBytes {
                         Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
@@ -200,64 +190,6 @@ struct ModelsView: View {
             Button("Download", action: action)
                 .disabled(viewModel.isDownloading || disabled)
                 .buttonStyle(.bordered)
-        }
-    }
-
-    @ViewBuilder
-    private func registeredModelRow(_ entry: ModelEntry) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(entry.displayName)
-                Text(entry.kind == .image ? "· image" : "· text")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if let size = entry.sizeBytes {
-                    Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if entry.kind == .text {
-                loadControl(for: entry)
-            }
-        }
-        .swipeActions {
-            if chatEngine.loadedModelID != entry.id {
-                Button("Delete", role: .destructive) { Task { await viewModel.delete(entry) } }
-            }
-        }
-    }
-
-    /// Load/Unload straight from the Models tab — the actual management
-    /// the source list/downloads alone didn't give: a downloaded text
-    /// model previously had no way to be loaded, freed, or even shown as
-    /// "in use" anywhere outside Chat's own picker.
-    private func loadControl(for entry: ModelEntry) -> some View {
-        HStack(spacing: 8) {
-            if chatEngine.loadedModelID == entry.id {
-                Label("Loaded", systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-                Spacer()
-                Button("Unload") { chatEngine.unload() }
-                    .font(.caption)
-                    .buttonStyle(.bordered)
-            } else if chatEngine.isLoading {
-                if let progress = chatEngine.loadProgress {
-                    ProgressView(value: progress).frame(width: 80)
-                    Text("\(Int(progress * 100))%").font(.caption2).foregroundStyle(.secondary)
-                } else {
-                    ProgressView().controlSize(.small)
-                }
-                Spacer()
-            } else {
-                Spacer()
-                Button("Load") { Task { await chatEngine.load(modelID: entry.id) } }
-                    .font(.caption)
-                    .buttonStyle(.bordered)
-                    .disabled(chatEngine.isLoading)
-            }
         }
     }
 }

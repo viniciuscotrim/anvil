@@ -8,6 +8,15 @@ import Observation
 /// `HFRepoDownloader` (native `URLSessionDownloadTask`, no Python) in
 /// place of the Mac's Process-based `ModelDownloader`.
 ///
+/// Backs two separate screens — `ModelSearchView` (search/filter/
+/// download) and `ModelLibraryView` (registered models, grouped by
+/// family, Load/Unload/Delete) — where the Mac's single Model Manager
+/// window fits both in one scrollable pane (real desktop vertical
+/// space). On a phone, search results, an active download's progress,
+/// and the registered list all fighting for the same few hundred
+/// points of height read as broken, not just cramped — hence two tabs
+/// here instead of one.
+///
 /// `@Observable`, not the `@StateObject`+`ObservableObject` combination
 /// the macOS app's view models use — that workaround exists there only
 /// because that target builds outside Xcode.app, which doesn't compile
@@ -101,6 +110,15 @@ final class ModelsViewModel {
         case (.large, .large): return true
         case (.large, _): return false
         }
+    }
+
+    /// Registered models grouped by family (every "Qwen3.5" size/quant
+    /// variant together, "FLUX.2-klein" its own, …) for the Library
+    /// screen — same `ModelFamilyGrouping` the Mac app's Model Manager
+    /// uses, so a long flat list of near-identical entries doesn't read
+    /// worse here than it does there.
+    var registeredModelFamilies: [ModelFamilyGrouping.Family] {
+        ModelFamilyGrouping.group(registeredModels)
     }
 
     func loadRegistry() async {
