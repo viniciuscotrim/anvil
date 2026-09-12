@@ -50,12 +50,24 @@ final class NativeChatEngine: ObservableObject {
     @Published private(set) var loadProgress: Double?
     @Published private(set) var loadedModelID: String?
     @Published var errorMessage: String?
+    /// Generation parameters — same cross-platform `GenerationSettings`
+    /// type the Mac app's Chat sidebar edits, applied to
+    /// `session.generateParameters` fresh before every request (see
+    /// `applyGenerationSettings`) so a change takes effect on the very
+    /// next turn without needing to reload the model or rebuild the
+    /// session.
+    @Published var settings = GenerationSettings.default
     /// Set by the `generate_image` tool dispatch when a call completes
     /// during the current `send`/`streamSend` — the caller reads it
     /// once the stream finishes to attach the image to the visible
     /// reply (`ChatMessage.generatedImagePath`), mirroring
     /// `ChatViewModel.runGenerateImageTool`'s returned path on the Mac.
     @Published private(set) var lastGeneratedImagePath: String?
+    /// Set once `streamSend`'s stream finishes, from the real measured
+    /// completion stats `ChatSession.streamDetails` reports — the same
+    /// number the Mac app's header shows via `ChatMessage.tokensPerSecond`.
+    /// Read-once via `consumeLastTokensPerSecond()`.
+    @Published private(set) var lastTokensPerSecond: Double?
 
     // Qualified explicitly: the vendored StableDiffusion sources
     // (`NativeImageEngine`'s `StableDiffusion/` directory) declare their
@@ -183,16 +195,69 @@ final class NativeChatEngine: ObservableObject {
     func send(_ text: String) async throws -> String {
         guard let session else { throw NativeChatEngineError.notLoaded }
         refreshTools()
+        applyGenerationSettings()
         return try await session.respond(to: text)
     }
 
     /// Token-by-token, for a real-time reply the way `mlx_lm.server`'s
     /// own streaming would look if the Mac app's `ChatClient` used it
-    /// (today it doesn't — it waits for the full response).
+    /// (today it doesn't — it waits for the full response). Built on
+    /// `streamDetails` rather than the plainer `streamResponse` so the
+    /// completion's real measured tokens/sec (its `.info` case) can be
+    /// captured into `lastTokensPerSecond` once the stream ends, instead
+    /// of only ever yielding text.
     func streamSend(_ text: String) throws -> AsyncThrowingStream<String, Error> {
         guard let session else { throw NativeChatEngineError.notLoaded }
         refreshTools()
-        return session.streamResponse(to: text)
+        applyGenerationSettings()
+
+        let detailStream = session.streamDetails(to: text)
+        let (stream, continuation) = AsyncThrowingStream<String, Error>.makeStream()
+        let forwardingTask = Task { [weak self] in
+            do {
+                for try await item in detailStream {
+                    switch item {
+                    case .chunk(let text):
+                        if case .terminated = continuation.yield(text) { break }
+                    case .info(let info):
+                        let tokensPerSecond = info.tokensPerSecond
+                        Task { @MainActor in self?.lastTokensPerSecond = tokensPerSecond }
+                    case .toolCall:
+                        break
+                    }
+                }
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+        continuation.onTermination = { _ in forwardingTask.cancel() }
+        return stream
+    }
+
+    /// Consumes whatever the last `streamSend` measured — read-once so a
+    /// later, unrelated reply doesn't inherit a stale number, mirroring
+    /// `consumeLastGeneratedImagePath`.
+    func consumeLastTokensPerSecond() -> Double? {
+        defer { lastTokensPerSecond = nil }
+        return lastTokensPerSecond
+    }
+
+    /// Maps `settings` onto `ChatSession.generateParameters`, applied
+    /// fresh before every request (like `refreshTools`) rather than
+    /// only at session creation, so a mid-conversation change takes
+    /// effect on the very next turn without reloading anything.
+    /// `maxTokens: nil` gets the same generous, effectively-unlimited
+    /// budget `GenerationSettings.wireMaxTokens` gives the Mac app's
+    /// HTTP request instead of `mlx-swift-lm`'s own smaller default.
+    private func applyGenerationSettings() {
+        session?.generateParameters = GenerateParameters(
+            maxTokens: settings.wireMaxTokens,
+            temperature: Float(settings.temperature),
+            topP: Float(settings.topP),
+            topK: settings.topK,
+            minP: Float(settings.minP)
+        )
     }
 
     /// Offers `generate_image` only once the on-device image engine has

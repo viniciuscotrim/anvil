@@ -26,6 +26,8 @@ struct NativeChatView: View {
     /// separately via `manualProfileChoiceMade`.
     @State private var selectedProfile: ChatProfile?
     @State private var manualProfileChoiceMade = false
+    @State private var isSettingsPresented = false
+    @State private var lastTokensPerSecond: Double?
 
     /// Only true before the first message — same restriction
     /// `ChatViewModel.canChangeProfile` documents: once a reply exists
@@ -88,11 +90,20 @@ struct NativeChatView: View {
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { newChat() } label: { Image(systemName: "square.and.pencil") }
-                        .disabled(isGenerating)
+                    HStack(spacing: 4) {
+                        if let tps = lastTokensPerSecond {
+                            Text(String(format: "%.1f tok/s", tps))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button { isSettingsPresented = true } label: { Image(systemName: "slider.horizontal.3") }
+                        Button { newChat() } label: { Image(systemName: "square.and.pencil") }
+                            .disabled(isGenerating)
+                    }
                 }
             }
             .sheet(isPresented: $isThreadListPresented) { threadListSheet }
+            .sheet(isPresented: $isSettingsPresented) { settingsSheet }
             .task { await profilesViewModel.load() }
             .task { await threads.loadInitialState() }
         }
@@ -132,6 +143,53 @@ struct NativeChatView: View {
                     Button("Done") { isThreadListPresented = false }
                 }
             }
+        }
+    }
+
+    /// Generation parameters — same fields the Mac app's Chat sidebar
+    /// edits (`GenerationSettings`, cross-platform), applied by
+    /// `NativeChatEngine` fresh before every request.
+    private var settingsSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Generation") {
+                    LabeledContent("Max Tokens") {
+                        TextField("Unlimited", text: Binding(
+                            get: { engine.settings.maxTokens.map(String.init) ?? "" },
+                            set: { engine.settings.maxTokens = Int($0.trimmingCharacters(in: .whitespaces)) }
+                        ))
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("Temperature") {
+                        TextField("", value: $engine.settings.temperature, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("Top P") {
+                        TextField("", value: $engine.settings.topP, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("Top K") {
+                        TextField("", value: $engine.settings.topK, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("Min P") {
+                        TextField("", value: $engine.settings.minP, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+            .navigationTitle("Generation Settings")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { isSettingsPresented = false }
+                }
+            }
+            .dismissKeyboardOnTap()
         }
     }
 
@@ -352,6 +410,10 @@ struct NativeChatView: View {
                 // as part of that stream (see NativeChatEngine.refreshTools).
                 if let imagePath = engine.consumeLastGeneratedImagePath() {
                     threads.currentThread.messages[replyIndex].generatedImagePath = imagePath
+                }
+                if let tokensPerSecond = engine.consumeLastTokensPerSecond() {
+                    threads.currentThread.messages[replyIndex].tokensPerSecond = tokensPerSecond
+                    lastTokensPerSecond = tokensPerSecond
                 }
             } catch {
                 threads.currentThread.messages.append(
