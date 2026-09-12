@@ -279,10 +279,21 @@ struct NativeChatView: View {
         let isUser = message.role == .user
         return HStack {
             if isUser { Spacer(minLength: 40) }
-            Text(message.content)
-                .padding(10)
-                .background(isUser ? Color.accentColor.opacity(0.15) : Color.gray.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 6) {
+                if let path = message.generatedImagePath, let uiImage = UIImage(contentsOfFile: path) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 220)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                if !message.content.isEmpty {
+                    Text(message.content)
+                }
+            }
+            .padding(10)
+            .background(isUser ? Color.accentColor.opacity(0.15) : Color.gray.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             if !isUser { Spacer(minLength: 40) }
         }
     }
@@ -336,6 +347,11 @@ struct NativeChatView: View {
                 let stream = try engine.streamSend(text)
                 for try await chunk in stream {
                     threads.currentThread.messages[replyIndex].content += chunk
+                }
+                // Set only if a generate_image tool call actually ran
+                // as part of that stream (see NativeChatEngine.refreshTools).
+                if let imagePath = engine.consumeLastGeneratedImagePath() {
+                    threads.currentThread.messages[replyIndex].generatedImagePath = imagePath
                 }
             } catch {
                 threads.currentThread.messages.append(

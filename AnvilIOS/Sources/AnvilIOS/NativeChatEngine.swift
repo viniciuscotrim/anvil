@@ -31,12 +31,27 @@ import Tokenizers
 /// same "Prompt Re-hydration" `ChatSession` itself documents for
 /// persistent chat apps, restoring a saved conversation's turns instead
 /// of starting the model over with no memory of what was said.
+///
+/// `generate_image` tool-calling is wired directly to `imageEngine`
+/// (injected, the same instance `NativeImageView` and Prompt to Model
+/// share) — `ChatSession.tools`/`toolDispatch` handle the whole
+/// call-then-continue round trip internally, so unlike the Mac app's
+/// two-request dance (`ChatViewModel.send` detecting a tool call, then
+/// sending a follow-up itself), a single `streamSend`/`send` call here
+/// already carries the tool call, its result, and the model's narrated
+/// follow-up in one stream.
 @MainActor
 final class NativeChatEngine: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var loadProgress: Double?
     @Published private(set) var loadedModelID: String?
     @Published var errorMessage: String?
+    /// Set by the `generate_image` tool dispatch when a call completes
+    /// during the current `send`/`streamSend` — the caller reads it
+    /// once the stream finishes to attach the image to the visible
+    /// reply (`ChatMessage.generatedImagePath`), mirroring
+    /// `ChatViewModel.runGenerateImageTool`'s returned path on the Mac.
+    @Published private(set) var lastGeneratedImagePath: String?
 
     // Qualified explicitly: the vendored StableDiffusion sources
     // (`NativeImageEngine`'s `StableDiffusion/` directory) declare their
@@ -45,6 +60,11 @@ final class NativeChatEngine: ObservableObject {
     // one instead of MLXLMCommon's.
     private var container: MLXLMCommon.ModelContainer?
     private var session: ChatSession?
+    private let imageEngine: NativeImageEngine
+
+    init(imageEngine: NativeImageEngine) {
+        self.imageEngine = imageEngine
+    }
 
     /// Whether a model's weights are currently resident — gates the
     /// Load/Unload button and the model-ID field, same meaning it had
@@ -95,10 +115,26 @@ final class NativeChatEngine: ObservableObject {
     /// or reloading anything. A no-op if nothing is loaded yet; the
     /// next `load(modelID:instructions:history:)` call starts a session
     /// once it finishes.
+    ///
+    /// If the image engine is already loaded, the `generate_image`
+    /// usage-discipline reminder (see `ChatTool`) is folded into the
+    /// system prompt right away — this only takes effect for the
+    /// thread's very first turn (once the KV cache is non-empty, a
+    /// later `session.instructions` change can't retroactively rewrite
+    /// what's already baked into it), but `refreshTools` still keeps
+    /// `tools`/`toolDispatch` current on every turn regardless.
     func startSession(instructions: String? = nil, history: [ChatMessage] = []) {
         guard let container else { return }
+        var parts: [String] = []
+        if let instructions, !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(instructions)
+        }
+        if imageEngine.isLoaded {
+            parts.append(ChatTool.generateImageUsageDiscipline)
+        }
+        let composedInstructions = parts.isEmpty ? nil : parts.joined(separator: "\n\n")
         session = ChatSession(
-            container, instructions: instructions, history: Self.chatHistory(from: history))
+            container, instructions: composedInstructions, history: Self.chatHistory(from: history))
     }
 
     func unload() {
@@ -111,6 +147,7 @@ final class NativeChatEngine: ObservableObject {
     /// `ChatClient.send` gives the macOS app.
     func send(_ text: String) async throws -> String {
         guard let session else { throw NativeChatEngineError.notLoaded }
+        refreshTools()
         return try await session.respond(to: text)
     }
 
@@ -119,7 +156,88 @@ final class NativeChatEngine: ObservableObject {
     /// (today it doesn't — it waits for the full response).
     func streamSend(_ text: String) throws -> AsyncThrowingStream<String, Error> {
         guard let session else { throw NativeChatEngineError.notLoaded }
+        refreshTools()
         return session.streamResponse(to: text)
+    }
+
+    /// Offers `generate_image` only once the on-device image engine has
+    /// actually been loaded at least once (in Images or Prompt to
+    /// Model) — re-checked before every request rather than only at
+    /// session creation, since the user can load it from another tab
+    /// mid-conversation. Deliberately conservative: unlike the Mac app
+    /// (which can check a whole registry of already-downloaded image
+    /// models before offering the tool), NativeImageEngine's one preset
+    /// downloads several GB on first load, so a chat message alone
+    /// should never be what silently kicks that off.
+    private func refreshTools() {
+        guard let session else { return }
+        guard imageEngine.isLoaded else {
+            session.tools = nil
+            session.toolDispatch = nil
+            return
+        }
+        session.tools = [Self.generateImageToolSpec]
+        session.toolDispatch = { [weak self] call in
+            guard let self else { return "Error: chat engine unavailable." }
+            return await self.handleGenerateImageToolCall(call)
+        }
+    }
+
+    /// Runs a `generate_image` tool call for real against the shared
+    /// `NativeImageEngine` — the same engine, gallery, and
+    /// `GeneratedImageStore` the Images tab and Prompt to Model use.
+    /// Unlike the Mac app's `runGenerateImageTool` (which loads a
+    /// registered image model on demand), the tool is only ever offered
+    /// once `imageEngine.isLoaded` is already true (see `refreshTools`),
+    /// so no on-demand load happens here.
+    private func handleGenerateImageToolCall(_ call: MLXLMCommon.ToolCall) async -> String {
+        guard case .string(let prompt)? = call.function.arguments["prompt"],
+            !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return "Error: missing or empty prompt argument."
+        }
+        await imageEngine.generate(prompt: prompt)
+        if let error = imageEngine.errorMessage {
+            return "Error generating image: \(error)"
+        }
+        lastGeneratedImagePath = imageEngine.selectedImage?.localPath
+        return "Image generated successfully and is already displayed to the user in this chat. "
+            + "Do not include a URL or Markdown image syntax — just briefly acknowledge it in plain text."
+    }
+
+    /// Consumes whatever `handleGenerateImageToolCall` set during the
+    /// last `send`/`streamSend` — read-once so a later, unrelated reply
+    /// doesn't accidentally re-attach an old image.
+    func consumeLastGeneratedImagePath() -> String? {
+        defer { lastGeneratedImagePath = nil }
+        return lastGeneratedImagePath
+    }
+
+    /// JSON-Schema tool spec for `generate_image`, built from
+    /// `ChatTool.generateImage` (AnvilCore) so the name/description/
+    /// wording stay a single source of truth with the Mac app's HTTP
+    /// tool-call shape — just re-serialized into `ToolSpec`
+    /// (`ChatSession`'s native format) instead of `ChatTool`'s own
+    /// `wireRepresentation` (internal to AnvilCore, and shaped for
+    /// `ChatClient`'s HTTP request body rather than `ChatSession`).
+    private static var generateImageToolSpec: ToolSpec {
+        let tool = ChatTool.generateImage
+        var properties: [String: any Sendable] = [:]
+        for parameter in tool.parameters {
+            properties[parameter.name] = ["type": parameter.type, "description": parameter.description]
+        }
+        return [
+            "type": "function",
+            "function": [
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": [
+                    "type": "object",
+                    "properties": properties,
+                    "required": tool.parameters.map(\.name),
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ]
     }
 
     /// A one-off, stateless completion using whichever model is already
@@ -137,11 +255,12 @@ final class NativeChatEngine: ObservableObject {
     /// Converts a persisted thread's messages into the wire format
     /// `ChatSession`'s history initializer expects. The system prompt
     /// is carried separately via `instructions` rather than as a stored
-    /// message, and `.tool`/`.system` turns aren't replayed — iOS chat
-    /// doesn't dispatch tools yet (`generate_image` isn't wired into
-    /// `NativeChatEngine`), so none exist in a real persisted thread to
-    /// skip today; guarding here just means one won't crash re-hydration
-    /// once tool-calling does land.
+    /// message, and `.tool`/`.system` turns aren't replayed — a
+    /// `generate_image` round trip's tool-call/tool-result messages
+    /// exist only transiently inside `ChatSession`'s own KV cache during
+    /// a single `send`/`streamSend` call (see `refreshTools`), never in
+    /// a persisted `ChatThread`, so there's nothing of that shape to
+    /// restore on rehydration.
     private static func chatHistory(from messages: [ChatMessage]) -> [Chat.Message] {
         messages.compactMap { message in
             switch message.role {

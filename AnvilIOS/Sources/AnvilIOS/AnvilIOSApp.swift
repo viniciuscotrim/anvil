@@ -22,8 +22,17 @@ struct AnvilIOSApp: App {
     /// models Chat and Images already hold — one resident model per
     /// kind, shared across tabs, matching `AppState`'s
     /// `ModelSessionManager`/`ImageSessionManager` singletons on macOS.
-    @StateObject private var chatEngine = NativeChatEngine()
-    @StateObject private var imageEngine = NativeImageEngine()
+    /// `chatEngine` also needs a direct reference to `imageEngine` for
+    /// its `generate_image` tool-call dispatch, hence the explicit
+    /// `init()` below instead of two independent property initializers.
+    @StateObject private var chatEngine: NativeChatEngine
+    @StateObject private var imageEngine: NativeImageEngine
+
+    init() {
+        let imageEngine = NativeImageEngine()
+        _imageEngine = StateObject(wrappedValue: imageEngine)
+        _chatEngine = StateObject(wrappedValue: NativeChatEngine(imageEngine: imageEngine))
+    }
 
     var body: some Scene {
         WindowGroup {
