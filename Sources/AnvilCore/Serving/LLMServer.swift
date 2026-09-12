@@ -11,8 +11,9 @@ import Foundation
 /// Manages one `mlx_lm.server` subprocess — the same OpenAI-compatible
 /// `/v1/chat/completions` + `/v1/models` shape oMLX serves today, so the
 /// existing persona proxies need zero changes once this replaces it on
-/// port 8000. One server per running Anvil process for now; Phase 5
-/// introduces true concurrent multi-model residency.
+/// port 8000. The server's prefix KV cache is enabled explicitly so
+/// repeated requests for the same thread reuse prefill work while the
+/// existing tool-calling implementation remains intact.
 public actor LLMServer {
     private var process: Process?
     private var launcherURL: URL?
@@ -28,6 +29,10 @@ public actor LLMServer {
         process?.isRunning ?? false
     }
 
+    public var processIdentifier: pid_t? {
+        process?.processIdentifier
+    }
+
     /// `displayName` becomes this process's name in Activity Monitor
     /// ("Anvil - <displayName>") — see `NamedLauncher` for why that
     /// needs more than just picking a nice `arguments[0]`.
@@ -36,6 +41,8 @@ public actor LLMServer {
         displayName: String,
         host: String = "127.0.0.1",
         port: Int = 8000,
+        promptCacheSize: Int = 16,
+        promptCacheBytes: String = "2G",
         onLog: (@Sendable (String) -> Void)? = nil
     ) async throws {
         if isRunning { await stop() }
@@ -49,7 +56,14 @@ public actor LLMServer {
 
         let proc = Process()
         proc.executableURL = launcher
-        proc.arguments = [script.path, "--model", modelPath, "--host", host, "--port", String(port)]
+        proc.arguments = [
+            script.path,
+            "--model", modelPath,
+            "--host", host,
+            "--port", String(port),
+            "--prompt-cache-size", String(promptCacheSize),
+            "--prompt-cache-bytes", promptCacheBytes
+        ]
 
         outputTail = OutputTail()
         let tail = outputTail
@@ -117,6 +131,9 @@ public actor LLMServer {
         while Date() < deadline {
             if !process.isRunning {
                 throw ServingError.serverFailedToStart(failureDetail("process exited before becoming ready"))
+            }
+            if outputTail.containsAny(["application startup complete", "uvicorn running on", "listening on"]) {
+                return
             }
             if let (_, response) = try? await URLSession.shared.data(from: modelsURL),
                let http = response as? HTTPURLResponse,

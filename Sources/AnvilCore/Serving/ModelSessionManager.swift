@@ -40,8 +40,12 @@ public final class ModelSessionManager: ObservableObject {
     @Published public private(set) var sessions: [Session] = []
 
     private var servers: [String: LLMServer] = [:]
+    private let residency: ResidencyPlanner
+    private let gateway: OpenAIGateway?
 
-    public init() {
+    public init(residency: ResidencyPlanner = ResidencyPlanner(), gateway: OpenAIGateway? = nil) {
+        self.residency = residency
+        self.gateway = gateway
         // Best-effort: clean up launcher symlinks a previous run left
         // behind (a crash, a force-quit) — harmless either way, each
         // gets recreated the next time that model loads.
@@ -70,6 +74,11 @@ public final class ModelSessionManager: ObservableObject {
         return URL(string: "http://127.0.0.1:\(session.port)")
     }
 
+    public func gatewayEndpoint(for modelID: String) -> URL? {
+        guard gateway != nil, isLoaded(modelID: modelID) else { return nil }
+        return OpenAIGateway.sharedEndpoint
+    }
+
     /// Suggests the next free local port, starting at 8000 — a
     /// starting point for a settings UI to offer, not a value forced
     /// on the user.
@@ -89,8 +98,20 @@ public final class ModelSessionManager: ObservableObject {
             if case .loading = existing.status { return false }
         }
 
+        guard residency.reserve(model) else {
+            upsert(Session(
+                model: model,
+                port: port ?? portForNewSession(access: access),
+                access: access,
+                status: .failed("Not enough unified memory for this model. Unload another model first."
+                    + " Estimated need: \(ByteCountFormatter.string(fromByteCount: residency.estimate(for: model), countStyle: .memory)).")
+            ))
+            return false
+        }
+
         let resolvedPort = port ?? portForNewSession(access: access)
         guard PortProbe.isFree(resolvedPort, host: access.host) else {
+            residency.release(modelID: model.id)
             upsert(Session(
                 model: model, port: resolvedPort, access: access,
                 status: .failed("Port \(resolvedPort) is already in use — pick another.")
@@ -102,6 +123,7 @@ public final class ModelSessionManager: ObservableObject {
 
         let ready = await requirements.ensure(TextModelRuntimeDependency())
         guard ready else {
+            residency.release(modelID: model.id)
             let reason = requirements.lastError ?? "Could not set up text generation"
             upsert(Session(model: model, port: resolvedPort, access: access, status: .failed(reason)))
             return false
@@ -116,9 +138,22 @@ public final class ModelSessionManager: ObservableObject {
                 port: resolvedPort
             )
             servers[model.id] = server
+            if let gateway {
+                await gateway.register(
+                    modelID: model.id,
+                    endpoint: URL(string: "http://127.0.0.1:\(resolvedPort)")!
+                )
+            }
+            if let pid = await server.processIdentifier {
+                residency.updateMeasuredResidentBytes(
+                    modelID: model.id,
+                    bytes: ProcessMemoryUsage.residentBytes(pid: pid)
+                )
+            }
             upsert(Session(model: model, port: resolvedPort, access: access, status: .ready))
             return true
         } catch {
+            residency.release(modelID: model.id)
             upsert(Session(model: model, port: resolvedPort, access: access, status: .failed(error.localizedDescription)))
             return false
         }
@@ -144,22 +179,33 @@ public final class ModelSessionManager: ObservableObject {
         if let server = servers.removeValue(forKey: modelID) {
             await server.stop()
         }
+        if let gateway { await gateway.unregister(modelID: modelID) }
         sessions.removeAll { $0.id == modelID }
+        residency.release(modelID: modelID)
     }
 
     /// Stops every loaded model — called on app quit so no
     /// `mlx_lm.server` process is left running in the background.
     public func unloadAll() async {
+        let modelIDs = sessions.map(\.id)
         for server in servers.values {
             await server.stop()
         }
         servers.removeAll()
+        if let gateway {
+            for modelID in modelIDs {
+                await gateway.unregister(modelID: modelID)
+            }
+        }
         sessions.removeAll()
+        for modelID in modelIDs {
+            residency.release(modelID: modelID)
+        }
     }
 
     private func portForNewSession(access: ServerAccess) -> Int {
         let used = Set(sessions.map(\.port))
-        var candidate = 8000
+        var candidate = 8100
         while used.contains(candidate) || !PortProbe.isFree(candidate, host: access.host) {
             candidate += 1
         }

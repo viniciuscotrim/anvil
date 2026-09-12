@@ -44,6 +44,22 @@ Concretely:
 - The app manages its own backend Python process, running inside the private venv described above, built on `mlx-lm` (text), `mflux` (image), `mlx-audio` (voice) as dependencies
 - OpenAI-compatible API on port 8000 — a drop-in replacement for oMLX, zero config changes needed on any persona proxy
 
+### Current Mac serving architecture
+
+Anvil reserves `127.0.0.1:8000` for its native OpenAI-compatible gateway.
+Text model processes use internal ports starting at `8100`; image processes
+remain on their own internal ports. The gateway routes by the request's
+`model` field and preserves SSE streaming. A request may also carry
+`conversation_id`, propagated from the Swift thread but optional for external
+OpenAI-compatible clients.
+
+Text servers enable `mlx-lm`'s prefix `LRUPromptCache` with bounded size and
+bytes. The cache is prefix-based rather than a separate Python session map:
+the full conversation prompt is sent as before, and `mlx-lm` reuses the
+longest cached prefix. The shared residency planner reserves headroom for
+that cache and records managed process RSS after readiness. Tool calling
+continues through the official `mlx_lm.server` implementation.
+
 ---
 
 ## Phase 1 — Requirements Manager (build this first, it's the foundation everything else sits on)

@@ -71,6 +71,25 @@ struct ChatClientTests {
         #expect(object["model"] as? String == "default_model")
     }
 
+    @Test
+    func sendsConversationIDAsAnOptionalRoutingHint() async throws {
+        let recorder = RequestRecorder()
+        MockURLProtocol.onRequest = { request in recorder.record(request) }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let client = ChatClient(session: URLSession(configuration: config))
+
+        _ = try? await client.send(
+            messages: [ChatMessage(role: .user, content: "hi")],
+            baseURL: URL(string: "http://127.0.0.1:9")!,
+            conversationID: "thread-123"
+        )
+
+        let body = recorder.capturedBody
+        let object = try #require(body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+        #expect(object["conversation_id"] as? String == "thread-123")
+    }
+
     /// The wire format `ChatClient` actually sends is narrower than the
     /// full `ChatMessage` model — only role/content per message, none
     /// of the locally-persisted extras (id, reasoning, modelDisplayName,
@@ -141,7 +160,7 @@ struct ChatClientTests {
     @Test
     func recordsWhichModelAnsweredAndAMeasuredTokensPerSecond() async throws {
         MockURLProtocol.responseBody = Data(
-            #"{"choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"completion_tokens":10}}"#.utf8
+            #"{"choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":7}}}"#.utf8
         )
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
@@ -155,6 +174,7 @@ struct ChatClientTests {
 
         #expect(reply.modelDisplayName == "SmolLM2-135M")
         #expect(reply.tokensPerSecond != nil)
+        #expect(reply.cachedPromptTokens == 7)
     }
 }
 

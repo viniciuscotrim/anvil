@@ -232,7 +232,8 @@ final class CodeAgentViewModel: ObservableObject {
     /// bug: a generation that never stopped left no way to reclaim it
     /// short of unloading the whole model.
     func send() {
-        guard let id = selectedModelID, let endpoint = sessions.chatEndpoint(for: id) else {
+          guard let id = selectedModelID,
+              let endpoint = sessions.gatewayEndpoint(for: id) ?? sessions.chatEndpoint(for: id) else {
             errorMessage = "Pick a loaded model first"
             return
         }
@@ -255,7 +256,12 @@ final class CodeAgentViewModel: ObservableObject {
         isSending = true
         generationTask = Task { [weak self] in
             await self?.runAgentLoop(
-                endpoint: endpoint, modelDisplayName: modelDisplayName, tools: tools, systemPrompt: systemPrompt)
+                endpoint: endpoint,
+                modelID: id,
+                modelDisplayName: modelDisplayName,
+                tools: tools,
+                systemPrompt: systemPrompt
+            )
             guard let self else { return }
             self.isSending = false
             self.currentRoundStartedAt = nil
@@ -274,7 +280,7 @@ final class CodeAgentViewModel: ObservableObject {
     }
 
     private func runAgentLoop(
-        endpoint: URL, modelDisplayName: String, tools: [ChatTool], systemPrompt: String?
+        endpoint: URL, modelID: String, modelDisplayName: String, tools: [ChatTool], systemPrompt: String?
     ) async {
         do {
             for _ in 0..<Self.maxToolRounds {
@@ -292,10 +298,12 @@ final class CodeAgentViewModel: ObservableObject {
                 let stream = client.streamSend(
                     messages: historyForRequest,
                     baseURL: endpoint,
+                    model: endpoint.port == OpenAIGateway.port ? modelID : "default_model",
                     modelDisplayName: modelDisplayName,
                     settings: settings,
                     tools: tools,
-                    systemPrompt: systemPrompt
+                    systemPrompt: systemPrompt,
+                    conversationID: currentThread.id.uuidString
                 )
 
                 var finalMessage: ChatMessage?

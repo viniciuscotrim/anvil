@@ -21,6 +21,7 @@ final class ChatViewModel: ObservableObject {
     @Published var isExportPresented = false
     @Published var isSidebarOpen = false
     @Published private(set) var lastTokensPerSecond: Double?
+    @Published private(set) var lastCachedPromptTokens: Int?
     /// Set while a `generate_image` tool call is actively generating —
     /// nil the rest of the time, including while just waiting on the
     /// text model itself.
@@ -52,6 +53,7 @@ final class ChatViewModel: ObservableObject {
     /// generations drifted in skin tone, hair, eyes, and body type even
     /// though only the clothing was meant to change.
     private var lastImageGenerationByThread: [UUID: (seed: Int, prompt: String)] = [:]
+    private var generationTask: Task<Void, Never>?
 
     init(
         sessions: ModelSessionManager,
@@ -174,6 +176,7 @@ final class ChatViewModel: ObservableObject {
     func clearCurrentConversation() {
         currentThread.messages.removeAll()
         lastTokensPerSecond = nil
+        lastCachedPromptTokens = nil
         lastImageGenerationByThread.removeValue(forKey: currentThread.id)
         if !isTemporaryModeActive {
             persistCurrentThread()
@@ -199,7 +202,8 @@ final class ChatViewModel: ObservableObject {
     // MARK: - Sending
 
     func send() async {
-        guard let id = selectedModelID, let endpoint = sessions.chatEndpoint(for: id) else {
+          guard let id = selectedModelID,
+              let endpoint = sessions.gatewayEndpoint(for: id) ?? sessions.chatEndpoint(for: id) else {
             errorMessage = "Pick a loaded model first"
             return
         }
@@ -239,43 +243,125 @@ final class ChatViewModel: ObservableObject {
         let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty)
 
         isSending = true
-        defer { isSending = false }
-
-        do {
-            var reply = try await client.send(
-                messages: currentThread.messages,
-                baseURL: endpoint,
+        generationTask = Task { [weak self] in
+            await self?.runChatLoop(
+                endpoint: endpoint,
                 modelDisplayName: modelDisplayName,
-                settings: settings,
                 tools: tools,
                 systemPrompt: systemPrompt
             )
+            guard let self else { return }
+            self.isSending = false
+            self.generationTask = nil
+        }
+    }
+
+    func stopGeneration() {
+        generationTask?.cancel()
+    }
+
+    private func runChatLoop(
+        endpoint: URL,
+        modelDisplayName: String,
+        tools: [ChatTool],
+        systemPrompt: String?
+    ) async {
+        do {
+            currentThread.messages.append(ChatMessage(
+                role: .assistant,
+                content: "",
+                modelDisplayName: modelDisplayName
+            ))
+            let replyIndex = currentThread.messages.count - 1
+            let historyForRequest = Array(currentThread.messages.dropLast())
+            let stream = client.streamSend(
+                messages: historyForRequest,
+                baseURL: endpoint,
+                model: idForEndpoint(endpoint, modelID: selectedModelID),
+                modelDisplayName: modelDisplayName,
+                settings: settings,
+                tools: tools,
+                systemPrompt: systemPrompt,
+                conversationID: currentThread.id.uuidString
+            )
+
+            var reply: ChatMessage?
+            for try await event in stream {
+                try Task.checkCancellation()
+                switch event {
+                case .contentDelta(let delta):
+                    currentThread.messages[replyIndex].content += delta
+                case .reasoningDelta(let delta):
+                    currentThread.messages[replyIndex].reasoning =
+                        (currentThread.messages[replyIndex].reasoning ?? "") + delta
+                case .done(let message):
+                    reply = message
+                }
+            }
+            guard let reply else { return }
+            currentThread.messages[replyIndex] = reply
 
             if let toolCall = reply.toolCalls?.first(where: { $0.name == "generate_image" }) {
-                currentThread.messages.append(reply)
                 let (toolResult, generatedPath) = await runGenerateImageTool(toolCall)
                 currentThread.messages.append(toolResult)
-
-                // No `tools` on the follow-up — the model just needs to
-                // narrate the result, not call anything else.
-                reply = try await client.send(
+                let followUpStream = client.streamSend(
                     messages: currentThread.messages,
                     baseURL: endpoint,
+                    model: idForEndpoint(endpoint, modelID: selectedModelID),
                     modelDisplayName: modelDisplayName,
                     settings: settings,
-                    systemPrompt: systemPrompt
+                    systemPrompt: systemPrompt,
+                    conversationID: currentThread.id.uuidString
                 )
-                reply.generatedImagePath = generatedPath
+                currentThread.messages.append(ChatMessage(
+                    role: .assistant,
+                    content: "",
+                    modelDisplayName: modelDisplayName
+                ))
+                let followUpIndex = currentThread.messages.count - 1
+                var followUpReply: ChatMessage?
+                for try await event in followUpStream {
+                    try Task.checkCancellation()
+                    switch event {
+                    case .contentDelta(let delta):
+                        currentThread.messages[followUpIndex].content += delta
+                    case .reasoningDelta(let delta):
+                        currentThread.messages[followUpIndex].reasoning =
+                            (currentThread.messages[followUpIndex].reasoning ?? "") + delta
+                    case .done(let message):
+                        followUpReply = message
+                    }
+                }
+                if var followUpReply {
+                    followUpReply.generatedImagePath = generatedPath
+                    currentThread.messages[followUpIndex] = followUpReply
+                }
             }
 
-            currentThread.messages.append(reply)
-            lastTokensPerSecond = reply.tokensPerSecond
+            if let finalMessage = currentThread.messages.last(where: { $0.role == .assistant }) {
+                lastTokensPerSecond = finalMessage.tokensPerSecond
+                lastCachedPromptTokens = finalMessage.cachedPromptTokens
+            }
+            if !isTemporaryModeActive {
+                persistCurrentThread()
+            }
+        } catch is CancellationError {
+            if let last = currentThread.messages.last,
+               last.role == .assistant,
+               last.content.isEmpty,
+               last.toolCalls == nil {
+                currentThread.messages.removeLast()
+            }
             if !isTemporaryModeActive {
                 persistCurrentThread()
             }
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func idForEndpoint(_ endpoint: URL, modelID: String?) -> String {
+        endpoint.port == OpenAIGateway.port ? (modelID ?? "default_model") : "default_model"
     }
 
     /// The active profile's prompt, plus (whenever the image tool is on

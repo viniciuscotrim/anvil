@@ -8,6 +8,19 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
+## Current release: 0.5.0
+
+This release adds the local OpenAI-compatible gateway on `127.0.0.1:8000`,
+shared unified-memory planning, process RSS telemetry, and bounded prefix KV
+caching through `mlx-lm` (`16` cache entries and `2G` per text server). Chat
+and Code requests carry an optional `conversation_id`, and the Chat header
+reports the latest server-reported cached prompt tokens.
+
+The release artifact is signed but not automatically notarized. Build it with
+`scripts/package-dmg.sh 0.5.0`; notarization uses the separate
+`scripts/notarize-dmg.sh` credentialed step. See [CHANGELOG.md](CHANGELOG.md)
+for the complete release notes.
+
 ## Status
 
 Build is in progress, phase by phase, each gated on a real pass/fail check

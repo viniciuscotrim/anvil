@@ -45,6 +45,7 @@ public struct ImageClient: Sendable {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/images/generations"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("1", forHTTPHeaderField: "X-Anvil-Local")
         // Generation can genuinely take minutes for a large model/step count.
         request.timeoutInterval = 300
 

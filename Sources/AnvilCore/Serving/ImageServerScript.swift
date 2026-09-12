@@ -182,20 +182,21 @@ enum ImageServerScript {
                 output_path = output_dir / filename
                 image.save(path=str(output_path))
 
-                b64 = base64.b64encode(output_path.read_bytes()).decode("ascii")
+                item = {
+                    "path": str(output_path),
+                    "seed": seed,
+                    "width": width,
+                    "height": height,
+                }
+                # The native client reads the local file directly. Keep the
+                # base64 field for ordinary OpenAI-compatible clients.
+                if self.headers.get("X-Anvil-Local") != "1":
+                    item["b64_json"] = base64.b64encode(output_path.read_bytes()).decode("ascii")
                 self._send_json(
                     200,
                     {
                         "created": int(time.time()),
-                        "data": [
-                            {
-                                "b64_json": b64,
-                                "path": str(output_path),
-                                "seed": seed,
-                                "width": width,
-                                "height": height,
-                            }
-                        ],
+                        "data": [item],
                     },
                 )
 

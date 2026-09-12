@@ -15,6 +15,8 @@ import AnvilCore
 @MainActor
 final class AppState: ObservableObject {
     let requirements: RequirementsManager
+    let residency: ResidencyPlanner
+    let gateway: OpenAIGateway
     let sessions: ModelSessionManager
     let imageSessions: ImageSessionManager
     let threadStore: ChatThreadStore
@@ -30,8 +32,10 @@ final class AppState: ObservableObject {
 
     init() {
         let requirements = RequirementsManager()
-        let sessions = ModelSessionManager()
-        let imageSessions = ImageSessionManager()
+        let residency = ResidencyPlanner()
+        let gateway = OpenAIGateway()
+        let sessions = ModelSessionManager(residency: residency, gateway: gateway)
+        let imageSessions = ImageSessionManager(residency: residency, gateway: gateway)
         let threadStore = ChatThreadStore()
         // Its own file, separate from Chat's threads.json — a Code
         // conversation (tool-call/result messages included) has no
@@ -45,6 +49,8 @@ final class AppState: ObservableObject {
         let profileStore = ChatProfileStore()
         let modelRegistry = ModelRegistry()
         self.requirements = requirements
+        self.residency = residency
+        self.gateway = gateway
         self.sessions = sessions
         self.imageSessions = imageSessions
         self.threadStore = threadStore
@@ -71,5 +77,6 @@ final class AppState: ObservableObject {
         )
         self.modelManager = ModelManagerViewModel(requirements: requirements)
         self.codeAgent = CodeAgentViewModel(sessions: sessions, threadStore: codeThreadStore, requirements: requirements)
+        Task { try? await gateway.start() }
     }
 }

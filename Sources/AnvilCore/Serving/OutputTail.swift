@@ -33,4 +33,9 @@ final class OutputTail: @unchecked Sendable {
         defer { lock.unlock() }
         return buffer.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    func containsAny(_ markers: [String]) -> Bool {
+        let current = text.lowercased()
+        return markers.contains { current.contains($0.lowercased()) }
+    }
 }

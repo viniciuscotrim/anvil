@@ -35,6 +35,10 @@ public actor ImageServer {
         process?.isRunning ?? false
     }
 
+    public var processIdentifier: pid_t? {
+        process?.processIdentifier
+    }
+
     public func start(
         modelPath: String,
         displayName: String,
@@ -146,6 +150,9 @@ public actor ImageServer {
         while Date() < deadline {
             if !process.isRunning {
                 throw ServingError.serverFailedToStart(failureDetail("process exited before becoming ready"))
+            }
+            if outputTail.containsAny(["starting httpd at", "serving http on", "listening on"]) {
+                return
             }
             if let (_, response) = try? await URLSession.shared.data(from: modelsURL),
                let http = response as? HTTPURLResponse,

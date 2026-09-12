@@ -11,6 +11,7 @@ import AnvilCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var sessions: ModelSessionManager?
     var imageSessions: ImageSessionManager?
+    var gateway: OpenAIGateway?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let hasLoadedSessions = !(sessions?.sessions.isEmpty ?? true) || !(imageSessions?.sessions.isEmpty ?? true)
@@ -19,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             await sessions?.unloadAll()
             await imageSessions?.unloadAll()
+            if let gateway { await gateway.stop() }
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

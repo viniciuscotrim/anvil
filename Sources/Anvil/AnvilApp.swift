@@ -24,6 +24,7 @@ struct AnvilApp: App {
                 .onAppear {
                     appDelegate.sessions = appState.sessions
                     appDelegate.imageSessions = appState.imageSessions
+                    appDelegate.gateway = appState.gateway
                 }
         }
         .windowResizability(.contentSize)

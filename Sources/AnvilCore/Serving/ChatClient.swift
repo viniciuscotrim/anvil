@@ -34,7 +34,8 @@ public struct ChatClient: Sendable {
         modelDisplayName: String = "",
         settings: GenerationSettings = .default,
         tools: [ChatTool] = [],
-        systemPrompt: String? = nil
+        systemPrompt: String? = nil,
+        conversationID: String? = nil
     ) async throws -> ChatMessage {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
         request.httpMethod = "POST"
@@ -64,6 +65,7 @@ public struct ChatClient: Sendable {
         if !tools.isEmpty {
             body["tools"] = tools.map(\.wireRepresentation)
         }
+        if let conversationID { body["conversation_id"] = conversationID }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let start = Date()
@@ -95,6 +97,7 @@ public struct ChatClient: Sendable {
         }
 
         let completionTokens = decoded.usage?.completionTokens ?? 0
+        let cachedPromptTokens = decoded.usage?.promptTokensDetails?.cachedTokens
         let tokensPerSecond = (completionTokens > 0 && elapsedSeconds > 0)
             ? Double(completionTokens) / elapsedSeconds
             : nil
@@ -109,6 +112,7 @@ public struct ChatClient: Sendable {
             reasoning: choice.message.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             modelDisplayName: modelDisplayName.nilIfEmpty,
             tokensPerSecond: tokensPerSecond,
+            cachedPromptTokens: cachedPromptTokens,
             toolCalls: (toolCalls?.isEmpty ?? true) ? nil : toolCalls
         )
     }
@@ -141,7 +145,8 @@ public struct ChatClient: Sendable {
         modelDisplayName: String = "",
         settings: GenerationSettings = .default,
         tools: [ChatTool] = [],
-        systemPrompt: String? = nil
+        systemPrompt: String? = nil,
+        conversationID: String? = nil
     ) -> AsyncThrowingStream<ChatStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -170,6 +175,7 @@ public struct ChatClient: Sendable {
                     if !tools.isEmpty {
                         body["tools"] = tools.map(\.wireRepresentation)
                     }
+                    if let conversationID { body["conversation_id"] = conversationID }
                     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
                     let start = Date()
@@ -189,6 +195,7 @@ public struct ChatClient: Sendable {
                     var reasoningSoFar = ""
                     var toolCallAccumulators: [Int: ToolCallAccumulator] = [:]
                     var completionTokens = 0
+                    var cachedPromptTokens: Int?
 
                     for try await line in bytes.lines {
                         try Task.checkCancellation()
@@ -201,6 +208,7 @@ public struct ChatClient: Sendable {
 
                         if let usage = chunk.usage {
                             completionTokens = usage.completionTokens
+                            cachedPromptTokens = usage.promptTokensDetails?.cachedTokens
                         }
                         guard let choice = chunk.choices.first else { continue }
                         if let contentDelta = choice.delta.content, !contentDelta.isEmpty {
@@ -242,6 +250,7 @@ public struct ChatClient: Sendable {
                         reasoning: reasoningSoFar.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
                         modelDisplayName: modelDisplayName.nilIfEmpty,
                         tokensPerSecond: tokensPerSecond,
+                        cachedPromptTokens: cachedPromptTokens,
                         toolCalls: (toolCalls?.isEmpty ?? true) ? nil : toolCalls
                     )
                     continuation.yield(.done(finalMessage))
@@ -301,8 +310,10 @@ private struct ChatCompletionResponse: Decodable {
     }
     struct Usage: Decodable {
         let completionTokens: Int
+        let promptTokensDetails: PromptTokensDetails?
         enum CodingKeys: String, CodingKey {
             case completionTokens = "completion_tokens"
+            case promptTokensDetails = "prompt_tokens_details"
         }
     }
     let choices: [Choice]
@@ -335,12 +346,22 @@ private struct ChatCompletionChunk: Decodable {
     }
     struct Usage: Decodable {
         let completionTokens: Int
+        let promptTokensDetails: PromptTokensDetails?
         enum CodingKeys: String, CodingKey {
             case completionTokens = "completion_tokens"
+            case promptTokensDetails = "prompt_tokens_details"
         }
     }
     let choices: [Choice]
     let usage: Usage?
+}
+
+private struct PromptTokensDetails: Decodable {
+    let cachedTokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case cachedTokens = "cached_tokens"
+    }
 }
 
 private extension String {

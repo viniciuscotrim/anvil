@@ -68,7 +68,8 @@ enum ProcessWatchdog {
       if ! kill -0 "$KILL_PID" 2>/dev/null; then
         exit 0
       fi
-      sleep 2
+      # Keep the orphan window short without making the watchdog busy-spin.
+      sleep 0.2
     done
     """#
 }

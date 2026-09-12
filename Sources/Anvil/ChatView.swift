@@ -99,6 +99,12 @@ struct ChatView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let cached = chat.lastCachedPromptTokens, cached > 0 {
+                Text("cache \(cached)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Button {
                 openWindow(id: "chat-popout")
             } label: {
@@ -225,15 +231,18 @@ struct ChatView: View {
             ), axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...4)
-                .onSubmit { Task { await chat.send() } }
+                .onSubmit { if !chat.isSending { Task { await chat.send() } } }
                 .disabled(sessions.readySessions.isEmpty)
 
-            Button("Send") { Task { await chat.send() } }
-                .disabled(
-                    sessions.readySessions.isEmpty
-                    || chat.isSending
-                    || chat.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                )
+            if chat.isSending {
+                Button("Stop", role: .destructive) { chat.stopGeneration() }
+            } else {
+                Button("Send") { Task { await chat.send() } }
+                    .disabled(
+                        sessions.readySessions.isEmpty
+                        || chat.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+            }
         }
         .padding()
     }
