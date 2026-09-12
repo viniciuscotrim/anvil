@@ -160,6 +160,14 @@ public actor AnvilSyncServer {
         guard segments.count >= 3, segments[0] == "v1", segments[1] == "anvil" else {
             return RouteResponse(status: 404, body: try JSONEncoder.anvil.encode(["error": "not found"]))
         }
+        // POST /v1/anvil/threads/{id}/generate — a 5-segment route, ahead
+        // of the general dispatch below (which only ever looks at a
+        // 4th segment).
+        if request.method == "POST", segments.count == 5, segments[2] == "threads", segments[4] == "generate",
+            let threadID = UUID(uuidString: segments[3]) {
+            return try await handleGenerate(threadID: threadID, body: request.body)
+        }
+
         let collection = segments[2]
         let idSegment = segments.count > 3 ? segments[3] : nil
 
@@ -279,6 +287,125 @@ public actor AnvilSyncServer {
         await sessions.unload(modelID: payload.modelID)
         await imageSessions.unload(modelID: payload.modelID)
         return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await allSessionWires()))
+    }
+
+    /// Triggers a reply on this Mac's own hardware, against its own
+    /// loopback address — never the connection this request arrived
+    /// over. That's the entire point: once this returns, generation
+    /// keeps running as a plain background `Task`, completely detached
+    /// from whichever phone (or Mac window) asked for it, so it
+    /// survives that device losing its network connection, backgrounding
+    /// the app, or closing it outright — the same guarantee the Mac's
+    /// own interactive chat already has for free (it's never depended
+    /// on a phone's connection to begin with). The caller gets the
+    /// thread back immediately with the pending assistant placeholder
+    /// already in it; the real content shows up once this Mac's own
+    /// `ChatThreadStore` is updated, picked up by the ordinary merge/
+    /// polling path like any other change to a thread.
+    ///
+    /// Deliberately narrower than the Mac's own interactive chat for
+    /// now: no `generate_image` tool-calling here (that needs an image
+    /// session to route to, and this endpoint doesn't take one) — a
+    /// reasonable v1 scope cut given the actual ask ("keep generating
+    /// even if my phone disconnects"), not an oversight.
+    private struct GenerateRequest: Decodable { let modelID: String }
+
+    private func handleGenerate(threadID: UUID, body: Data) async throws -> RouteResponse {
+        guard let sessions else { return RouteResponse(status: 404, body: nil) }
+        let payload = try JSONDecoder().decode(GenerateRequest.self, from: body)
+        guard var thread = await threadStore.get(id: threadID) else {
+            return RouteResponse(status: 404, body: try JSONEncoder.anvil.encode(["error": "no such thread"]))
+        }
+        guard let endpoint = await sessions.chatEndpoint(for: payload.modelID) else {
+            return RouteResponse(status: 404, body: try JSONEncoder.anvil.encode(["error": "that model isn't loaded on this Mac"]))
+        }
+        let modelDisplayName = await sessions.session(for: payload.modelID)?.model.displayName ?? payload.modelID
+
+        let placeholder = ChatMessage(role: .assistant, content: "", modelDisplayName: modelDisplayName)
+        thread.messages.append(placeholder)
+        thread = try await threadStore.upsert(thread)
+
+        let threadStoreRef = threadStore
+        let profileStoreRef = profileStore
+        let memoryStoreRef = memoryStore
+        let capturedThreadID = thread.id
+        let placeholderID = placeholder.id
+        Task.detached {
+            await Self.runBackgroundGeneration(
+                threadID: capturedThreadID, placeholderID: placeholderID, endpoint: endpoint,
+                modelDisplayName: modelDisplayName, threadStore: threadStoreRef,
+                profileStore: profileStoreRef, memoryStore: memoryStoreRef)
+        }
+
+        return RouteResponse(status: 202, body: try JSONEncoder.anvil.encode(thread))
+    }
+
+    /// Runs entirely independent of `AnvilSyncServer`'s own actor and
+    /// of any live `NWConnection` — a `static` function taking only
+    /// plain values/actors it needs, specifically so nothing here can
+    /// accidentally capture (and so depend on the lifetime of) the
+    /// connection that originally triggered it.
+    private static func runBackgroundGeneration(
+        threadID: UUID, placeholderID: UUID, endpoint: URL, modelDisplayName: String,
+        threadStore: ChatThreadStore, profileStore: ChatProfileStore, memoryStore: ChatMemoryStore
+    ) async {
+        guard let thread = await threadStore.get(id: threadID) else { return }
+        var profile: ChatProfile?
+        if let profileID = thread.profileID {
+            profile = await profileStore.get(id: profileID)
+        }
+        let allMemories = await memoryStore.all()
+        let scopedMemories = allMemories.filter { $0.profileID == nil || $0.profileID == thread.profileID }
+
+        let settings = AppSettings.load()
+        let contextBuilder = ChatContextBuilder(
+            maxEstimatedTokens: settings.chatMaxEstimatedContextTokens, recentMessageCount: settings.chatRecentMessageCount)
+        // Excludes the placeholder itself — it's empty and would
+        // otherwise become the "current" message the context builder
+        // preserves, the same class of bug already fixed in the
+        // interactive chat loops (a request must end with the user's
+        // real latest message).
+        let historyMessages = thread.messages.filter { $0.id != placeholderID }
+        let context = contextBuilder.build(messages: historyMessages, memories: scopedMemories)
+
+        var systemPromptParts: [String] = []
+        if let prompt = profile?.prompt.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
+            systemPromptParts.append(prompt)
+        }
+        if let memoryPrompt = context.memoryPrompt, !memoryPrompt.isEmpty {
+            systemPromptParts.append(memoryPrompt)
+        }
+        let systemPrompt = systemPromptParts.isEmpty ? nil : systemPromptParts.joined(separator: "\n\n")
+
+        do {
+            var reply = try await ChatClient().send(
+                messages: context.messages, baseURL: endpoint, modelDisplayName: modelDisplayName,
+                settings: .default, systemPrompt: systemPrompt, conversationID: threadID.uuidString)
+            reply.responderName = profile?.name
+            reply.memoryIDsUsed = context.memoryIDs
+            await Self.replacePlaceholder(threadID: threadID, placeholderID: placeholderID, with: reply, threadStore: threadStore)
+        } catch {
+            let failure = ChatMessage(
+                role: .assistant, content: "Error: \(error.localizedDescription)", modelDisplayName: modelDisplayName)
+            await Self.replacePlaceholder(threadID: threadID, placeholderID: placeholderID, with: failure, threadStore: threadStore)
+        }
+    }
+
+    /// Re-reads the thread fresh right before writing back rather than
+    /// reusing an earlier snapshot — something else (the Mac's own
+    /// interactive chat, another sync write) could plausibly have
+    /// changed this same thread while generation was running; this way
+    /// only the one placeholder message this call owns gets touched.
+    private static func replacePlaceholder(
+        threadID: UUID, placeholderID: UUID, with message: ChatMessage, threadStore: ChatThreadStore
+    ) async {
+        guard var latest = await threadStore.get(id: threadID) else { return }
+        if let index = latest.messages.firstIndex(where: { $0.id == placeholderID }) {
+            latest.messages[index] = message
+        } else {
+            latest.messages.append(message)
+        }
+        _ = try? await threadStore.upsert(latest)
     }
 
     private func handleUpdateSettings(_ body: Data) async throws -> RouteResponse {

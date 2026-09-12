@@ -117,6 +117,20 @@ struct NativeChatView: View {
                                 ProgressView().padding(.leading, 8)
                             } else if case .mac = source, remoteEngine.generationPhase != .idle {
                                 remoteGeneratingIndicator
+                            } else if case .mac = source,
+                                let last = threads.currentThread.messages.last,
+                                last.role == .assistant, last.content.isEmpty {
+                                // The Mac-driven path's own task already
+                                // finished (that's the point — it doesn't
+                                // wait around) but the placeholder it
+                                // left behind hasn't been filled in yet.
+                                // The periodic merge (every few seconds)
+                                // is what will fill it, not this view.
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small)
+                                    Text("Generating on the Mac…").font(.caption).foregroundStyle(.secondary)
+                                }
+                                .padding(.leading, 8)
                             }
                         }
                         .padding()
@@ -670,7 +684,13 @@ struct NativeChatView: View {
                 imageConnection: selectedImageConnection,
                 profile: activeProfile,
                 memories: threads.memories,
-                settings: engine.settings
+                settings: engine.settings,
+                // Mac Sync on means AnvilSyncServer's /generate route
+                // exists on that Mac — prefer it: the reply then keeps
+                // going on the Mac's own hardware even if this phone
+                // disconnects mid-reply, unlike holding a direct
+                // streaming connection open the whole time.
+                preferMacDrivenGeneration: threads.isMacSyncAvailable
             )
             inputText = ""
         }

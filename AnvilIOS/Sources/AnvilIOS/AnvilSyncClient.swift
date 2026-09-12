@@ -110,6 +110,24 @@ struct AnvilSyncClient {
         try await put(SettingsBody(modelID: modelID, access: access, port: port), returning: [ModelSessionWire].self, host: host, path: "sessions/settings")
     }
 
+    /// Triggers a reply on the Mac itself, against its own loopback
+    /// address — never this connection. Once this call returns, the Mac
+    /// keeps generating as its own detached background task regardless
+    /// of what happens to the phone (backgrounded, closed, network
+    /// dropped): the whole reason this exists over the direct
+    /// `ChatClient.streamSend` path, which dies the instant this
+    /// connection does since it's the model server's *only* client for
+    /// that reply. Returns the thread with the pending assistant
+    /// placeholder already appended; the real content shows up once
+    /// this thread is re-fetched (the ordinary merge/poll path already
+    /// used everywhere else picks it up like any other change).
+    private struct GenerateBody: Encodable { let modelID: String }
+
+    @discardableResult
+    func generate(threadID: UUID, modelID: String, host: String) async throws -> ChatThread {
+        try await post(GenerateBody(modelID: modelID), path: "threads/\(threadID.uuidString)/generate", host: host)
+    }
+
     // MARK: - Plumbing
 
     private func get<Response: Decodable>(_ type: Response.Type, host: String, path: String) async throws -> Response {

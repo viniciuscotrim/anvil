@@ -46,6 +46,7 @@ final class RemoteChatEngine: ObservableObject {
     @Published var errorMessage: String?
 
     private let client = ChatClient()
+    private let syncClient = AnvilSyncClient()
     private let imageClient = RemoteImageClient()
     private let imageStore = GeneratedImageStore()
     private var generationTask: Task<Void, Never>?
@@ -62,6 +63,16 @@ final class RemoteChatEngine: ObservableObject {
     /// streams the reply into `threads.currentThread`, and (if
     /// `imageConnection` is given) can call `generate_image` against it
     /// mid-reply, exactly like the Mac app's own chat loop.
+    /// `preferMacDrivenGeneration` (pass `threads.isMacSyncAvailable`):
+    /// when true, the reply is triggered on the Mac itself via
+    /// `AnvilSyncServer`'s `/generate` route instead of this phone
+    /// holding its own streaming connection to the model server open —
+    /// see `runMacDrivenGeneration`'s own doc comment for why that's
+    /// what actually survives the phone backgrounding, closing, or
+    /// losing its network connection mid-reply (a real, reported bug:
+    /// the direct-streaming path dies the instant this phone's
+    /// connection does, and the Mac's own server stops generating right
+    /// along with it — there is no client left to write tokens to).
     func send(
         text: String,
         threads: ChatThreadsViewModel,
@@ -70,6 +81,7 @@ final class RemoteChatEngine: ObservableObject {
         profile: ChatProfile?,
         memories: [ChatMemory],
         settings: GenerationSettings,
+        preferMacDrivenGeneration: Bool = false,
         maxEstimatedContextTokens: Int = 24_000,
         recentMessageCount: Int = 12
     ) {
@@ -92,7 +104,6 @@ final class RemoteChatEngine: ObservableObject {
             return
         }
         errorMessage = nil
-        threads.markSendStarted()
 
         threads.currentThread.messages.append(ChatMessage(role: .user, content: trimmed))
         if threads.currentThread.title == "New Chat", threads.currentThread.messages.count == 1 {
@@ -113,27 +124,68 @@ final class RemoteChatEngine: ObservableObject {
 
         generationPhase = .preparing
         generationTask = Task { [weak self] in
-            await self?.runChatLoop(
-                threads: threads,
-                baseURL: baseURL,
-                modelDisplayName: modelDisplayName,
-                responderName: responderName,
-                tools: tools,
-                systemPrompt: systemPrompt,
-                contextMessages: context.messages,
-                memoryIDsUsed: context.memoryIDs,
-                imageConnection: imageConnection,
-                settings: settings,
-                maxEstimatedContextTokens: maxEstimatedContextTokens,
-                recentMessageCount: recentMessageCount,
-                memories: memories
-            )
             guard let self else { return }
+            if preferMacDrivenGeneration {
+                await self.runMacDrivenGeneration(threads: threads, connection: connection)
+            } else {
+                // Only this path positionally mutates `currentThread`'s
+                // messages while it runs, so only this path needs the
+                // periodic Mac merge held off — see `isSendInFlight`'s
+                // own doc comment. The Mac-driven path above never
+                // holds it: it returns almost immediately, and the
+                // ordinary periodic merge is exactly what picks up its
+                // result once the Mac's background task finishes.
+                threads.markSendStarted()
+                await self.runChatLoop(
+                    threads: threads,
+                    baseURL: baseURL,
+                    modelDisplayName: modelDisplayName,
+                    responderName: responderName,
+                    tools: tools,
+                    systemPrompt: systemPrompt,
+                    contextMessages: context.messages,
+                    memoryIDsUsed: context.memoryIDs,
+                    imageConnection: imageConnection,
+                    settings: settings,
+                    maxEstimatedContextTokens: maxEstimatedContextTokens,
+                    recentMessageCount: recentMessageCount,
+                    memories: memories
+                )
+                threads.markSendFinished()
+            }
             self.generationTask = nil
             if self.generationPhase == .preparing || self.generationPhase == .reasoning || self.generationPhase == .generating {
                 self.generationPhase = .idle
             }
-            threads.markSendFinished()
+        }
+    }
+
+    /// Triggers the reply on the Mac itself (`AnvilSyncServer`'s
+    /// `/v1/anvil/threads/{id}/generate`) instead of this phone holding
+    /// its own streaming connection to the model server — the Mac's own
+    /// background task keeps running against its own loopback address
+    /// regardless of what happens to this phone afterward. Returns as
+    /// soon as the Mac has accepted the request and appended its
+    /// pending placeholder; the real content shows up once the ordinary
+    /// periodic merge (`ChatThreadsViewModel`'s ongoing sync loop, still
+    /// running since this never sets `isSendInFlight`) picks up the
+    /// Mac's own completed write — not something this method waits for
+    /// or polls itself, by design: the whole point is that this phone
+    /// doesn't need to stay around for the answer to keep coming.
+    private func runMacDrivenGeneration(threads: ChatThreadsViewModel, connection: RemoteMacConnection) async {
+        do {
+            let sessions = try await syncClient.sessions(host: connection.host)
+            guard let session = sessions.first(where: { $0.port == connection.port }) else {
+                throw AnvilSyncClientError.requestFailed(
+                    "Could not tell which model is running at \(connection.host):\(connection.port).")
+            }
+            let updated = try await syncClient.generate(
+                threadID: threads.currentThread.id, modelID: session.modelID, host: connection.host)
+            if updated.id == threads.currentThread.id {
+                threads.currentThread = updated
+            }
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
