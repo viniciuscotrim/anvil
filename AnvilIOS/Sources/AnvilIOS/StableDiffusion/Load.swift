@@ -147,18 +147,29 @@ public struct StableDiffusionConfiguration: Sendable {
         }
     }
 
-    /// See https://huggingface.co/stabilityai/sdxl-turbo for the model details and license
+    /// See https://huggingface.co/stabilityai/sdxl-turbo for the model details and license.
+    ///
+    /// Points at the repo's `.fp16.safetensors` variant files, not its
+    /// default fp32 ones — a real, measured problem on iOS: the fp32
+    /// unet/text-encoders/vae total ~13.9GB (unet alone is 10.3GB),
+    /// which is impractical to download on a phone and would still
+    /// need to fit in memory before `LoadConfiguration.float16`'s own
+    /// `.asType` cast ever ran. The fp16 files are ~7GB total and load
+    /// through the exact same `loadWeights`/`.asType(dType)` path
+    /// (safetensors are dtype-tagged, not structurally different), so
+    /// this only shrinks what gets downloaded and held in memory — it
+    /// doesn't change how loading works.
     public static let presetSDXLTurbo = StableDiffusionConfiguration(
         id: "stabilityai/sdxl-turbo",
         files: [
             .unetConfig: "unet/config.json",
-            .unetWeights: "unet/diffusion_pytorch_model.safetensors",
+            .unetWeights: "unet/diffusion_pytorch_model.fp16.safetensors",
             .textEncoderConfig: "text_encoder/config.json",
-            .textEncoderWeights: "text_encoder/model.safetensors",
+            .textEncoderWeights: "text_encoder/model.fp16.safetensors",
             .textEncoderConfig2: "text_encoder_2/config.json",
-            .textEncoderWeights2: "text_encoder_2/model.safetensors",
+            .textEncoderWeights2: "text_encoder_2/model.fp16.safetensors",
             .vaeConfig: "vae/config.json",
-            .vaeWeights: "vae/diffusion_pytorch_model.safetensors",
+            .vaeWeights: "vae/diffusion_pytorch_model.fp16.safetensors",
             .diffusionConfig: "scheduler/scheduler_config.json",
             .tokenizerVocabulary: "tokenizer/vocab.json",
             .tokenizerMerges: "tokenizer/merges.txt",
