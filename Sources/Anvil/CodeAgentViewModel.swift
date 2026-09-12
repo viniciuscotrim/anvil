@@ -211,7 +211,27 @@ final class CodeAgentViewModel: ObservableObject {
     /// Capped so a model that won't stop calling tools can't run away.
     private static let maxToolRounds = 8
 
-    func send() async {
+    /// When set, a request is actually in flight — the current round's
+    /// start time, so the UI can show real elapsed time ("Generating…
+    /// 12s") instead of a plain spinner with no sense of whether
+    /// anything is still happening. Reset at the start of every round
+    /// (tool-call rounds included), not just once per `send()`.
+    @Published private(set) var currentRoundStartedAt: Date?
+    /// The whole agentic loop's own `Task` — `stopGeneration()` cancels
+    /// this directly rather than relying on the streamed response's own
+    /// cancellation alone, since cancellation also has to interrupt
+    /// whatever's happening between rounds (a tool call in progress).
+    private var generationTask: Task<Void, Never>?
+
+    /// Not `async` — spawns and owns its own `Task` (`generationTask`)
+    /// so the Send button in the view can fire-and-forget this the same
+    /// way it always could, while `stopGeneration()` gets something real
+    /// to cancel. The previous shape (a plain `await`-ed async function
+    /// with no timeout shorter than the client's own 1800s and no way to
+    /// interrupt it) was the actual mechanism behind a real reported
+    /// bug: a generation that never stopped left no way to reclaim it
+    /// short of unloading the whole model.
+    func send() {
         guard let id = selectedModelID, let endpoint = sessions.chatEndpoint(for: id) else {
             errorMessage = "Pick a loaded model first"
             return
@@ -233,32 +253,91 @@ final class CodeAgentViewModel: ObservableObject {
         let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty)
 
         isSending = true
-        defer { isSending = false }
+        generationTask = Task { [weak self] in
+            await self?.runAgentLoop(
+                endpoint: endpoint, modelDisplayName: modelDisplayName, tools: tools, systemPrompt: systemPrompt)
+            guard let self else { return }
+            self.isSending = false
+            self.currentRoundStartedAt = nil
+            self.generationTask = nil
+        }
+    }
 
+    /// The same "Send" button becomes "Stop" while `isSending` — cancels
+    /// the in-flight round (a real HTTP connection abort via
+    /// `ChatClient.streamSend`'s own cooperative-cancellation handling,
+    /// not just hiding a spinner) and, if one's in flight, a tool call.
+    /// Whatever already streamed in before the cancel lands stays in the
+    /// conversation rather than being discarded.
+    func stopGeneration() {
+        generationTask?.cancel()
+    }
+
+    private func runAgentLoop(
+        endpoint: URL, modelDisplayName: String, tools: [ChatTool], systemPrompt: String?
+    ) async {
         do {
             for _ in 0..<Self.maxToolRounds {
-                let reply = try await client.send(
-                    messages: currentThread.messages,
+                try Task.checkCancellation()
+                currentRoundStartedAt = Date()
+
+                // A visible, empty bubble from the moment a round starts
+                // — real progress (it fills in as tokens actually
+                // arrive), not a placeholder that only appears once
+                // something has already happened.
+                currentThread.messages.append(ChatMessage(role: .assistant, content: "", modelDisplayName: modelDisplayName))
+                let replyIndex = currentThread.messages.count - 1
+                let historyForRequest = Array(currentThread.messages.dropLast())
+
+                let stream = client.streamSend(
+                    messages: historyForRequest,
                     baseURL: endpoint,
                     modelDisplayName: modelDisplayName,
                     settings: settings,
                     tools: tools,
                     systemPrompt: systemPrompt
                 )
-                currentThread.messages.append(reply)
+
+                var finalMessage: ChatMessage?
+                for try await event in stream {
+                    try Task.checkCancellation()
+                    switch event {
+                    case .contentDelta(let delta):
+                        currentThread.messages[replyIndex].content += delta
+                    case .reasoningDelta:
+                        break
+                    case .done(let message):
+                        finalMessage = message
+                    }
+                }
+                guard let finalMessage else { break }
+                currentThread.messages[replyIndex] = finalMessage
                 persistCurrentThreadForDurability()
 
-                guard let toolCalls = reply.toolCalls, !toolCalls.isEmpty else {
+                guard let toolCalls = finalMessage.toolCalls, !toolCalls.isEmpty else {
                     break
                 }
 
                 var haltedForManual = false
                 for call in toolCalls {
+                    try Task.checkCancellation()
+                    currentRoundStartedAt = Date()
                     let resultMessage = await dispatch(call, haltedForManual: &haltedForManual)
                     currentThread.messages.append(resultMessage)
                 }
                 persistCurrentThreadForDurability()
                 if haltedForManual { break }
+            }
+            persistCurrentThread()
+        } catch is CancellationError {
+            // Drop a still-empty placeholder bubble (nothing ever
+            // streamed into it) rather than leaving a blank one sitting
+            // in the conversation; a partially-streamed answer, or any
+            // tool result already recorded, stays exactly as it was.
+            if let last = currentThread.messages.last,
+                last.role == .assistant, last.content.isEmpty, last.toolCalls == nil
+            {
+                currentThread.messages.removeLast()
             }
             persistCurrentThread()
         } catch {

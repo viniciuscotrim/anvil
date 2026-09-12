@@ -113,6 +113,155 @@ public struct ChatClient: Sendable {
         )
     }
 
+    /// One incremental event from a streamed `/v1/chat/completions` call
+    /// — a real, reported problem this exists to fix: `send()` blocks
+    /// silently until the *entire* reply is ready, up to its own 1800s
+    /// timeout, with nothing on screen to tell a caller it's still alive
+    /// versus stuck. `contentDelta`/`reasoningDelta` arrive as the model
+    /// actually generates; `done` carries the final assembled message
+    /// (same shape `send` returns), built from everything streamed in.
+    public enum ChatStreamEvent: Sendable {
+        case contentDelta(String)
+        case reasoningDelta(String)
+        case done(ChatMessage)
+    }
+
+    /// Same request `send` makes, with `"stream": true` — reads Server-
+    /// Sent Events off `URLSession.bytes(for:)`, which honors Swift's
+    /// own cooperative cancellation: cancelling the `Task` iterating
+    /// this stream (or the `Task` that owns the caller of this function)
+    /// aborts the underlying HTTP connection instead of continuing to
+    /// wait for the rest of a reply nobody wants anymore — the other
+    /// real half of the same problem: no way to actually stop a
+    /// generation that won't be needed once started.
+    public func streamSend(
+        messages: [ChatMessage],
+        baseURL: URL,
+        model: String = "default_model",
+        modelDisplayName: String = "",
+        settings: GenerationSettings = .default,
+        tools: [ChatTool] = [],
+        systemPrompt: String? = nil
+    ) -> AsyncThrowingStream<ChatStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    request.timeoutInterval = 1800
+
+                    var wireMessages = messages.map(Self.wireMessage)
+                    if let systemPrompt, !systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        wireMessages.insert(["role": "system", "content": systemPrompt], at: 0)
+                    }
+                    var body: [String: Any] = [
+                        "model": model,
+                        "messages": wireMessages,
+                        "max_tokens": settings.wireMaxTokens,
+                        "temperature": settings.temperature,
+                        "top_p": settings.topP,
+                        "top_k": settings.topK,
+                        "min_p": settings.minP,
+                        "stream": true,
+                        "stream_options": ["include_usage": true]
+                    ]
+                    if !tools.isEmpty {
+                        body["tools"] = tools.map(\.wireRepresentation)
+                    }
+                    request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+                    let start = Date()
+                    let bytes: URLSession.AsyncBytes
+                    let response: URLResponse
+                    do {
+                        (bytes, response) = try await self.session.bytes(for: request)
+                    } catch {
+                        throw ServingError.requestFailed(error.localizedDescription)
+                    }
+                    guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                        throw ServingError.requestFailed("HTTP \(statusCode)")
+                    }
+
+                    var contentSoFar = ""
+                    var reasoningSoFar = ""
+                    var toolCallAccumulators: [Int: ToolCallAccumulator] = [:]
+                    var completionTokens = 0
+
+                    for try await line in bytes.lines {
+                        try Task.checkCancellation()
+                        guard line.hasPrefix("data:") else { continue }
+                        let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                        if payload == "[DONE]" { break }
+                        guard let chunkData = payload.data(using: .utf8),
+                            let chunk = try? JSONDecoder().decode(ChatCompletionChunk.self, from: chunkData)
+                        else { continue }
+
+                        if let usage = chunk.usage {
+                            completionTokens = usage.completionTokens
+                        }
+                        guard let choice = chunk.choices.first else { continue }
+                        if let contentDelta = choice.delta.content, !contentDelta.isEmpty {
+                            contentSoFar += contentDelta
+                            continuation.yield(.contentDelta(contentDelta))
+                        }
+                        if let reasoningDelta = choice.delta.reasoning, !reasoningDelta.isEmpty {
+                            reasoningSoFar += reasoningDelta
+                            continuation.yield(.reasoningDelta(reasoningDelta))
+                        }
+                        if let toolCallDeltas = choice.delta.tool_calls {
+                            for delta in toolCallDeltas {
+                                var accumulator = toolCallAccumulators[delta.index] ?? ToolCallAccumulator()
+                                if let id = delta.id { accumulator.id = id }
+                                if let name = delta.function?.name { accumulator.name = name }
+                                if let argumentsDelta = delta.function?.arguments {
+                                    accumulator.arguments += argumentsDelta
+                                }
+                                toolCallAccumulators[delta.index] = accumulator
+                            }
+                        }
+                    }
+
+                    let elapsedSeconds = Date().timeIntervalSince(start)
+                    let tokensPerSecond = (completionTokens > 0 && elapsedSeconds > 0)
+                        ? Double(completionTokens) / elapsedSeconds
+                        : nil
+
+                    let toolCalls: [ChatMessage.ToolCall]? = toolCallAccumulators.isEmpty ? nil :
+                        toolCallAccumulators.keys.sorted().compactMap { index in
+                            let accumulator = toolCallAccumulators[index]!
+                            guard let id = accumulator.id, let name = accumulator.name else { return nil }
+                            return ChatMessage.ToolCall(id: id, name: name, argumentsJSON: accumulator.arguments)
+                        }
+
+                    let finalMessage = ChatMessage(
+                        role: .assistant,
+                        content: contentSoFar.trimmingCharacters(in: .whitespacesAndNewlines),
+                        reasoning: reasoningSoFar.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                        modelDisplayName: modelDisplayName.nilIfEmpty,
+                        tokensPerSecond: tokensPerSecond,
+                        toolCalls: (toolCalls?.isEmpty ?? true) ? nil : toolCalls
+                    )
+                    continuation.yield(.done(finalMessage))
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private struct ToolCallAccumulator {
+        var id: String?
+        var name: String?
+        var arguments: String = ""
+    }
+
     /// Wire shape stays intentionally narrow: role/content always, plus
     /// `tool_call_id` for a `.tool` result and `tool_calls` for an
     /// assistant message that made one — never the other locally-only
@@ -149,6 +298,40 @@ private struct ChatCompletionResponse: Decodable {
             let tool_calls: [ToolCallWire]?
         }
         let message: Message
+    }
+    struct Usage: Decodable {
+        let completionTokens: Int
+        enum CodingKeys: String, CodingKey {
+            case completionTokens = "completion_tokens"
+        }
+    }
+    let choices: [Choice]
+    let usage: Usage?
+}
+
+/// One `data:` line's JSON payload from a streamed
+/// `/v1/chat/completions` response — the standard OpenAI-compatible
+/// "chat.completion.chunk" shape `mlx_lm.server` follows. `delta` only
+/// ever carries whatever's new in *this* chunk (a content fragment, a
+/// piece of one tool call's arguments, …) — `streamSend` accumulates
+/// these into the final message itself.
+private struct ChatCompletionChunk: Decodable {
+    struct Choice: Decodable {
+        struct Delta: Decodable {
+            struct ToolCallDelta: Decodable {
+                struct FunctionDelta: Decodable {
+                    let name: String?
+                    let arguments: String?
+                }
+                let index: Int
+                let id: String?
+                let function: FunctionDelta?
+            }
+            let content: String?
+            let reasoning: String?
+            let tool_calls: [ToolCallDelta]?
+        }
+        let delta: Delta
     }
     struct Usage: Decodable {
         let completionTokens: Int

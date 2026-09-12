@@ -129,12 +129,16 @@ struct CodeAgentView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(codeAgent.messages) { message in
-                        row(for: message)
+                    ForEach(Array(codeAgent.messages.enumerated()), id: \.element.id) { index, message in
+                        row(for: message, isLast: index == codeAgent.messages.count - 1)
                             .id(message.id)
                     }
-                    if codeAgent.isSending {
-                        ProgressView().controlSize(.small).padding(.leading, 4)
+                    // Covers the gap the inline per-bubble indicator
+                    // doesn't: a tool call actually executing (the
+                    // assistant's own tool-call message is already in
+                    // the list at that point, not an empty placeholder).
+                    if codeAgent.isSending, !isLastMessageAnEmptyAssistantPlaceholder {
+                        generatingIndicator
                     }
                 }
                 .padding()
@@ -147,8 +151,31 @@ struct CodeAgentView: View {
         }
     }
 
+    private var isLastMessageAnEmptyAssistantPlaceholder: Bool {
+        guard let last = codeAgent.messages.last else { return false }
+        return last.role == .assistant && last.content.isEmpty && (last.toolCalls?.isEmpty ?? true)
+    }
+
+    /// Real elapsed time since the current round actually started, not
+    /// a plain spinner with no sense of whether it's still alive — the
+    /// exact "did it stop or die silently?" ambiguity a real reported
+    /// bug traced back to (a generation with no visible progress and no
+    /// way to cancel it, forcing a full model unload to recover).
+    private var generatingIndicator: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let elapsed = codeAgent.currentRoundStartedAt.map { max(0, Int(context.date.timeIntervalSince($0))) } ?? 0
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Generating… \(elapsed)s")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, 4)
+        }
+    }
+
     @ViewBuilder
-    private func row(for message: ChatMessage) -> some View {
+    private func row(for message: ChatMessage, isLast: Bool) -> some View {
         switch message.role {
         case .user:
             bubble(text: message.content, isUser: true)
@@ -162,6 +189,8 @@ struct CodeAgentView: View {
                 }
             } else if !message.content.isEmpty {
                 bubble(text: message.content, isUser: false)
+            } else if isLast, codeAgent.isSending {
+                generatingIndicator
             }
         case .tool:
             toolResultRow(message)
@@ -269,16 +298,25 @@ struct CodeAgentView: View {
             ), axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...4)
-                .onSubmit { Task { await codeAgent.send() } }
+                .onSubmit { if !codeAgent.isSending { codeAgent.send() } }
                 .disabled(sessions.readySessions.isEmpty || codeAgent.pendingApproval != nil)
 
-            Button("Send") { Task { await codeAgent.send() } }
-                .disabled(
-                    sessions.readySessions.isEmpty
-                    || codeAgent.isSending
-                    || codeAgent.pendingApproval != nil
-                    || codeAgent.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                )
+            // Same button, same spot, toggles to Stop while a round is
+            // in flight — the actual fix for "it stops here but keeps
+            // running forever": Stop really cancels the request
+            // (ChatClient.streamSend honors Task cancellation) instead
+            // of there being no way to interrupt it short of unloading
+            // the whole model.
+            if codeAgent.isSending {
+                Button("Stop", role: .destructive) { codeAgent.stopGeneration() }
+            } else {
+                Button("Send") { codeAgent.send() }
+                    .disabled(
+                        sessions.readySessions.isEmpty
+                        || codeAgent.pendingApproval != nil
+                        || codeAgent.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+            }
         }
         .padding()
     }
