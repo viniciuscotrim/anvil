@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.9] - 2026-09-12
+
+### Fixed
+
+- Code terminal tools now stop after 120 seconds instead of holding an agent round indefinitely.
+- Chat and Code History rows now use explicit selectable buttons, fixing thread resume clicks that appeared to do nothing.
+- Chat temporary threads remain accessible in memory for the entire Anvil session and can be switched without being persisted.
+- Chat History remains usable while a temporary thread is active.
+
 ## [0.5.8] - 2026-09-12
 
 ### Fixed

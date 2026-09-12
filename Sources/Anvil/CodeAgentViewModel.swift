@@ -233,6 +233,13 @@ final class CodeAgentViewModel: ObservableObject {
     /// the Mac chat's own single tool-call-then-one-follow-up shape.
     /// Capped so a model that won't stop calling tools can't run away.
     private static let maxToolRounds = 8
+    private static let terminalToolTimeout: TimeInterval = 120
+
+    private struct TerminalToolTimeout: LocalizedError {
+        var errorDescription: String? {
+            "The terminal command exceeded 120 seconds and was stopped."
+        }
+    }
 
     /// When set, a request is actually in flight — the current round's
     /// start time, so the UI can show real elapsed time ("Generating…
@@ -528,11 +535,26 @@ final class CodeAgentViewModel: ObservableObject {
         }
 
         do {
-            let (output, exitCode) = try await makeRunner().runTerminalCommand(args.command)
+            let (output, exitCode) = try await runTerminalCommandWithTimeout(args.command)
             let trimmedOutput = output.isEmpty ? "(no output)" : output
             return ChatMessage(role: .tool, content: "Exit code \(exitCode):\n\(trimmedOutput)", toolCallID: call.id)
         } catch {
             return ChatMessage(role: .tool, content: "Error: \(error.localizedDescription)", toolCallID: call.id)
+        }
+    }
+
+    private func runTerminalCommandWithTimeout(_ command: String) async throws -> (output: String, exitCode: Int32) {
+        let runner = makeRunner()
+        return try await withThrowingTaskGroup(of: (String, Int32).self) { group in
+            group.addTask {
+                try await runner.runTerminalCommand(command)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(Self.terminalToolTimeout * 1_000_000_000))
+                throw TerminalToolTimeout()
+            }
+            defer { group.cancelAll() }
+            return try await group.next()!
         }
     }
 

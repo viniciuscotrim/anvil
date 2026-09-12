@@ -62,6 +62,7 @@ final class ChatViewModel: ObservableObject {
     private let client = ChatClient()
     private let imageClient = ImageClient()
     private var threadBeforeTemporaryMode: ChatThread?
+    private var temporaryThreads: [UUID: ChatThread] = [:]
     /// `.task { loadInitialState() }` on `ChatView` reruns every time the
     /// view re-enters the hierarchy (switching tabs and back) — this
     /// used to reset `currentThread` to whatever was last persisted on
@@ -116,7 +117,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     func loadInitialState() async {
-        allThreads = await threadStore.all()
+        let savedThreads = await threadStore.all()
+        let temporary = temporaryThreads.values.sorted { $0.updatedAt > $1.updatedAt }
+        allThreads = temporary + savedThreads.filter { temporaryThreads[$0.id] == nil }
         availableProfiles = await profileStore.all()
         if !hasLoadedInitialState {
             currentThread = allThreads.first ?? ChatThread()
@@ -179,13 +182,33 @@ final class ChatViewModel: ObservableObject {
     /// still in flight, so a background send doesn't land on a thread
     /// the user has since switched away from.
     func newThread() {
-        guard !isTemporaryModeActive, !isSending else { return }
+        guard !isSending else { return }
+        if isTemporaryModeActive { rememberTemporaryThread() }
         currentThread = ChatThread()
+        isTemporaryModeActive = false
     }
 
     func selectThread(_ thread: ChatThread) {
-        guard !isTemporaryModeActive, !isSending else { return }
-        currentThread = thread
+        guard !isSending else { return }
+        if isTemporaryModeActive { rememberTemporaryThread() }
+        if let temporary = temporaryThreads[thread.id] {
+            currentThread = temporary
+            isTemporaryModeActive = true
+        } else {
+            currentThread = thread
+            isTemporaryModeActive = false
+        }
+    }
+
+    private func rememberTemporaryThread() {
+        var snapshot = currentThread
+        snapshot.updatedAt = Date()
+        temporaryThreads[snapshot.id] = snapshot
+        if let index = allThreads.firstIndex(where: { $0.id == currentThread.id }) {
+            allThreads[index] = snapshot
+        } else {
+            allThreads.insert(snapshot, at: 0)
+        }
     }
 
     func deleteThread(_ thread: ChatThread) async {
@@ -193,6 +216,7 @@ final class ChatViewModel: ObservableObject {
         try? await threadStore.delete(id: thread.id)
         allThreads.removeAll { $0.id == thread.id }
         lastImageGenerationByThread.removeValue(forKey: thread.id)
+        temporaryThreads.removeValue(forKey: thread.id)
         if currentThread.id == thread.id {
             currentThread = allThreads.first ?? ChatThread()
         }
@@ -219,13 +243,15 @@ final class ChatViewModel: ObservableObject {
     func toggleTemporaryMode() {
         cancelBufferedSend()
         if isTemporaryModeActive {
+            rememberTemporaryThread()
             isTemporaryModeActive = false
-            currentThread = threadBeforeTemporaryMode ?? allThreads.first ?? ChatThread()
+            currentThread = allThreads.first(where: { temporaryThreads[$0.id] == nil }) ?? ChatThread()
             threadBeforeTemporaryMode = nil
         } else {
             threadBeforeTemporaryMode = currentThread
             currentThread = ChatThread(title: "Temporary Chat")
             isTemporaryModeActive = true
+            rememberTemporaryThread()
         }
     }
 
@@ -312,6 +338,8 @@ final class ChatViewModel: ObservableObject {
         // must not clobber them if it does.
         if !isTemporaryModeActive {
             persistCurrentThreadForDurability()
+        } else {
+            rememberTemporaryThread()
         }
 
         let modelDisplayName = sessions.sessions.first { $0.id == id }?.model.displayName ?? id

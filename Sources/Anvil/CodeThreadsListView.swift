@@ -38,7 +38,10 @@ struct CodeThreadsListView: View {
 
     private func threadRow(_ thread: ChatThread) -> some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
+            Button {
+                codeAgent.selectThread(thread)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(thread.title)
                         .font(.headline)
@@ -56,9 +59,10 @@ struct CodeThreadsListView: View {
                 Text(thread.updatedAt, style: .relative)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .contentShape(Rectangle())
-            .onTapGesture { codeAgent.selectThread(thread) }
+            .buttonStyle(.plain)
 
             Spacer()
 

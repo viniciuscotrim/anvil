@@ -3,8 +3,8 @@ import AnvilCore
 
 /// Chat history — every persisted thread, newest first. Picking one
 /// makes it the active conversation in the Chat tab; each can be
-/// deleted independently. Disabled while temporary mode is active,
-/// since switching threads is one of the things that mode blocks.
+/// deleted independently. Temporary threads stay in memory for the app
+/// session and can be selected alongside persisted threads.
 struct ThreadsListView: View {
     @EnvironmentObject private var chat: ChatViewModel
 
@@ -18,14 +18,6 @@ struct ThreadsListView: View {
                     .disabled(chat.isTemporaryModeActive)
             }
             .padding()
-
-            if chat.isTemporaryModeActive {
-                Text("Temporary chat is active — turn it off to switch threads.")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-            }
 
             Divider()
 
@@ -41,12 +33,14 @@ struct ThreadsListView: View {
             }
         }
         .frame(minWidth: 420, minHeight: 480)
-        .disabled(chat.isTemporaryModeActive)
     }
 
     private func threadRow(_ thread: ChatThread) -> some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
+            Button {
+                chat.selectThread(thread)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(thread.title)
                         .font(.headline)
@@ -64,9 +58,10 @@ struct ThreadsListView: View {
                 Text(thread.updatedAt, style: .relative)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .contentShape(Rectangle())
-            .onTapGesture { chat.selectThread(thread) }
+            .buttonStyle(.plain)
 
             Spacer()
 
