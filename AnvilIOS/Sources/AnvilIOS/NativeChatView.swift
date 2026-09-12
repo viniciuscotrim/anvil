@@ -59,6 +59,14 @@ struct NativeChatView: View {
                     Text(errorMessage).foregroundStyle(.red).font(.caption).padding(8)
                 }
 
+                if threads.isTemporaryModeActive {
+                    Label("Temporary — not saved", systemImage: "eyeglasses")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 4)
+                }
+
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
@@ -88,6 +96,7 @@ struct NativeChatView: View {
                     Button { isThreadListPresented = true } label: {
                         Image(systemName: "list.bullet.rectangle")
                     }
+                    .disabled(threads.isTemporaryModeActive)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 4) {
@@ -96,9 +105,14 @@ struct NativeChatView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                        Button { threads.toggleTemporaryMode() } label: {
+                            Image(systemName: threads.isTemporaryModeActive ? "eyeglasses" : "eyeglasses.slash")
+                        }
+                        .disabled(isGenerating)
                         exportMenu
                         Button { isSettingsPresented = true } label: { Image(systemName: "slider.horizontal.3") }
                         Button { newChat() } label: { Image(systemName: "square.and.pencil") }
+                            .disabled(threads.isTemporaryModeActive)
                             .disabled(isGenerating)
                     }
                 }
