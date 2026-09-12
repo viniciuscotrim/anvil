@@ -1,20 +1,26 @@
 import SwiftUI
 
-/// The iOS scaffold's entry point — Phase iOS-1's whole job is proving
-/// this builds, signs with the real team, and installs+launches on a
-/// real iPhone. Nothing here shares code with the macOS app's
-/// `AnvilCore` yet: that library's Requirements/Serving layers are
-/// built entirely around `Foundation.Process` (a private Python venv,
-/// `mlx_lm.server`, `mflux` as subprocesses) — an API that doesn't
-/// exist on iOS at all. The real iOS port needs a native Swift
-/// inference engine (`mlx-swift`) instead, which is a separate,
-/// substantial piece of work this scaffold intentionally doesn't
-/// attempt — see the macOS app's README for the phased plan.
+/// The iOS app's entry point. `AnvilCore`'s shared, cross-platform
+/// pieces (data models, both HTTP clients, both model catalogs,
+/// `HFRepoDownloader`/`CivitAIDownloader`, `ModelRegistry`) are the
+/// same code the macOS app uses — only the macOS app's Process-based
+/// Requirements/Serving layer doesn't exist here, replaced by
+/// `NativeChatEngine`/`NativeImageEngine` (in-process `mlx-swift`
+/// inference, no subprocess).
+///
+/// `modelsViewModel` is owned once here and shared via `.environment`
+/// so a model downloaded/registered in the Models tab shows up as a
+/// pickable option in Chat and Images immediately — the same
+/// single-source-of-truth registry pattern `AppState` gives the macOS
+/// app's tabs.
 @main
 struct AnvilIOSApp: App {
+    @State private var modelsViewModel = ModelsViewModel()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environment(modelsViewModel)
         }
     }
 }

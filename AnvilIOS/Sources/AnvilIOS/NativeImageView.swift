@@ -53,6 +53,7 @@ struct NativeImageView: View {
                 .padding(.horizontal)
                 .padding(.bottom, 8)
             }
+            .dismissKeyboardOnTap()
             .navigationTitle("Images (on-device)")
         }
     }
