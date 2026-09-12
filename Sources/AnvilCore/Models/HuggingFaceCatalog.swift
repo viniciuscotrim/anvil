@@ -147,4 +147,40 @@ public struct HuggingFaceCatalog: Sendable {
             throw ModelError.searchFailed("Could not parse Hugging Face response: \(error.localizedDescription)")
         }
     }
+
+    /// Looks up one exact repo by id — for callers that already know
+    /// which model they want (e.g. one typed directly into a model-ID
+    /// field) rather than searching, and need its real file list to
+    /// download it. Hits `/api/models/{id}` instead of the search
+    /// endpoint's `/api/models?search=`, which can't guarantee an exact
+    /// match is even the top result.
+    public func modelInfo(id: String) async throws -> HFModelSummary {
+        var components = URLComponents(string: "https://huggingface.co/api/models/\(id)")!
+        components.queryItems = [
+            URLQueryItem(name: "expand", value: "downloads"),
+            URLQueryItem(name: "expand", value: "likes"),
+            URLQueryItem(name: "expand", value: "tags"),
+            URLQueryItem(name: "expand", value: "safetensors"),
+            URLQueryItem(name: "expand", value: "siblings")
+        ]
+        guard let url = components.url else {
+            throw ModelError.searchFailed("Could not build model URL for '\(id)'")
+        }
+
+        var request = URLRequest(url: url)
+        if let token = HFTokenStore.load(), !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw ModelError.searchFailed("Model '\(id)' was not found on Hugging Face")
+        }
+
+        do {
+            return try JSONDecoder().decode(HFModelSummary.self, from: data)
+        } catch {
+            throw ModelError.searchFailed("Could not parse Hugging Face response: \(error.localizedDescription)")
+        }
+    }
 }

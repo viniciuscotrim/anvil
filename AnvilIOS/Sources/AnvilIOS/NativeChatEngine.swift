@@ -14,12 +14,16 @@ import Tokenizers
 /// actively maintained Swift port of MLX's LLM stack) — no server, no
 /// port, no separate process to manage or clean up.
 ///
-/// `#huggingFaceLoadModelContainer` (from `MLXHuggingFace`, backed by
-/// `swift-huggingface`'s `HubClient`) downloads and caches the model
-/// itself — a real, separate download path from `HFRepoDownloader`
-/// (which exists for the Models tab's own registry/browsing, mirroring
-/// the Mac app), not yet unified with it. `ChatSession` (from
-/// `MLXLMCommon`) then provides the actual multi-turn conversation —
+/// Downloads route through the exact same `HFRepoDownloader`/
+/// `ModelRegistry` pipeline the Models tab uses (`resolveLocalDirectory`),
+/// not `MLXHuggingFace`'s own `#huggingFaceLoadModelContainer` macro —
+/// that macro downloads into a completely separate cache the Models tab
+/// never sees, a real reported bug: typing a model ID directly here and
+/// loading it used to leave it invisible and unmanageable (couldn't be
+/// inspected, freed, or deleted) anywhere else in the app. Loading the
+/// already-local files afterward uses `LLMModelFactory`'s own plain
+/// `loadContainer(from: directory:)`, no macro, no network. `ChatSession`
+/// (from `MLXLMCommon`) then provides the actual multi-turn conversation —
 /// tracking history and reusing the KV cache across turns, the same
 /// thing `ChatThread`'s message list gives the Mac app's HTTP-based
 /// `ChatClient`.
@@ -61,9 +65,17 @@ final class NativeChatEngine: ObservableObject {
     private var container: MLXLMCommon.ModelContainer?
     private var session: ChatSession?
     private let imageEngine: NativeImageEngine
+    // Qualified explicitly: `MLXLLM` exports its own public
+    // `ModelRegistry` typealias (`= LLMRegistry`), which collides with
+    // AnvilCore's unrelated one now that both modules are imported here.
+    private let registry: AnvilCore.ModelRegistry
+    private let catalog = HuggingFaceCatalog()
+    private let downloader: HFRepoDownloader
 
-    init(imageEngine: NativeImageEngine) {
+    init(imageEngine: NativeImageEngine, registry: AnvilCore.ModelRegistry = AnvilCore.ModelRegistry()) {
         self.imageEngine = imageEngine
+        self.registry = registry
+        self.downloader = HFRepoDownloader(registry: registry)
     }
 
     /// Whether a model's weights are currently resident — gates the
@@ -89,10 +101,9 @@ final class NativeChatEngine: ObservableObject {
             isLoading = true
             loadProgress = 0
             do {
-                let configuration = ModelConfiguration(id: modelID)
-                container = try await #huggingFaceLoadModelContainer(configuration: configuration) { [weak self] progress in
-                    Task { @MainActor in self?.loadProgress = progress.fractionCompleted }
-                }
+                let directory = try await resolveLocalDirectory(modelID: modelID)
+                container = try await LLMModelFactory.shared.loadContainer(
+                    from: directory, using: #huggingFaceTokenizerLoader())
                 loadedModelID = modelID
             } catch {
                 errorMessage = error.localizedDescription
@@ -107,6 +118,30 @@ final class NativeChatEngine: ObservableObject {
         }
 
         startSession(instructions: instructions, history: history)
+    }
+
+    /// Resolves `modelID` to a local directory of already-downloaded
+    /// files, reusing a registry entry's files when they're already on
+    /// disk, or downloading through `HFRepoDownloader` (the same
+    /// pipeline the Models tab's own downloads use, registering into
+    /// `ModelRegistry` along the way) otherwise. This is what makes a
+    /// model loaded by typing its ID here show up, later, in the Models
+    /// tab too — see this type's own header comment.
+    private func resolveLocalDirectory(modelID: String) async throws -> URL {
+        if let entry = await registry.all().first(where: { $0.id == modelID }) {
+            let url = URL(fileURLWithPath: entry.localPath)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        let summary = try await catalog.modelInfo(id: modelID)
+        guard let filePaths = summary.filePaths, !filePaths.isEmpty else {
+            throw NativeChatEngineError.noFilesAvailable(modelID)
+        }
+        let entry = try await downloader.download(repoID: modelID, filePaths: filePaths) { [weak self] progress in
+            Task { @MainActor in self?.loadProgress = progress }
+        }
+        return URL(fileURLWithPath: entry.localPath)
     }
 
     /// Rebuilds the live conversation from `history` without touching
@@ -274,5 +309,14 @@ final class NativeChatEngine: ObservableObject {
 
 enum NativeChatEngineError: LocalizedError {
     case notLoaded
-    var errorDescription: String? { "No model is loaded." }
+    case noFilesAvailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notLoaded:
+            "No model is loaded."
+        case .noFilesAvailable(let modelID):
+            "No file list available for \(modelID)."
+        }
+    }
 }

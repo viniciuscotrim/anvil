@@ -22,14 +22,35 @@ final class ModelsViewModel {
         var id: String { rawValue }
     }
 
-    var source: Source = .huggingFace
+    /// A single search field shared by both sources — switching sources
+    /// clears it along with whatever results were showing, rather than
+    /// leaving a CivitAI query sitting behind an HF-labeled field or
+    /// vice versa.
+    var source: Source = .huggingFace {
+        didSet {
+            guard source != oldValue else { return }
+            query = ""
+            searchResults = []
+            civitaiResults = []
+            errorMessage = nil
+        }
+    }
     var query = ""
     var searchResults: [HFModelSummary] = []
-    var civitaiQuery = ""
     var civitaiResults: [CivitAIModelSummary] = []
     var registeredModels: [ModelEntry] = []
     var isSearching = false
     var errorMessage: String?
+
+    /// Hides HF results `ModelCompatibility` flags as a raw, unpipelined
+    /// checkpoint — see that type's own doc comment for the real broken
+    /// download this catches before it happens, not after.
+    var compatibleOnlyHF = false
+    /// `nil` = no size limit. Applies to both sources — the main ask on
+    /// a phone: filter out anything that won't comfortably fit before
+    /// even trying it, using the same RAM-relative classification the
+    /// Mac's Model Manager and the registered-models list already show.
+    var maxSizeClass: ModelSizeClass?
 
     var activeDownloadID: String?
     var downloadProgress: Double?
@@ -46,6 +67,42 @@ final class ModelsViewModel {
         civitaiDownloader = CivitAIDownloader(registry: registry)
     }
 
+    /// What the HF results section actually shows once
+    /// `compatibleOnlyHF`/`maxSizeClass` are applied.
+    var filteredSearchResults: [HFModelSummary] {
+        searchResults.filter { summary in
+            if compatibleOnlyHF, summary.compatibility == .incompatible { return false }
+            return Self.fitsSizeFilter(summary.sizeBytes, maxSizeClass)
+        }
+    }
+
+    /// What the CivitAI results section shows once `maxSizeClass` is
+    /// applied. No compatibility toggle here — unlike the Mac app's
+    /// `mflux` (Flux-only, so CivitAI's `baseModel` is a meaningful
+    /// compatibility signal there), `NativeImageEngine` doesn't load
+    /// arbitrary downloaded checkpoints at all yet (see its own header
+    /// comment), so no CivitAI result is more "compatible" than another
+    /// on iOS today regardless of base model.
+    var filteredCivitAIResults: [CivitAIModelSummary] {
+        civitaiResults.filter { Self.fitsSizeFilter($0.primaryFile?.sizeBytes, maxSizeClass) }
+    }
+
+    private static func fitsSizeFilter(_ sizeBytes: Int64?, _ maxSizeClass: ModelSizeClass?) -> Bool {
+        guard let maxSizeClass else { return true }
+        // A result with no known size can't be judged against the
+        // filter — kept rather than hidden, so an unfiltered field
+        // never silently disappears just because HF/CivitAI didn't
+        // report a size for it.
+        guard let sizeBytes else { return true }
+        switch (ModelSizeClass.classify(sizeBytes: sizeBytes), maxSizeClass) {
+        case (.small, _): return true
+        case (.medium, .small): return false
+        case (.medium, _): return true
+        case (.large, .large): return true
+        case (.large, _): return false
+        }
+    }
+
     func loadRegistry() async {
         // Same self-healing the Mac app's Models tab does on load — see
         // ModelRegistry.deduplicateByLocalPath/refreshKinds' own doc
@@ -53,6 +110,16 @@ final class ModelsViewModel {
         _ = try? await registry.deduplicateByLocalPath()
         _ = try? await registry.refreshKinds()
         registeredModels = await registry.all()
+    }
+
+    /// Routes to whichever source is active — the single search field
+    /// (and its submit action) doesn't need to know which catalog is
+    /// behind it.
+    func performSearch() async {
+        switch source {
+        case .huggingFace: await search()
+        case .civitai: await searchCivitAI()
+        }
     }
 
     func search() async {
@@ -69,7 +136,7 @@ final class ModelsViewModel {
     }
 
     func searchCivitAI() async {
-        let trimmed = civitaiQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         errorMessage = nil
         isSearching = true
