@@ -22,6 +22,50 @@ struct MemoryView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button {
+                    Task { await chat.suggestMemoriesFromCurrentThread() }
+                } label: {
+                    Label(
+                        chat.isSuggestingMemories ? "Analyzing…" : "Suggest from thread",
+                        systemImage: "wand.and.stars"
+                    )
+                }
+                .disabled(chat.isSuggestingMemories || chat.messages.isEmpty)
+            }
+
+            if !chat.memorySuggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Suggestions to review").font(.headline)
+                    Text("Nothing is saved until you accept it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(chat.memorySuggestions) { suggestion in
+                        HStack(alignment: .top, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(suggestion.content)
+                                Text("\(suggestion.kind.label) · \(Int(suggestion.confidence * 100))% · \(suggestion.rationale)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button {
+                                Task { await chat.acceptMemorySuggestion(suggestion) }
+                            } label: {
+                                Image(systemName: "checkmark.circle.fill")
+                            }
+                            .buttonStyle(.borderless)
+                            Button {
+                                chat.dismissMemorySuggestion(suggestion)
+                            } label: {
+                                Image(systemName: "xmark.circle")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .padding(8)
+                        .background(Color.purple.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
             }
 
             HStack(alignment: .top, spacing: 8) {

@@ -80,6 +80,28 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+public struct ChatMemorySuggestion: Codable, Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public var content: String
+    public var kind: ChatMemoryKind
+    public var confidence: Double
+    public var rationale: String
+
+    public init(
+        id: UUID = UUID(),
+        content: String,
+        kind: ChatMemoryKind,
+        confidence: Double,
+        rationale: String
+    ) {
+        self.id = id
+        self.content = content
+        self.kind = kind
+        self.confidence = confidence
+        self.rationale = rationale
+    }
+}
+
 public actor ChatMemoryStore {
     private let fileURL: URL
 

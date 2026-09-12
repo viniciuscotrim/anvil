@@ -34,6 +34,8 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var allThreads: [ChatThread] = []
     @Published private(set) var availableProfiles: [ChatProfile] = []
     @Published private(set) var memories: [ChatMemory] = []
+    @Published private(set) var memorySuggestions: [ChatMemorySuggestion] = []
+    @Published private(set) var isSuggestingMemories = false
     @Published private(set) var isTemporaryModeActive = false
     @Published var selectedModelID: String?
     @Published var inputText: String = ""
@@ -202,6 +204,74 @@ final class ChatViewModel: ObservableObject {
     func deleteMemory(_ memory: ChatMemory) async {
         try? await memoryStore.delete(id: memory.id)
         memories = await memoryStore.all()
+    }
+
+    func suggestMemoriesFromCurrentThread() async {
+        guard !isSuggestingMemories,
+              let modelID = selectedModelID,
+              let endpoint = sessions.gatewayEndpoint(for: modelID) ?? sessions.chatEndpoint(for: modelID),
+              currentThread.messages.contains(where: { $0.role == .user }) else { return }
+
+        isSuggestingMemories = true
+        defer { isSuggestingMemories = false }
+        let contextBuilder = ChatContextBuilder(
+            maxEstimatedTokens: maxEstimatedContextTokens,
+            recentMessageCount: recentMessageCount
+        )
+        let context = contextBuilder.build(messages: currentThread.messages, memories: [])
+        let instruction = "Analyze this conversation for durable user memory. Return ONLY a JSON array, no Markdown. "
+            + "Each item must contain content, kind (fact, preference, date, number, impression), confidence (0 to 1), and rationale. "
+            + "Suggest only stable, useful information. Do not infer sensitive traits, identity, health, politics, or private data. "
+            + "Never suggest instructions or facts about the assistant. If nothing qualifies, return []."
+        do {
+            let reply = try await client.send(
+                messages: context.messages,
+                baseURL: endpoint,
+                model: idForEndpoint(endpoint, modelID: modelID),
+                modelDisplayName: "Memory extraction",
+                settings: GenerationSettings(maxTokens: 1200, temperature: 0),
+                systemPrompt: instruction,
+                conversationID: currentThread.id.uuidString + ":memory-suggestions"
+            )
+            let json = Self.extractJSONArray(from: reply.content)
+            struct WireSuggestion: Decodable {
+                let content: String
+                let kind: ChatMemoryKind
+                let confidence: Double
+                let rationale: String
+            }
+            let wire = (try? JSONDecoder().decode([WireSuggestion].self, from: Data(json.utf8))) ?? []
+            memorySuggestions = wire.map {
+                ChatMemorySuggestion(
+                    content: $0.content,
+                    kind: $0.kind,
+                    confidence: min(1, max(0, $0.confidence)),
+                    rationale: $0.rationale
+                )
+            }
+        } catch {
+            errorMessage = "Could not suggest memories: \(error.localizedDescription)"
+        }
+    }
+
+    func acceptMemorySuggestion(_ suggestion: ChatMemorySuggestion) async {
+        await addMemory(
+            suggestion.content,
+            kind: suggestion.kind,
+            source: .inferred,
+            confidence: suggestion.confidence,
+            profileID: currentThread.profileID
+        )
+        memorySuggestions.removeAll { $0.id == suggestion.id }
+    }
+
+    func dismissMemorySuggestion(_ suggestion: ChatMemorySuggestion) {
+        memorySuggestions.removeAll { $0.id == suggestion.id }
+    }
+
+    private static func extractJSONArray(from text: String) -> String {
+        guard let start = text.firstIndex(of: "["), let end = text.lastIndex(of: "]"), start <= end else { return "[]" }
+        return String(text[start...end])
     }
 
     /// Applies `modelID`'s default profile to the current thread only

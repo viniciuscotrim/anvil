@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.13] - 2026-09-12
+
+### Added
+
+- Reviewable automatic memory suggestions from the current bounded thread.
+- Suggestions include category, confidence, and rationale.
+- Accepting a suggestion stores it as an inferred memory scoped to the active Profile.
+- Dismissing a suggestion leaves no persisted data.
+
 ## [0.5.12] - 2026-09-12
 
 ### Added
