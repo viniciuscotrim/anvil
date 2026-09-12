@@ -6,3 +6,4 @@ dist/
 *.dmg
 *.dSYM/
 Package.resolved.bak
+.vscode/

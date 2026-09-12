@@ -71,6 +71,7 @@ struct ChatView: View {
         }
         .task {
             await chat.loadInitialState()
+            await chat.applyMacSyncSettingsIfNeeded()
         }
         .onChange(of: sessions.sessions) { _, _ in chat.syncSelectedModel() }
         .fileExporter(
@@ -502,6 +503,26 @@ struct ChatView: View {
                     .onSubmit { chat.saveContextSettings() }
                 }
                 Text("Anvil preserves the first user turn and recent turns, then fills older context only when the budget allows.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("iPhone Sync") {
+                Toggle("Let iPhone Use This Mac's Threads", isOn: Binding(
+                    get: { chat.isMacSyncEnabled },
+                    set: { chat.setMacSyncEnabled($0) }
+                ))
+                if chat.isMacSyncEnabled {
+                    Picker("Access", selection: Binding(
+                        get: { chat.macSyncAccess },
+                        set: { chat.setMacSyncAccess($0) }
+                    )) {
+                        ForEach(ServerAccess.allCases) { access in
+                            Text(access.label).tag(access)
+                        }
+                    }
+                }
+                Text("Off by default. When on, the Chat tab in Anvil for iOS can pick this Mac as its source — same threads, profiles, and memories, kept in sync on this Mac even when the iPhone sends the message.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

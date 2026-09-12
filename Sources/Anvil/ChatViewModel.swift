@@ -42,6 +42,12 @@ final class ChatViewModel: ObservableObject {
     @Published var chatMessageWaitSeconds: Double
     @Published var maxEstimatedContextTokens: Int
     @Published var recentMessageCount: Int
+    /// Off by default — see `AnvilSyncServer`'s own header comment for
+    /// why this exists at all: nothing the Mac already runs exposes
+    /// threads/profiles/memories over the network, so "the iPhone can
+    /// resume this Mac's own conversation" needs this explicit opt-in.
+    @Published var isMacSyncEnabled: Bool
+    @Published var macSyncAccess: ServerAccess
     @Published private(set) var lastEstimatedContextTokens: Int = 0
     @Published var isSending = false
     @Published private(set) var isWaitingToSend = false
@@ -68,6 +74,7 @@ final class ChatViewModel: ObservableObject {
     private let requirements: RequirementsManager
     private let client = ChatClient()
     private let imageClient = ImageClient()
+    private let syncServer = AnvilSyncServer()
     private var threadBeforeTemporaryMode: ChatThread?
     private var temporaryThreads: [UUID: ChatThread] = [:]
     /// `.task { loadInitialState() }` on `ChatView` reruns every time the
@@ -112,6 +119,44 @@ final class ChatViewModel: ObservableObject {
         self.chatMessageWaitSeconds = max(0, appSettings.chatMessageWaitSeconds)
         self.maxEstimatedContextTokens = max(512, appSettings.chatMaxEstimatedContextTokens)
         self.recentMessageCount = max(2, appSettings.chatRecentMessageCount)
+        self.isMacSyncEnabled = appSettings.isMacSyncEnabled
+        self.macSyncAccess = appSettings.macSyncAccess
+    }
+
+    // MARK: - iPhone sync
+
+    /// Called once from `ChatView`'s own `.task` — starts the sync
+    /// server if it was left on from a previous launch. A no-op
+    /// otherwise; nothing about existing chat behavior depends on this.
+    func applyMacSyncSettingsIfNeeded() async {
+        guard isMacSyncEnabled else { return }
+        try? await syncServer.start(access: macSyncAccess)
+    }
+
+    func setMacSyncEnabled(_ enabled: Bool) {
+        isMacSyncEnabled = enabled
+        var settings = AppSettings.load()
+        settings.isMacSyncEnabled = enabled
+        try? settings.save()
+        Task {
+            if enabled {
+                try? await syncServer.start(access: macSyncAccess)
+            } else {
+                await syncServer.stop()
+            }
+        }
+    }
+
+    func setMacSyncAccess(_ access: ServerAccess) {
+        macSyncAccess = access
+        var settings = AppSettings.load()
+        settings.macSyncAccess = access
+        try? settings.save()
+        guard isMacSyncEnabled else { return }
+        Task {
+            await syncServer.stop()
+            try? await syncServer.start(access: access)
+        }
     }
 
     var messages: [ChatMessage] { currentThread.messages }
