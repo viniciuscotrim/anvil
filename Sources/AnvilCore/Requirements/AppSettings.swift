@@ -23,6 +23,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// Chat composer quiet period. Zero sends on submit immediately; a
     /// positive value batches blocks until the user stops typing.
     public var chatMessageWaitSeconds: Double
+    public var chatMaxEstimatedContextTokens: Int
+    public var chatRecentMessageCount: Int
 
     /// The Code tab's own working folder — nil until the user picks
     /// one. `read_file`/`list_directory`/`write_file`/
@@ -42,6 +44,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         modelsRootPath: String? = nil,
         defaultChatImageModelID: String? = nil,
         chatMessageWaitSeconds: Double = 10,
+        chatMaxEstimatedContextTokens: Int = 24_000,
+        chatRecentMessageCount: Int = 12,
         codeAgentWorkingDirectoryPath: String? = nil,
         codeAgentAllowFullDiskAccess: Bool = false,
         codeAgentPermissionLevel: CodeAgentPermissionLevel = .manual,
@@ -50,6 +54,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.modelsRootPath = modelsRootPath
         self.defaultChatImageModelID = defaultChatImageModelID
         self.chatMessageWaitSeconds = chatMessageWaitSeconds
+        self.chatMaxEstimatedContextTokens = chatMaxEstimatedContextTokens
+        self.chatRecentMessageCount = chatRecentMessageCount
         self.codeAgentWorkingDirectoryPath = codeAgentWorkingDirectoryPath
         self.codeAgentAllowFullDiskAccess = codeAgentAllowFullDiskAccess
         self.codeAgentPermissionLevel = codeAgentPermissionLevel
@@ -58,6 +64,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case modelsRootPath, defaultChatImageModelID, chatMessageWaitSeconds
+        case chatMaxEstimatedContextTokens, chatRecentMessageCount
         case codeAgentWorkingDirectoryPath, codeAgentAllowFullDiskAccess
         case codeAgentPermissionLevel, codeAgentEnabledFeatures
     }
@@ -76,6 +83,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         modelsRootPath = try container.decodeIfPresent(String.self, forKey: .modelsRootPath)
         defaultChatImageModelID = try container.decodeIfPresent(String.self, forKey: .defaultChatImageModelID)
         chatMessageWaitSeconds = try container.decodeIfPresent(Double.self, forKey: .chatMessageWaitSeconds) ?? 10
+        chatMaxEstimatedContextTokens = try container.decodeIfPresent(Int.self, forKey: .chatMaxEstimatedContextTokens) ?? 24_000
+        chatRecentMessageCount = try container.decodeIfPresent(Int.self, forKey: .chatRecentMessageCount) ?? 12
         codeAgentWorkingDirectoryPath = try container.decodeIfPresent(String.self, forKey: .codeAgentWorkingDirectoryPath)
         codeAgentAllowFullDiskAccess = try container.decodeIfPresent(Bool.self, forKey: .codeAgentAllowFullDiskAccess) ?? false
         codeAgentPermissionLevel = try container.decodeIfPresent(CodeAgentPermissionLevel.self, forKey: .codeAgentPermissionLevel) ?? .manual

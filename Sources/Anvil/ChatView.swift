@@ -126,6 +126,12 @@ struct ChatView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if chat.lastEstimatedContextTokens > 0 {
+                Text("context ~\(chat.lastEstimatedContextTokens) tok")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Button {
                 openWindow(id: "chat-popout")
             } label: {
@@ -419,6 +425,28 @@ struct ChatView: View {
                     ), format: .number)
                         .frame(width: 80)
                 }
+            }
+
+            Section("Long conversations") {
+                LabeledContent("Context budget") {
+                    TextField("24000", value: Binding(
+                        get: { chat.maxEstimatedContextTokens },
+                        set: { chat.maxEstimatedContextTokens = $0 }
+                    ), format: .number)
+                    .frame(width: 90)
+                    .onSubmit { chat.saveContextSettings() }
+                }
+                LabeledContent("Recent turns") {
+                    TextField("12", value: Binding(
+                        get: { chat.recentMessageCount },
+                        set: { chat.recentMessageCount = $0 }
+                    ), format: .number)
+                    .frame(width: 70)
+                    .onSubmit { chat.saveContextSettings() }
+                }
+                Text("Anvil preserves the first user turn and recent turns, then fills older context only when the budget allows.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Export") {

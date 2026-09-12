@@ -38,6 +38,9 @@ final class ChatViewModel: ObservableObject {
     @Published var selectedModelID: String?
     @Published var inputText: String = ""
     @Published var chatMessageWaitSeconds: Double
+    @Published var maxEstimatedContextTokens: Int
+    @Published var recentMessageCount: Int
+    @Published private(set) var lastEstimatedContextTokens: Int = 0
     @Published var isSending = false
     @Published private(set) var isWaitingToSend = false
     @Published private(set) var generationPhase: GenerationPhase = .idle
@@ -61,7 +64,6 @@ final class ChatViewModel: ObservableObject {
     private let memoryStore: ChatMemoryStore
     private let modelRegistry: ModelRegistry
     private let requirements: RequirementsManager
-    private let contextBuilder = ChatContextBuilder()
     private let client = ChatClient()
     private let imageClient = ImageClient()
     private var threadBeforeTemporaryMode: ChatThread?
@@ -104,7 +106,10 @@ final class ChatViewModel: ObservableObject {
         self.modelRegistry = modelRegistry
         self.requirements = requirements
         self.currentThread = ChatThread()
-        self.chatMessageWaitSeconds = max(0, AppSettings.load().chatMessageWaitSeconds)
+        let appSettings = AppSettings.load()
+        self.chatMessageWaitSeconds = max(0, appSettings.chatMessageWaitSeconds)
+        self.maxEstimatedContextTokens = max(512, appSettings.chatMaxEstimatedContextTokens)
+        self.recentMessageCount = max(2, appSettings.chatRecentMessageCount)
     }
 
     var messages: [ChatMessage] { currentThread.messages }
@@ -323,6 +328,15 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func saveContextSettings() {
+        maxEstimatedContextTokens = max(512, min(maxEstimatedContextTokens, 128_000))
+        recentMessageCount = max(2, min(recentMessageCount, 100))
+        var settings = AppSettings.load()
+        settings.chatMaxEstimatedContextTokens = maxEstimatedContextTokens
+        settings.chatRecentMessageCount = recentMessageCount
+        try? settings.save()
+    }
+
     private func cancelBufferedSend() {
         bufferedSendTask?.cancel()
         bufferedSendTask = nil
@@ -371,7 +385,12 @@ final class ChatViewModel: ObservableObject {
             hasAnyImageModel = !registeredImageModels.isEmpty
         }
         let tools: [ChatTool] = hasAnyImageModel ? [.generateImage] : []
+        let contextBuilder = ChatContextBuilder(
+            maxEstimatedTokens: maxEstimatedContextTokens,
+            recentMessageCount: recentMessageCount
+        )
         let context = contextBuilder.build(messages: currentThread.messages, memories: memories)
+        lastEstimatedContextTokens = context.messages.reduce(0) { $0 + ChatContextBuilder.estimateTokens($1.content) }
         let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty, memoryPrompt: context.memoryPrompt)
         let responderName = activeProfile?.name
 
@@ -452,7 +471,12 @@ final class ChatViewModel: ObservableObject {
                 generationPhase = .generatingImage
                 let (toolResult, generatedPath) = await runGenerateImageTool(toolCall)
                 currentThread.messages.append(toolResult)
-                let followUpContext = contextBuilder.build(messages: currentThread.messages, memories: memories)
+                let followUpBuilder = ChatContextBuilder(
+                    maxEstimatedTokens: maxEstimatedContextTokens,
+                    recentMessageCount: recentMessageCount
+                )
+                let followUpContext = followUpBuilder.build(messages: currentThread.messages, memories: memories)
+                lastEstimatedContextTokens = followUpContext.messages.reduce(0) { $0 + ChatContextBuilder.estimateTokens($1.content) }
                 let followUpStream = client.streamSend(
                     messages: followUpContext.messages,
                     baseURL: endpoint,

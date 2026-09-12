@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.11] - 2026-09-12
+
+### Improved
+
+- Context budget is now configurable from Chat's sidebar (`512` to `128000` estimated tokens).
+- Recent-turn retention is configurable from `2` to `100` messages.
+- Chat header reports the estimated context size used by the latest request.
+- Context settings persist locally and old settings files receive compatible defaults.
+
 ## [0.5.10] - 2026-09-12
 
 ### Added
