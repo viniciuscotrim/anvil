@@ -18,6 +18,12 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_device-info._tcp.</string>
+		<string>_companion-link._tcp.</string>
+		<string>_airplay._tcp.</string>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Anvil looks for models you've loaded and exposed on your Mac on the same Wi-Fi network, so you can use them from your iPhone without typing an IP address.</string>
 	<key>UILaunchScreen</key>
