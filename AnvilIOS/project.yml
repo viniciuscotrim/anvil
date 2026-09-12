@@ -59,6 +59,8 @@ targets:
           - _device-info._tcp.
           - _companion-link._tcp.
           - _airplay._tcp.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.viniciuscotrim.anvil.ios

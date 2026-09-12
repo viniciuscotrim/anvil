@@ -2,21 +2,40 @@ import SwiftUI
 import MLXLMCommon
 import AnvilCore
 
-/// A real chat screen — on-device inference via `NativeChatEngine`, no
-/// server, no network round trip once the model is loaded — with
-/// conversations persisted via `ChatThreadsViewModel`/`ChatThreadStore`,
-/// the same cross-platform store the Mac app's Chat uses. The model ID
-/// field takes any Hugging Face MLX-format repo (e.g.
-/// `mlx-community/Qwen3-0.6B-4bit`), or pick one already downloaded in
-/// the Models tab from the menu next to it.
+/// Which engine answers the *next* message — a thread itself never pins
+/// one (`ChatThread` doesn't, `ChatMessage.modelDisplayName` records per-
+/// message instead), exactly like switching which model answers already
+/// works on the Mac app. Switching source mid-conversation only changes
+/// what happens next; existing messages/history are untouched.
+enum ChatSource: Equatable {
+    case local
+    case remote(RemoteMacConnection)
+}
+
+/// A real chat screen — either on-device inference via `NativeChatEngine`
+/// (no server, no network round trip once the model is loaded) or a
+/// model already loaded on a Mac on the same network via
+/// `RemoteChatEngine` (the same `ChatClient` the Mac app's own Chat uses)
+/// — picked with the source menu next to the model bar instead of a
+/// second, separate chat screen. Conversations persist via
+/// `ChatThreadsViewModel`/`ChatThreadStore`, the same cross-platform
+/// store the Mac app's Chat uses, and Memory/Profiles apply to either
+/// source identically. The model ID field takes any Hugging Face
+/// MLX-format repo (e.g. `mlx-community/Qwen3-0.6B-4bit`), or pick one
+/// already downloaded in the Models tab from the menu next to it.
 struct NativeChatView: View {
     @Environment(ModelsViewModel.self) private var modelsViewModel
     @Environment(ProfilesViewModel.self) private var profilesViewModel
+    @Environment(ChatThreadsViewModel.self) private var threads
     @EnvironmentObject private var engine: NativeChatEngine
-    @State private var threads = ChatThreadsViewModel()
+    @StateObject private var remoteEngine = RemoteChatEngine()
+    @StateObject private var connectionsModel = RemoteConnectionsViewModel()
+    @State private var source: ChatSource = .local
+    @State private var selectedImageConnectionID: UUID?
+    @State private var isConnectionsSheetPresented = false
     @State private var modelID = "mlx-community/Qwen3-0.6B-4bit"
     @State private var inputText = ""
-    @State private var isGenerating = false
+    @State private var isLocalGenerating = false
     @State private var isThreadListPresented = false
     /// The user's own explicit pick, made before hitting Load — takes
     /// priority over the model's bound default. `nil` means "haven't
@@ -40,10 +59,28 @@ struct NativeChatView: View {
         return profilesViewModel.profiles.first { $0.id == id }
     }
 
+    private var isGenerating: Bool {
+        switch source {
+        case .local: return isLocalGenerating
+        case .remote: return remoteEngine.isSending
+        }
+    }
+
+    private var selectedImageConnection: RemoteMacConnection? {
+        connectionsModel.imageConnections.first { $0.id == selectedImageConnectionID }
+    }
+
+    private var canSend: Bool {
+        switch source {
+        case .local: return engine.isLoaded
+        case .remote: return true
+        }
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                modelBar
+                sourceBar
                 if canChangeProfile {
                     profileBar
                 } else if let activeProfile {
@@ -55,7 +92,7 @@ struct NativeChatView: View {
                 }
                 Divider()
 
-                if let errorMessage = engine.errorMessage {
+                if let errorMessage = source == .local ? engine.errorMessage : remoteEngine.errorMessage {
                     Text(errorMessage).foregroundStyle(.red).font(.caption).padding(8)
                 }
 
@@ -73,8 +110,10 @@ struct NativeChatView: View {
                             ForEach(threads.currentThread.messages) { message in
                                 bubble(message).id(message.id)
                             }
-                            if isGenerating {
+                            if isLocalGenerating {
                                 ProgressView().padding(.leading, 8)
+                            } else if case .remote = source, remoteEngine.generationPhase != .idle {
+                                remoteGeneratingIndicator
                             }
                         }
                         .padding()
@@ -100,7 +139,7 @@ struct NativeChatView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 4) {
-                        if let tps = lastTokensPerSecond {
+                        if let tps = source == .local ? lastTokensPerSecond : remoteEngine.lastTokensPerSecond {
                             Text(String(format: "%.1f tok/s", tps))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
@@ -119,8 +158,10 @@ struct NativeChatView: View {
             }
             .sheet(isPresented: $isThreadListPresented) { threadListSheet }
             .sheet(isPresented: $isSettingsPresented) { settingsSheet }
+            .sheet(isPresented: $isConnectionsSheetPresented) { connectionsSheet }
             .task { await profilesViewModel.load() }
             .task { await threads.loadInitialState() }
+            .task { await connectionsModel.refreshConnections() }
         }
     }
 
@@ -183,8 +224,9 @@ struct NativeChatView: View {
     }
 
     /// Generation parameters — same fields the Mac app's Chat sidebar
-    /// edits (`GenerationSettings`, cross-platform), applied by
-    /// `NativeChatEngine` fresh before every request.
+    /// edits (`GenerationSettings`, cross-platform), applied fresh
+    /// before every request regardless of which engine (local or
+    /// remote) is currently answering.
     private var settingsSheet: some View {
         NavigationStack {
             Form {
@@ -234,22 +276,25 @@ struct NativeChatView: View {
         threads.newThread()
         manualProfileChoiceMade = false
         selectedProfile = nil
-        if engine.isLoaded {
+        if source == .local, engine.isLoaded {
             Task { await applyCurrentProfileChoice(startFreshSessionIfLoaded: true) }
         }
     }
 
-    /// Switches the visible conversation and, if a model is already
-    /// loaded, immediately rehydrates the session with this thread's
-    /// history — no re-download, no reload, just a fresh `ChatSession`
-    /// built from the saved turns (see `NativeChatEngine.startSession`).
+    /// Switches the visible conversation and, if a local model is
+    /// already loaded, immediately rehydrates the session with this
+    /// thread's history — no re-download, no reload, just a fresh
+    /// `ChatSession` built from the saved turns (see
+    /// `NativeChatEngine.startSession`). A no-op for the remote engine,
+    /// which is stateless per request and just replays history on the
+    /// next send.
     private func selectThread(_ thread: ChatThread) {
         guard !isGenerating else { return }
         threads.selectThread(thread)
         manualProfileChoiceMade = thread.profileID != nil
         selectedProfile = activeProfile
-        if engine.isLoaded {
-            engine.startSession(instructions: activeProfile?.prompt, history: thread.messages)
+        if source == .local, engine.isLoaded {
+            engine.startSession(instructions: composedLocalInstructions(profile: activeProfile), history: thread.messages)
         }
     }
 
@@ -300,10 +345,11 @@ struct NativeChatView: View {
         return "Automatic"
     }
 
-    /// Records the pick and, if a model is already loaded, applies it
-    /// right away by rebuilding the session — so choosing a profile for
-    /// a brand-new thread doesn't require pressing Load again when one
-    /// is already resident.
+    /// Records the pick and, if a local model is already loaded, applies
+    /// it right away by rebuilding the session — so choosing a profile
+    /// for a brand-new thread doesn't require pressing Load again when
+    /// one is already resident. A no-op session rebuild for the remote
+    /// engine (stateless per request; the next send just picks it up).
     private func choose(profile: ChatProfile?, manual: Bool) async {
         manualProfileChoiceMade = manual
         selectedProfile = profile
@@ -313,7 +359,7 @@ struct NativeChatView: View {
     /// Resolves the picker's current choice into `currentThread.profileID`
     /// — a no-op once the thread already has messages, since the profile
     /// is fixed at that point (`canChangeProfile`). Optionally rebuilds
-    /// the live session immediately so a loaded model picks it up.
+    /// the live local session immediately so a loaded model picks it up.
     private func applyCurrentProfileChoice(startFreshSessionIfLoaded: Bool) async {
         guard canChangeProfile else { return }
         let profile: ChatProfile?
@@ -324,20 +370,114 @@ struct NativeChatView: View {
             profile = await profilesViewModel.defaultProfile(forModelID: lookupModelID)
         }
         threads.currentThread.profileID = profile?.id
-        if startFreshSessionIfLoaded, engine.isLoaded {
-            engine.startSession(instructions: profile?.prompt, history: threads.currentThread.messages)
+        if startFreshSessionIfLoaded, source == .local, engine.isLoaded {
+            engine.startSession(instructions: composedLocalInstructions(profile: profile), history: threads.currentThread.messages)
         }
     }
 
-    // MARK: - Model bar
+    /// Folds durable memory into the local engine's fixed-at-session-
+    /// start `instructions`, alongside the active profile's prompt — the
+    /// same content the remote engine injects as a system-prompt on
+    /// every request, just applied once here since an on-device
+    /// `ChatSession`'s instructions can't change mid-session (see
+    /// `NativeChatEngine.startSession`'s own doc comment).
+    private func composedLocalInstructions(profile: ChatProfile?) -> String? {
+        var parts: [String] = []
+        if let prompt = profile?.prompt.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
+            parts.append(prompt)
+        }
+        let scopedMemories = threads.memories.filter { $0.profileID == nil || $0.profileID == profile?.id }
+        if let memoryPrompt = ChatContextBuilder().build(messages: [], memories: scopedMemories).memoryPrompt {
+            parts.append(memoryPrompt)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
 
-    private var modelBar: some View {
+    // MARK: - Source bar
+
+    /// "This iPhone" (on-device, unchanged) vs a Mac already found on the
+    /// network or previously saved — one tap from a discovered model
+    /// straight into use, the same frictionless flow the Mac tab already
+    /// had, just relocated here instead of living behind a second chat
+    /// screen.
+    private var sourceBar: some View {
+        HStack {
+            Menu {
+                Button {
+                    source = .local
+                } label: {
+                    Label("This iPhone", systemImage: "iphone")
+                }
+                if !connectionsModel.textConnections.isEmpty {
+                    Divider()
+                    ForEach(connectionsModel.textConnections) { connection in
+                        Button {
+                            source = .remote(connection)
+                        } label: {
+                            Label(connection.displayName, systemImage: "network")
+                        }
+                    }
+                }
+                if !connectionsModel.discoveredModels.filter({ $0.kind == .text }).isEmpty {
+                    Divider()
+                    ForEach(connectionsModel.discoveredModels.filter { $0.kind == .text }) { discovered in
+                        Button {
+                            source = .remote(connectionsModel.connect(to: discovered))
+                        } label: {
+                            Label("Remote: \(discovered.displayName)", systemImage: "bolt.horizontal")
+                        }
+                    }
+                }
+                Divider()
+                Button {
+                    isConnectionsSheetPresented = true
+                } label: {
+                    Label("Manage Mac Connections…", systemImage: "gearshape")
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: sourceIcon)
+                    Text(sourceLabel).lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down")
+                }
+                .font(.caption)
+            }
+            .disabled(isGenerating)
+
+            Spacer()
+
+            switch source {
+            case .local:
+                localModelControls
+            case .remote:
+                remoteSourceControls
+            }
+        }
+        .padding(8)
+    }
+
+    private var sourceIcon: String {
+        switch source {
+        case .local: return "iphone"
+        case .remote: return "network"
+        }
+    }
+
+    private var sourceLabel: String {
+        switch source {
+        case .local: return engine.loadedModelID ?? "This iPhone"
+        case .remote(let connection): return connection.displayName
+        }
+    }
+
+    private var localModelControls: some View {
         HStack {
             TextField("mlx-community/…", text: $modelID)
                 .textFieldStyle(.roundedBorder)
                 .disabled(engine.isLoading || engine.isLoaded)
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
+                .frame(maxWidth: 160)
 
             if !engine.isLoaded && !engine.isLoading {
                 Menu {
@@ -366,7 +506,55 @@ struct NativeChatView: View {
                 Button("Load") { Task { await load() } }
             }
         }
-        .padding(8)
+    }
+
+    /// A remote source has nothing to "load" — it's either reachable or
+    /// it isn't — so this just shows that, plus an optional pick for
+    /// which remote **image** connection (if any) `generate_image` tool
+    /// calls should go to.
+    private var remoteSourceControls: some View {
+        HStack(spacing: 6) {
+            if case .remote(let connection) = source {
+                Circle()
+                    .fill(connectionsModel.reachableConnectionIDs.contains(connection.id) ? .green : .secondary)
+                    .frame(width: 6, height: 6)
+            }
+            Menu {
+                Button("None") { selectedImageConnectionID = nil }
+                ForEach(connectionsModel.imageConnections) { connection in
+                    Button(connection.displayName) { selectedImageConnectionID = connection.id }
+                }
+            } label: {
+                Text("Image: \(selectedImageConnection?.displayName ?? "None")")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var connectionsSheet: some View {
+        NavigationStack {
+            RemoteConnectionsListView(connectionsModel: connectionsModel, kind: .text) { connection in
+                source = .remote(connection)
+                isConnectionsSheetPresented = false
+            }
+            .navigationTitle("Mac Connections")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { isConnectionsSheetPresented = false }
+                }
+            }
+        }
+    }
+
+    private var remoteGeneratingIndicator: some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            if let label = remoteEngine.generationPhase.label {
+                Text(label).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.leading, 8)
     }
 
     private func bubble(_ message: ChatMessage) -> some View {
@@ -400,9 +588,13 @@ struct NativeChatView: View {
             TextField("Message…", text: $inputText, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...4)
-                .disabled(!engine.isLoaded)
-            Button("Send") { send() }
-                .disabled(!engine.isLoaded || isGenerating || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!canSend)
+            if case .remote = source, remoteEngine.isSending {
+                Button("Stop", role: .destructive) { remoteEngine.stopGeneration() }
+            } else {
+                Button("Send") { send() }
+                    .disabled(!canSend || isGenerating || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
         }
         .padding(8)
     }
@@ -410,19 +602,38 @@ struct NativeChatView: View {
     /// Loads (or reuses, if already resident) `modelID`'s weights, then
     /// starts a session rehydrated from the current thread's saved
     /// messages — resuming a past conversation exactly where it left
-    /// off, or starting clean for an empty one.
+    /// off, or starting clean for an empty one. Only meaningful for the
+    /// local source.
     private func load() async {
         await applyCurrentProfileChoice(startFreshSessionIfLoaded: false)
         await engine.load(
-            modelID: modelID, instructions: activeProfile?.prompt,
+            modelID: modelID, instructions: composedLocalInstructions(profile: activeProfile),
             history: threads.currentThread.messages)
     }
 
     private func send() {
+        switch source {
+        case .local:
+            sendLocal()
+        case .remote(let connection):
+            remoteEngine.send(
+                text: inputText,
+                threads: threads,
+                connection: connection,
+                imageConnection: selectedImageConnection,
+                profile: activeProfile,
+                memories: threads.memories,
+                settings: engine.settings
+            )
+            inputText = ""
+        }
+    }
+
+    private func sendLocal() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, engine.isLoaded, !isGenerating else { return }
+        guard !text.isEmpty, engine.isLoaded, !isLocalGenerating else { return }
         inputText = ""
-        isGenerating = true
+        isLocalGenerating = true
 
         threads.currentThread.messages.append(ChatMessage(role: .user, content: text))
         if threads.currentThread.title == "New Chat", threads.currentThread.messages.count == 1 {
@@ -436,7 +647,7 @@ struct NativeChatView: View {
         let modelDisplayName = engine.loadedModelID ?? modelID
 
         Task {
-            defer { isGenerating = false }
+            defer { isLocalGenerating = false }
             do {
                 threads.currentThread.messages.append(
                     ChatMessage(role: .assistant, content: "", modelDisplayName: modelDisplayName))

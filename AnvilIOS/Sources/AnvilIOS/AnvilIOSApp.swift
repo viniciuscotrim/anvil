@@ -18,6 +18,11 @@ import SwiftUI
 struct AnvilIOSApp: App {
     @State private var modelsViewModel = ModelsViewModel()
     @State private var profilesViewModel = ProfilesViewModel()
+    /// Owned here (not by `NativeChatView`) so the Memory tab can see
+    /// the exact same in-memory `currentThread` Chat is actively having
+    /// — not just whatever was last saved to disk — for "Suggest from
+    /// current Chat thread".
+    @State private var chatThreads = ChatThreadsViewModel()
     /// Owned here (not by `NativeChatView`/`NativeImageView` themselves)
     /// so Prompt to Model can drive the very same loaded text/image
     /// models Chat and Images already hold — one resident model per
@@ -54,6 +59,7 @@ struct AnvilIOSApp: App {
             ContentView()
                 .environment(modelsViewModel)
                 .environment(profilesViewModel)
+                .environment(chatThreads)
                 .environmentObject(chatEngine)
                 .environmentObject(imageEngine)
         }
