@@ -67,7 +67,16 @@ final class ModelsViewModel {
             errorMessage = nil
         }
     }
-    var query = ""
+    var query = "" {
+        didSet {
+            guard query != oldValue else { return }
+            queryDidChange()
+        }
+    }
+    /// Off by default (matches the Mac app's own default) — searches
+    /// automatically, debounced, once 3+ characters are typed.
+    var isLiveSearchEnabled = false
+    private var liveSearchTask: Task<Void, Never>?
     var searchResults: [HFModelSummary] = []
     var civitaiResults: [CivitAIModelSummary] = []
     var registeredModels: [ModelEntry] = []
@@ -179,6 +188,21 @@ final class ModelsViewModel {
         switch source {
         case .huggingFace: await search()
         case .civitai: await searchCivitAI()
+        }
+    }
+
+    /// Debounced live search — a no-op unless `isLiveSearchEnabled` is
+    /// on and there's enough typed to bother searching for, same
+    /// threshold and delay as the Mac app's own opt-in toggle.
+    private func queryDidChange() {
+        liveSearchTask?.cancel()
+        guard isLiveSearchEnabled,
+            query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3
+        else { return }
+        liveSearchTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard let self, !Task.isCancelled else { return }
+            await self.performSearch()
         }
     }
 

@@ -21,6 +21,8 @@ struct ContentView: View {
                 .tabItem { Label("Prompt", systemImage: "sparkles") }
             ProfilesView()
                 .tabItem { Label("Profiles", systemImage: "person.text.rectangle") }
+            SettingsView()
+                .tabItem { Label("Settings", systemImage: "gearshape") }
         }
     }
 }

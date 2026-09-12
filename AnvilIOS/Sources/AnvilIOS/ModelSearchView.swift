@@ -92,8 +92,17 @@ struct ModelSearchView: View {
                 ))
                 .toggleStyle(.button)
                 .font(.caption)
-                Spacer()
             }
+            Toggle(isOn: Binding(
+                get: { viewModel.isLiveSearchEnabled },
+                set: { viewModel.isLiveSearchEnabled = $0 }
+            )) {
+                Image(systemName: "bolt.fill")
+            }
+            .toggleStyle(.button)
+            .font(.caption)
+            .help("Search as I type (3+ characters, after a short pause).")
+            Spacer()
             Menu {
                 Button("Any size") { viewModel.maxSizeClass = nil }
                 ForEach(ModelSizeClass.allCases) { sizeClass in
@@ -106,7 +115,6 @@ struct ModelSearchView: View {
                 }
                 .font(.caption)
             }
-            if viewModel.source != .huggingFace { Spacer() }
         }
         .listRowSeparator(.hidden)
     }
