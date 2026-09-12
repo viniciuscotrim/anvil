@@ -92,6 +92,7 @@ final class RemoteChatEngine: ObservableObject {
             return
         }
         errorMessage = nil
+        threads.markSendStarted()
 
         threads.currentThread.messages.append(ChatMessage(role: .user, content: trimmed))
         if threads.currentThread.title == "New Chat", threads.currentThread.messages.count == 1 {
@@ -132,6 +133,7 @@ final class RemoteChatEngine: ObservableObject {
             if self.generationPhase == .preparing || self.generationPhase == .reasoning || self.generationPhase == .generating {
                 self.generationPhase = .idle
             }
+            threads.markSendFinished()
         }
     }
 
@@ -156,9 +158,10 @@ final class RemoteChatEngine: ObservableObject {
         memories: [ChatMemory]
     ) async {
         do {
-            threads.currentThread.messages.append(ChatMessage(
-                role: .assistant, content: "", modelDisplayName: modelDisplayName, responderName: responderName))
-            let replyIndex = threads.currentThread.messages.count - 1
+            let placeholder = ChatMessage(
+                role: .assistant, content: "", modelDisplayName: modelDisplayName, responderName: responderName)
+            threads.currentThread.messages.append(placeholder)
+            let replyID = placeholder.id
             // `contextMessages` already ends with the user's own current
             // message (`ChatContextBuilder.build` was called before the
             // assistant placeholder above existed) — no `dropLast()`
@@ -176,14 +179,22 @@ final class RemoteChatEngine: ObservableObject {
             var reply: ChatMessage?
             for try await event in stream {
                 try Task.checkCancellation()
+                // Looked up by ID on every delta, not a captured array
+                // index — `isSendInFlight` (set by `send()`) already
+                // keeps the periodic Mac merge from replacing
+                // `currentThread` mid-stream, but this is what makes a
+                // delta a graceful no-op instead of a crash if the
+                // placeholder ever goes missing for some other reason,
+                // rather than indexing into an array that moved.
+                guard let index = Self.index(of: replyID, in: threads.currentThread.messages) else { continue }
                 switch event {
                 case .contentDelta(let delta):
                     generationPhase = .generating
-                    threads.currentThread.messages[replyIndex].content += delta
+                    threads.currentThread.messages[index].content += delta
                 case .reasoningDelta(let delta):
                     generationPhase = .reasoning
-                    threads.currentThread.messages[replyIndex].reasoning =
-                        (threads.currentThread.messages[replyIndex].reasoning ?? "") + delta
+                    threads.currentThread.messages[index].reasoning =
+                        (threads.currentThread.messages[index].reasoning ?? "") + delta
                 case .done(let message):
                     reply = message
                 }
@@ -191,7 +202,9 @@ final class RemoteChatEngine: ObservableObject {
             guard var reply else { return }
             reply.responderName = responderName
             reply.memoryIDsUsed = memoryIDsUsed
-            threads.currentThread.messages[replyIndex] = reply
+            if let index = Self.index(of: replyID, in: threads.currentThread.messages) {
+                threads.currentThread.messages[index] = reply
+            }
 
             if let toolCall = reply.toolCalls?.first(where: { $0.name == "generate_image" }), let imageConnection {
                 generationPhase = .generatingImage
@@ -211,28 +224,30 @@ final class RemoteChatEngine: ObservableObject {
                     settings: settings, systemPrompt: systemPrompt,
                     conversationID: threads.currentThread.id.uuidString)
 
-                threads.currentThread.messages.append(ChatMessage(
-                    role: .assistant, content: "", modelDisplayName: modelDisplayName, responderName: responderName))
-                let followUpIndex = threads.currentThread.messages.count - 1
+                let followUpPlaceholder = ChatMessage(
+                    role: .assistant, content: "", modelDisplayName: modelDisplayName, responderName: responderName)
+                threads.currentThread.messages.append(followUpPlaceholder)
+                let followUpID = followUpPlaceholder.id
                 var followUpReply: ChatMessage?
                 for try await event in followUpStream {
                     try Task.checkCancellation()
+                    guard let index = Self.index(of: followUpID, in: threads.currentThread.messages) else { continue }
                     switch event {
                     case .contentDelta(let delta):
                         generationPhase = .generating
-                        threads.currentThread.messages[followUpIndex].content += delta
+                        threads.currentThread.messages[index].content += delta
                     case .reasoningDelta(let delta):
-                        threads.currentThread.messages[followUpIndex].reasoning =
-                            (threads.currentThread.messages[followUpIndex].reasoning ?? "") + delta
+                        threads.currentThread.messages[index].reasoning =
+                            (threads.currentThread.messages[index].reasoning ?? "") + delta
                     case .done(let message):
                         followUpReply = message
                     }
                 }
-                if var followUpReply {
+                if var followUpReply, let index = Self.index(of: followUpID, in: threads.currentThread.messages) {
                     followUpReply.generatedImagePath = generatedPath
                     followUpReply.responderName = responderName
                     followUpReply.memoryIDsUsed = followUpContext.memoryIDs
-                    threads.currentThread.messages[followUpIndex] = followUpReply
+                    threads.currentThread.messages[index] = followUpReply
                 }
             }
 
@@ -253,6 +268,10 @@ final class RemoteChatEngine: ObservableObject {
             errorMessage = error.localizedDescription
             await threads.persistCurrentThread()
         }
+    }
+
+    private static func index(of messageID: UUID, in messages: [ChatMessage]) -> Int? {
+        messages.firstIndex { $0.id == messageID }
     }
 
     /// Runs a `generate_image` tool call against a remote **image**

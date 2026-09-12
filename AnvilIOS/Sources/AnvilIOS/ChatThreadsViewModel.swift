@@ -62,6 +62,25 @@ final class ChatThreadsViewModel {
     /// persist call becomes a no-op until it's off again.
     private(set) var isTemporaryModeActive = false
     private var threadBeforeTemporaryMode: ChatThread?
+    /// True for the whole span of a send — from appending the user's
+    /// message through the reply finishing (or failing/cancelling).
+    /// The periodic Mac merge (`mergeSyncNow`) checks this before ever
+    /// touching `currentThread`: a real, reproduced crash otherwise —
+    /// a durability-save partway through a reply persists a snapshot
+    /// *without* that still-streaming reply yet, which gets a fresh,
+    /// newer `updatedAt` from `ChatThreadStore.upsert` than the
+    /// in-memory thread carries (that save never reassigns
+    /// `currentThread` itself, by design, so its own `updatedAt` never
+    /// advances to match). If the periodic merge's next tick lands in
+    /// that window, it sees the disk copy as "newer" and swaps
+    /// `currentThread` out for that shorter snapshot — out from under
+    /// whichever engine is still writing `messages[replyIndex]` by
+    /// position, an immediate index-out-of-bounds crash the moment the
+    /// next token arrives.
+    private(set) var isSendInFlight = false
+
+    func markSendStarted() { isSendInFlight = true }
+    func markSendFinished() { isSendInFlight = false }
 
     private let store = ChatThreadStore()
     private let memoryStore = ChatMemoryStore()
@@ -112,6 +131,10 @@ final class ChatThreadsViewModel {
     /// Mac does, and vice versa — reads never need to reach across the
     /// network at all; this is what keeps them that way.
     private func mergeSyncNow(with connection: RemoteMacConnection, profilesViewModel: ProfilesViewModel) async {
+        // Never merge mid-send — see `isSendInFlight`'s own doc comment
+        // for the exact crash this prevents. The next tick, 3 seconds
+        // later, catches up once the send has actually finished.
+        guard !isSendInFlight else { return }
         do {
             try await Self.mergeThreads(local: store, remote: syncClient, host: connection.host)
             try await Self.mergeMemories(local: memoryStore, remote: syncClient, host: connection.host)

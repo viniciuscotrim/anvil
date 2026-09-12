@@ -699,24 +699,37 @@ struct NativeChatView: View {
 
         let modelDisplayName = engine.loadedModelID ?? modelID
 
+        threads.markSendStarted()
         Task {
-            defer { isLocalGenerating = false }
+            defer {
+                isLocalGenerating = false
+                threads.markSendFinished()
+            }
             do {
-                threads.currentThread.messages.append(
-                    ChatMessage(role: .assistant, content: "", modelDisplayName: modelDisplayName))
-                let replyIndex = threads.currentThread.messages.count - 1
+                let placeholder = ChatMessage(role: .assistant, content: "", modelDisplayName: modelDisplayName)
+                threads.currentThread.messages.append(placeholder)
+                let replyID = placeholder.id
                 let stream = try engine.streamSend(text)
                 for try await chunk in stream {
-                    threads.currentThread.messages[replyIndex].content += chunk
+                    // By ID, not a captured index — see RemoteChatEngine's
+                    // matching comment for why (defense in depth here;
+                    // nothing external touches `currentThread` during a
+                    // local generation today, but a crash from indexing
+                    // into a moved array is bad enough to guard against
+                    // even a future, unforeseen source of one).
+                    guard let index = threads.currentThread.messages.firstIndex(where: { $0.id == replyID }) else { continue }
+                    threads.currentThread.messages[index].content += chunk
                 }
                 // Set only if a generate_image tool call actually ran
                 // as part of that stream (see NativeChatEngine.refreshTools).
-                if let imagePath = engine.consumeLastGeneratedImagePath() {
-                    threads.currentThread.messages[replyIndex].generatedImagePath = imagePath
-                }
-                if let tokensPerSecond = engine.consumeLastTokensPerSecond() {
-                    threads.currentThread.messages[replyIndex].tokensPerSecond = tokensPerSecond
-                    lastTokensPerSecond = tokensPerSecond
+                if let index = threads.currentThread.messages.firstIndex(where: { $0.id == replyID }) {
+                    if let imagePath = engine.consumeLastGeneratedImagePath() {
+                        threads.currentThread.messages[index].generatedImagePath = imagePath
+                    }
+                    if let tokensPerSecond = engine.consumeLastTokensPerSecond() {
+                        threads.currentThread.messages[index].tokensPerSecond = tokensPerSecond
+                        lastTokensPerSecond = tokensPerSecond
+                    }
                 }
             } catch {
                 threads.currentThread.messages.append(
