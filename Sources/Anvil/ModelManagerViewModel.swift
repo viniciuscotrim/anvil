@@ -59,6 +59,11 @@ final class ModelManagerViewModel: ObservableObject {
     /// — drives the Pause/Stop controls next to it and blocks starting
     /// a second one at the same time.
     @Published private(set) var activeDownloadID: String?
+    /// The full job behind `activeDownloadID`, so the dedicated
+    /// "Downloads in Progress" section can show its name without the
+    /// search results list (which may have since changed, or not even
+    /// be the source this job came from) still being around.
+    @Published private(set) var activeJob: DownloadJob?
     /// 0...1, when the active download's own progress lines carry a
     /// real percentage — nil otherwise (nothing downloading, or a
     /// stretch of output with no percentage in it, e.g. between files).
@@ -91,17 +96,30 @@ final class ModelManagerViewModel: ObservableObject {
     private let ramBytes = ProcessInfo.processInfo.physicalMemory
 
     /// What the list actually shows — `searchResults` narrowed by
-    /// `sizeFilter` and `hideIncompatibleModels`. A result with no size
-    /// estimate at all (no safetensors metadata, e.g. a GGUF-only repo)
-    /// is kept when no size filter is active but excluded by any
-    /// specific one, since there's nothing to classify it by.
+    /// `sizeFilter` and `hideIncompatibleModels`, then reordered so
+    /// results that actually fit this Mac's RAM come first: a real,
+    /// reported problem was a 30GB result sitting near the top of the
+    /// list next to models that will actually load, with nothing
+    /// distinguishing "big" from "physically won't run here."
+    /// A result with no size estimate at all (no safetensors metadata,
+    /// e.g. a GGUF-only repo) is kept when no size filter is active but
+    /// excluded by any specific one, since there's nothing to classify
+    /// it by.
     var filteredSearchResults: [HFModelSummary] {
-        searchResults.filter { summary in
+        let filtered = searchResults.filter { summary in
             if hideIncompatibleModels, summary.compatibility == .incompatible { return false }
             guard let sizeFilter else { return true }
             guard let bytes = summary.sizeBytes else { return false }
             return ModelSizeClass.classify(sizeBytes: bytes, ramBytes: ramBytes) == sizeFilter
         }
+        return ModelSizeClass.sortedByRunnability(filtered, ramBytes: ramBytes) { $0.sizeBytes }
+    }
+
+    /// `civitaiResults`, reordered the same way `filteredSearchResults`
+    /// is — results that fit this Mac's RAM first. No compatibility/size
+    /// filtering here today (unlike the HF side), just the ordering fix.
+    var rankedCivitAIResults: [CivitAIModelSummary] {
+        ModelSizeClass.sortedByRunnability(civitaiResults, ramBytes: ramBytes) { $0.primaryFile?.sizeBytes }
     }
 
     /// Grouped by family for display — see `ModelFamilyGrouping`.
@@ -342,6 +360,7 @@ final class ModelManagerViewModel: ObservableObject {
         errorMessage = nil
         isBusy = true
         activeDownloadID = job.id
+        activeJob = job
         downloadProgress = nil
         deletePartialOnCancel = false
 
@@ -415,6 +434,7 @@ final class ModelManagerViewModel: ObservableObject {
         downloadProgress = nil
         downloadTask = nil
         activeDownloadID = nil
+        activeJob = nil
         if !downloadQueue.isEmpty {
             startDownload(downloadQueue.removeFirst())
         }

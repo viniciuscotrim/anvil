@@ -10,11 +10,14 @@ import Foundation
 /// result's own `filePaths`/`siblings` — the same data
 /// `ModelCompatibility` already reads, no extra API call needed).
 ///
-/// Deliberately not resumable the way `snapshot_download` is (no
-/// partial-file/range-request smarts) — pausing and resuming a
-/// multi-file download here just re-downloads whichever file was in
-/// flight, not the whole repo, which is an acceptable trade for
-/// avoiding a second, more complex implementation for one platform.
+/// Not byte-range-resumable the way `snapshot_download` is, but file-
+/// level resumable: a file only ever lands at its destination path
+/// after finishing (see the loop below), so a cancelled download never
+/// leaves a partial file sitting there to be mistaken for a complete
+/// one — `download` skips any file already present at its destination,
+/// meaning pausing and resuming a multi-file download only re-fetches
+/// whichever file was actually in flight when it was cancelled, not
+/// the whole repo from scratch.
 public struct HFRepoDownloader: Sendable {
     private let registry: ModelRegistry
 
@@ -55,6 +58,18 @@ public struct HFRepoDownloader: Sendable {
         let total = filesToDownload.count
 
         for (index, filePath) in filesToDownload.enumerated() {
+            let destinationFile = destination.appendingPathComponent(filePath)
+            let completedFiles = Double(index)
+
+            // Already fully fetched by an earlier, since-cancelled call
+            // to this same method (see the type's own doc comment) —
+            // resuming just skips straight past it instead of
+            // re-downloading a file that's already there.
+            if FileManager.default.fileExists(atPath: destinationFile.path) {
+                onProgress?((completedFiles + 1) / Double(total))
+                continue
+            }
+
             guard let encodedPath = filePath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
                   let fileURL = URL(string: "https://huggingface.co/\(repoID)/resolve/\(revision)/\(encodedPath)") else {
                 throw ModelError.downloadFailed("Could not build a download URL for \(filePath)")
@@ -64,16 +79,21 @@ public struct HFRepoDownloader: Sendable {
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             }
 
-            let destinationFile = destination.appendingPathComponent(filePath)
             try FileManager.default.createDirectory(
                 at: destinationFile.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
 
-            let completedFiles = Double(index)
             let temporaryFileURL = try await URLDownloader.download(request) { fileFraction in
                 onProgress?((completedFiles + fileFraction) / Double(total))
             }
+            // Cancellation lands here too (as a thrown CancellationError
+            // from the continuation `URLDownloader.download` awaits on)
+            // — checked explicitly rather than relying on `moveItem`
+            // alone throwing, so a cancellation racing right after the
+            // download itself finishes still doesn't silently keep going
+            // into the next file.
+            try Task.checkCancellation()
             if FileManager.default.fileExists(atPath: destinationFile.path) {
                 try FileManager.default.removeItem(at: destinationFile)
             }

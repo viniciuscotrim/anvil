@@ -28,18 +28,22 @@ struct ModelManagerView: View {
                 searchBar
                 searchOptionsBar
                 hfTokenBar
-                if !viewModel.searchResults.isEmpty {
-                    searchResultsList
-                }
             } else {
                 civitaiSearchBar
                 Text("Search and download work today — loading a downloaded CivitAI checkpoint doesn't yet (mflux needs a single-file loading path this hasn't been wired up to). It'll register and show up below either way.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 civitaiTokenBar
-                if !viewModel.civitaiResults.isEmpty {
-                    civitaiResultsList
+            }
+
+            downloadsInProgressSection
+
+            if viewModel.searchSource == .huggingFace {
+                if !viewModel.searchResults.isEmpty {
+                    searchResultsList
                 }
+            } else if !viewModel.civitaiResults.isEmpty {
+                civitaiResultsList
             }
 
             modelsFolderBar
@@ -48,24 +52,6 @@ struct ModelManagerView: View {
                 Text(error)
                     .font(.callout)
                     .foregroundStyle(.red)
-            }
-
-            if viewModel.isBusy {
-                if let progress = viewModel.downloadProgress {
-                    ProgressView(
-                        value: progress,
-                        label: { Text(viewModel.statusMessage.isEmpty ? "Working…" : viewModel.statusMessage) },
-                        currentValueLabel: { Text("\(Int(progress * 100))%") }
-                    )
-                } else {
-                    ProgressView(viewModel.statusMessage.isEmpty ? "Working…" : viewModel.statusMessage)
-                        .progressViewStyle(.linear)
-                }
-                if !viewModel.downloadQueue.isEmpty {
-                    Text("\(viewModel.downloadQueue.count) more queued")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
             }
 
             Divider()
@@ -283,7 +269,7 @@ struct ModelManagerView: View {
     }
 
     private var civitaiResultsList: some View {
-        List(viewModel.civitaiResults) { summary in
+        List(viewModel.rankedCivitAIResults) { summary in
             HStack {
                 VStack(alignment: .leading) {
                     Text(summary.name)
@@ -304,17 +290,8 @@ struct ModelManagerView: View {
                     .foregroundStyle(.secondary)
                 }
                 Spacer()
-                let job = DownloadJob.civitai(summary)
-                if viewModel.activeDownloadID == job.id {
-                    downloadProgressControl
-                } else if let queuePosition = viewModel.downloadQueue.firstIndex(where: { $0.id == job.id }) {
-                    Text("Queued (#\(queuePosition + 1))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("Remove") { viewModel.removeFromQueue(job) }
-                } else {
-                    Button(viewModel.isBusy ? "Queue" : "Download") { viewModel.download(summary) }
-                        .disabled(summary.primaryFile == nil)
+                resultDownloadButton(for: .civitai(summary), disabled: summary.primaryFile == nil) {
+                    viewModel.download(summary)
                 }
             }
         }
@@ -344,23 +321,80 @@ struct ModelManagerView: View {
                     .foregroundStyle(.secondary)
                 }
                 Spacer()
-                let job = DownloadJob.huggingFace(summary)
-                if viewModel.activeDownloadID == job.id {
-                    downloadProgressControl
-                } else if let queuePosition = viewModel.downloadQueue.firstIndex(where: { $0.id == job.id }) {
-                    Text("Queued (#\(queuePosition + 1))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("Remove") { viewModel.removeFromQueue(job) }
-                } else {
-                    // Not disabled while something else is downloading
-                    // — clicking then enqueues instead of starting a
-                    // second, simultaneous download.
-                    Button(viewModel.isBusy ? "Queue" : "Download") { viewModel.download(summary) }
+                resultDownloadButton(for: .huggingFace(summary)) {
+                    viewModel.download(summary)
                 }
             }
         }
         .frame(minHeight: 160, maxHeight: 220)
+    }
+
+    /// A result row's own download control — deliberately just a button
+    /// (Download / Queue / a plain "Downloading…"/"Queued" label), no
+    /// progress bar or Pause/Stop here anymore. Those actions moved into
+    /// `downloadsInProgressSection`, a dedicated area below the search
+    /// bar: mixing live download state into every row of a scrollable
+    /// results list was real, reported clutter, not just untidy.
+    private func resultDownloadButton(for job: DownloadJob, disabled: Bool = false, action: @escaping () -> Void) -> some View {
+        Group {
+            if viewModel.activeDownloadID == job.id {
+                Text("Downloading…").font(.caption).foregroundStyle(.secondary)
+            } else if viewModel.downloadQueue.contains(where: { $0.id == job.id }) {
+                Text("Queued").font(.caption).foregroundStyle(.secondary)
+            } else {
+                // Not disabled while something else is downloading —
+                // clicking then enqueues instead of starting a second,
+                // simultaneous download.
+                Button(viewModel.isBusy ? "Queue" : "Download", action: action)
+                    .disabled(disabled)
+            }
+        }
+    }
+
+    /// Every active/queued download, separate from search results —
+    /// the active one gets a real fillable bar + percentage (falling
+    /// back to an indeterminate spinner for stretches with no percentage
+    /// in `huggingface_hub`'s own progress lines, e.g. between files)
+    /// plus Pause/Stop; queued ones just get a Remove.
+    @ViewBuilder
+    private var downloadsInProgressSection: some View {
+        if viewModel.isBusy || !viewModel.downloadQueue.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Downloads in Progress").font(.headline)
+                if viewModel.isBusy, let activeJob = viewModel.activeJob {
+                    activeDownloadRow(activeJob)
+                }
+                ForEach(viewModel.downloadQueue) { job in
+                    queuedDownloadRow(job)
+                }
+            }
+            .padding(10)
+            .background(Color.gray.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func activeDownloadRow(_ job: DownloadJob) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(job.displayName).font(.callout)
+                Text(viewModel.statusMessage.isEmpty ? "Working…" : viewModel.statusMessage)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            downloadProgressControl
+        }
+    }
+
+    private func queuedDownloadRow(_ job: DownloadJob) -> some View {
+        HStack {
+            Text(job.displayName).font(.callout)
+            Spacer()
+            Text("Queued").font(.caption).foregroundStyle(.secondary)
+            Button("Remove") { viewModel.removeFromQueue(job) }
+        }
     }
 
     /// A real fillable bar + percentage while `huggingface_hub`'s own

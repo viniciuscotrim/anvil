@@ -30,6 +30,8 @@ struct ModelSearchView: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
 
+                downloadsInProgressSection
+
                 if viewModel.source == .huggingFace {
                     resultsSection(
                         results: viewModel.filteredSearchResults,
@@ -139,7 +141,7 @@ struct ModelSearchView: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            downloadControl(id: "hf:\(summary.modelID)") { Task { await viewModel.download(summary) } }
+            resultDownloadButton(for: .huggingFace(summary)) { viewModel.download(summary) }
         }
     }
 
@@ -164,18 +166,58 @@ struct ModelSearchView: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            downloadControl(id: "civitai:\(summary.id)", disabled: summary.primaryFile == nil) {
-                Task { await viewModel.download(summary) }
+            resultDownloadButton(for: .civitai(summary), disabled: summary.primaryFile == nil) {
+                viewModel.download(summary)
             }
         }
     }
 
-    /// A real fillable bar + percentage while a download is active — the
-    /// same "clara" progress the Mac app's Model Manager gives, not just
-    /// a spinner with no sense of how far along it is.
+    /// A result row's own download control — deliberately just a button
+    /// (Download / Queue / a plain "Downloading…"/"Queued" label), no
+    /// progress bar or Pause/Stop here. Those live in
+    /// `downloadsInProgressSection` instead, separate from the results
+    /// list — mixing live download state into every row was real,
+    /// reported clutter ("Downloads contaminando a tela"), not just
+    /// untidy.
+    private func resultDownloadButton(for job: DownloadJob, disabled: Bool = false, action: @escaping () -> Void) -> some View {
+        Group {
+            if viewModel.activeDownloadID == job.id {
+                Text("Downloading…").font(.caption).foregroundStyle(.secondary)
+            } else if viewModel.downloadQueue.contains(where: { $0.id == job.id }) {
+                Text("Queued").font(.caption).foregroundStyle(.secondary)
+            } else {
+                // Not disabled while something else is downloading —
+                // tapping then enqueues instead of starting a second,
+                // simultaneous download.
+                Button("Download", action: action)
+                    .buttonStyle(.bordered)
+                    .disabled(disabled)
+            }
+        }
+    }
+
+    /// Every active/queued download, in its own section right below the
+    /// search bar and filters — separate from the results list, unlike
+    /// before. The active one gets a real fillable bar + percentage plus
+    /// Pause/Stop; queued ones just get a Remove.
     @ViewBuilder
-    private func downloadControl(id: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
-        if viewModel.activeDownloadID == id {
+    private var downloadsInProgressSection: some View {
+        if viewModel.isDownloading || !viewModel.downloadQueue.isEmpty {
+            Section("Downloads in Progress") {
+                if let activeJob = viewModel.activeJob {
+                    activeDownloadRow(activeJob)
+                }
+                ForEach(viewModel.downloadQueue) { job in
+                    queuedDownloadRow(job)
+                }
+            }
+        }
+    }
+
+    private func activeDownloadRow(_ job: DownloadJob) -> some View {
+        HStack {
+            Text(job.displayName).font(.callout).lineLimit(1)
+            Spacer()
             VStack(alignment: .trailing, spacing: 2) {
                 if let progress = viewModel.downloadProgress {
                     ProgressView(value: progress).frame(width: 80)
@@ -185,11 +227,23 @@ struct ModelSearchView: View {
                 } else {
                     ProgressView().controlSize(.small)
                 }
+                HStack(spacing: 12) {
+                    Button("Pause") { viewModel.pauseDownload() }
+                        .font(.caption)
+                    Button("Stop", role: .destructive) { viewModel.stopDownload() }
+                        .font(.caption)
+                }
             }
-        } else {
-            Button("Download", action: action)
-                .disabled(viewModel.isDownloading || disabled)
-                .buttonStyle(.bordered)
+        }
+    }
+
+    private func queuedDownloadRow(_ job: DownloadJob) -> some View {
+        HStack {
+            Text(job.displayName).font(.callout).lineLimit(1)
+            Spacer()
+            Text("Queued").font(.caption).foregroundStyle(.secondary)
+            Button("Remove") { viewModel.removeFromQueue(job) }
+                .font(.caption)
         }
     }
 }

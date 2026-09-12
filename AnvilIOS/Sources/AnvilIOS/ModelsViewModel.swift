@@ -2,6 +2,29 @@ import Foundation
 import AnvilCore
 import Observation
 
+/// One thing that can be downloaded — a Hugging Face repo or a CivitAI
+/// checkpoint — unified so a single queue/progress/pause-stop mechanism
+/// covers both sources: never simultaneous, whichever source it's from.
+/// Mirrors the Mac app's own `DownloadJob`.
+enum DownloadJob: Identifiable, Equatable {
+    case huggingFace(HFModelSummary)
+    case civitai(CivitAIModelSummary)
+
+    var id: String {
+        switch self {
+        case .huggingFace(let summary): return "hf:\(summary.modelID)"
+        case .civitai(let summary): return "civitai:\(summary.id)"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .huggingFace(let summary): return summary.modelID
+        case .civitai(let summary): return summary.name
+        }
+    }
+}
+
 /// Search, download, and manage registered models on iOS — the same
 /// `AnvilCore` types the Mac app's Model Manager uses
 /// (`HuggingFaceCatalog`, `ModelCompatibility`, `ModelRegistry`), with
@@ -61,15 +84,28 @@ final class ModelsViewModel {
     /// Mac's Model Manager and the registered-models list already show.
     var maxSizeClass: ModelSizeClass?
 
-    var activeDownloadID: String?
+    /// The job actively downloading, if any — drives
+    /// `ModelDownloadsSection`'s Pause/Stop and blocks starting a second
+    /// download at the same time (a third pick just enqueues instead).
+    private(set) var activeJob: DownloadJob?
+    var activeDownloadID: String? { activeJob?.id }
+    /// Jobs waiting their turn — one shared queue for both sources, so
+    /// an HF download and a CivitAI download never run at the same time
+    /// either; drains one at a time as each finishes.
+    private(set) var downloadQueue: [DownloadJob] = []
     var downloadProgress: Double?
-    var isDownloading: Bool { activeDownloadID != nil }
+    var isDownloading: Bool { activeJob != nil }
 
     private let catalog = HuggingFaceCatalog()
     private let civitaiCatalog = CivitAICatalog()
     private let registry = ModelRegistry()
     private let downloader: HFRepoDownloader
     private let civitaiDownloader: CivitAIDownloader
+    /// Fire-and-forget by design (`download` isn't `async`) so the
+    /// caller — a button — doesn't hold the download's `Task` itself;
+    /// `pauseDownload()`/`stopDownload()` cancel the one stored here.
+    private var downloadTask: Task<Void, Never>?
+    private var deletePartialOnCancel = false
 
     init() {
         downloader = HFRepoDownloader(registry: registry)
@@ -77,23 +113,29 @@ final class ModelsViewModel {
     }
 
     /// What the HF results section actually shows once
-    /// `compatibleOnlyHF`/`maxSizeClass` are applied.
+    /// `compatibleOnlyHF`/`maxSizeClass` are applied, then reordered so
+    /// results that actually fit this iPhone's RAM come first — a real,
+    /// reported problem was a 30GB result sitting near the top next to
+    /// models that will actually load, especially noticeable on a phone
+    /// with far less RAM than a Mac.
     var filteredSearchResults: [HFModelSummary] {
-        searchResults.filter { summary in
+        let filtered = searchResults.filter { summary in
             if compatibleOnlyHF, summary.compatibility == .incompatible { return false }
             return Self.fitsSizeFilter(summary.sizeBytes, maxSizeClass)
         }
+        return ModelSizeClass.sortedByRunnability(filtered) { $0.sizeBytes }
     }
 
     /// What the CivitAI results section shows once `maxSizeClass` is
-    /// applied. No compatibility toggle here — unlike the Mac app's
-    /// `mflux` (Flux-only, so CivitAI's `baseModel` is a meaningful
-    /// compatibility signal there), `NativeImageEngine` doesn't load
-    /// arbitrary downloaded checkpoints at all yet (see its own header
-    /// comment), so no CivitAI result is more "compatible" than another
-    /// on iOS today regardless of base model.
+    /// applied, reordered the same way. No compatibility toggle here —
+    /// unlike the Mac app's `mflux` (Flux-only, so CivitAI's `baseModel`
+    /// is a meaningful compatibility signal there), `NativeImageEngine`
+    /// doesn't load arbitrary downloaded checkpoints at all yet (see its
+    /// own header comment), so no CivitAI result is more "compatible"
+    /// than another on iOS today regardless of base model.
     var filteredCivitAIResults: [CivitAIModelSummary] {
-        civitaiResults.filter { Self.fitsSizeFilter($0.primaryFile?.sizeBytes, maxSizeClass) }
+        let filtered = civitaiResults.filter { Self.fitsSizeFilter($0.primaryFile?.sizeBytes, maxSizeClass) }
+        return ModelSizeClass.sortedByRunnability(filtered) { $0.primaryFile?.sizeBytes }
     }
 
     private static func fitsSizeFilter(_ sizeBytes: Int64?, _ maxSizeClass: ModelSizeClass?) -> Bool {
@@ -166,41 +208,98 @@ final class ModelsViewModel {
         }
     }
 
-    func download(_ summary: HFModelSummary) async {
-        guard !isDownloading else { return }
-        guard let filePaths = summary.filePaths, !filePaths.isEmpty else {
-            errorMessage = "No file list available for \(summary.modelID)."
+    /// Not `async` — never simultaneous, from either source; a second
+    /// pick while one is already running enqueues instead of starting
+    /// it, and the queue drains one at a time as each download finishes
+    /// (however it finishes: completed, paused, or stopped).
+    func download(_ summary: HFModelSummary) {
+        enqueueOrStart(.huggingFace(summary))
+    }
+
+    func download(_ summary: CivitAIModelSummary) {
+        enqueueOrStart(.civitai(summary))
+    }
+
+    private func enqueueOrStart(_ job: DownloadJob) {
+        guard downloadTask == nil else {
+            guard job.id != activeJob?.id, !downloadQueue.contains(where: { $0.id == job.id }) else { return }
+            downloadQueue.append(job)
             return
         }
-        errorMessage = nil
-        activeDownloadID = "hf:\(summary.modelID)"
-        downloadProgress = 0
-        defer { activeDownloadID = nil; downloadProgress = nil }
+        startDownload(job)
+    }
 
-        do {
-            _ = try await downloader.download(repoID: summary.modelID, filePaths: filePaths) { [weak self] progress in
-                Task { @MainActor in self?.downloadProgress = progress }
+    /// Removes a not-yet-started download from the queue — no effect on
+    /// the one currently in progress; use `pauseDownload()`/
+    /// `stopDownload()` for that.
+    func removeFromQueue(_ job: DownloadJob) {
+        downloadQueue.removeAll { $0.id == job.id }
+    }
+
+    private func startDownload(_ job: DownloadJob) {
+        errorMessage = nil
+        activeJob = job
+        downloadProgress = 0
+        deletePartialOnCancel = false
+
+        downloadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                switch job {
+                case .huggingFace(let summary):
+                    guard let filePaths = summary.filePaths, !filePaths.isEmpty else {
+                        throw ModelError.downloadFailed("No file list available for \(summary.modelID).")
+                    }
+                    _ = try await self.downloader.download(repoID: summary.modelID, filePaths: filePaths) { progress in
+                        Task { @MainActor in self.downloadProgress = progress }
+                    }
+                case .civitai(let summary):
+                    _ = try await self.civitaiDownloader.download(summary) { progress in
+                        Task { @MainActor in self.downloadProgress = progress }
+                    }
+                }
+                await self.loadRegistry()
+            } catch is CancellationError {
+                if self.deletePartialOnCancel {
+                    switch job {
+                    case .huggingFace(let summary):
+                        try? FileManager.default.removeItem(at: HFRepoDownloader.destinationDirectory(forRepoID: summary.modelID))
+                    case .civitai(let summary):
+                        try? FileManager.default.removeItem(at: CivitAIDownloader.destinationDirectory(for: summary))
+                    }
+                }
+                // Paused (not deleted): nothing else to do — the partial
+                // directory stays; HFRepoDownloader itself skips any
+                // file already fully fetched on the next attempt (see
+                // its own doc comment), so resuming only re-fetches
+                // whichever file was actually in flight.
+            } catch {
+                self.errorMessage = error.localizedDescription
             }
-            await loadRegistry()
-        } catch {
-            errorMessage = error.localizedDescription
+            self.finishDownload()
         }
     }
 
-    func download(_ summary: CivitAIModelSummary) async {
-        guard !isDownloading else { return }
-        errorMessage = nil
-        activeDownloadID = "civitai:\(summary.id)"
-        downloadProgress = 0
-        defer { activeDownloadID = nil; downloadProgress = nil }
+    /// Cancels the in-flight download but keeps whatever's already been
+    /// fetched.
+    func pauseDownload() {
+        deletePartialOnCancel = false
+        downloadTask?.cancel()
+    }
 
-        do {
-            _ = try await civitaiDownloader.download(summary) { [weak self] progress in
-                Task { @MainActor in self?.downloadProgress = progress }
-            }
-            await loadRegistry()
-        } catch {
-            errorMessage = error.localizedDescription
+    /// Cancels the in-flight download and deletes whatever was
+    /// partially fetched.
+    func stopDownload() {
+        deletePartialOnCancel = true
+        downloadTask?.cancel()
+    }
+
+    private func finishDownload() {
+        downloadProgress = nil
+        downloadTask = nil
+        activeJob = nil
+        if !downloadQueue.isEmpty {
+            startDownload(downloadQueue.removeFirst())
         }
     }
 
