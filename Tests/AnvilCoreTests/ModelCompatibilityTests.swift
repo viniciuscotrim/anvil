@@ -11,7 +11,11 @@ struct ModelCompatibilityTests {
             ".gitattributes", "LICENSE.md", "README.md", "editing.jpg",
             "flux-2-klein-4b-nvfp4.safetensors", "others.jpg", "realism.jpg"
         ]
-        #expect(ModelCompatibility.classify(paths: paths) == .incompatible)
+        if case .incompatible = ModelCompatibility.classify(paths: paths) {
+            #expect(Bool(true))
+        } else {
+            Issue.record("Expected incompatible for flat safetensors without config")
+        }
     }
 
     @Test
@@ -25,21 +29,24 @@ struct ModelCompatibilityTests {
             "transformer/0.safetensors", "transformer/1.safetensors", "transformer/model.safetensors.index.json",
             "vae/0.safetensors", "vae/model.safetensors.index.json"
         ]
-        #expect(ModelCompatibility.classify(paths: paths) == .compatible)
+        #expect(ModelCompatibility.classify(paths: paths) == .supported(.mflux))
     }
 
     @Test
     func recognizesModelIndexJSONAsCompatible() {
-        #expect(ModelCompatibility.classify(paths: ["model_index.json", "unet/model.safetensors"]) == .compatible)
+        #expect(ModelCompatibility.classify(paths: ["model_index.json", "unet/model.safetensors"]) == .supported(.mflux))
     }
 
     @Test
-    func aPlainTextModelShapeIsUnknownNotIncompatible() {
-        // config.json + flat safetensors — mlx_lm's own territory, not
-        // what this classifier is judging; must never be flagged
-        // incompatible just because it isn't a diffusion pipeline.
+    func recognizesGGUFFilesAsSupportedLlamaCpp() {
+        let paths = ["Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf", "README.md"]
+        #expect(ModelCompatibility.classify(paths: paths) == .supported(.llamaCpp))
+    }
+
+    @Test
+    func recognizesCausalLMSafetensorsAsSupportedMLX() {
         let paths = ["config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json"]
-        #expect(ModelCompatibility.classify(paths: paths) == .unknown)
+        #expect(ModelCompatibility.classify(paths: paths) == .supported(.mlx))
     }
 
     @Test

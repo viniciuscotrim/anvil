@@ -1,25 +1,36 @@
 # Anvil
 
 A single native macOS app that replaces three separate pieces of a local-LLM
-stack — **oMLX** (LLM serving), **Draw Things** (image generation), and a
-standalone Flask image server — with one from-scratch app: download or import
-models, run text + image + voice models concurrently, and chat by voice.
+stack — **oMLX / OffGrid AI** (LLM serving & multi-model chat), **Draw Things**
+(image generation), and a standalone Flask image server — with one from-scratch
+app: download or import models, run text (MLX & GGUF via llama.cpp) + image (Flux)
++ voice models concurrently, and chat with durable auditable memory.
 No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.5.15
+## Current release: 0.5.16 (Multi-Engine & Complete Local Serving)
 
-This release adds the local OpenAI-compatible gateway on `127.0.0.1:8000`,
-shared unified-memory planning, process RSS telemetry, and bounded prefix KV
-caching through `mlx-lm` (`16` cache entries and `2G` per text server). Chat
-and Code requests carry an optional `conversation_id`, and the Chat header
-reports the latest server-reported cached prompt tokens.
+This release delivers the unified architecture allowing full replacement of OffGrid AI:
+- **Multi-Engine Support (MLX + llama.cpp)**: Native GGUF loading and execution via Metal-accelerated `llama.cpp` alongside Apple Silicon native `MLX`. Automatic engine selection with manual override per model.
+- **Search Compatibility Badges**: Real-time compatibility classification in Hugging Face / catalog search showing green tags for compatible engines (`MLX`, `llama.cpp`, `mflux`) and red tags for incompatible formats.
+- **Local OpenAI-Compatible Gateway (`127.0.0.1:8000`)**: Single entry point routing requests by `model` ID, with live SSE streaming proxy, connection retries, and readiness verification.
+- **Durable Auditable Memory Layer**:
+  - Structured memory categorization: *Fact*, *Preference*, *Date*, *Number*, and *Impression*.
+  - Provenance tracking (*Explicit / Told by User* vs *Inferred* with confidence percentage).
+  - Profile-scoped and Global memories with full view, edit, and deletion capabilities.
+  - Per-response memory provenance indicators showing which memories were used or created.
+  - Interactive "Suggest from thread" review queue with zero silent saving.
+- **Long-Conversation Optimization & Context Management**:
+  - Configurable context budgeting (512 to 128k estimated tokens) and recent-turn retention window.
+  - Prefix KV-cache integration with per-model memory partitioning and multi-model budget fairness.
+  - Header token telemetry reporting active TPS, cache hits, and estimated context size.
+- **Interactive Chat UX**:
+  - Configurable message batching / quiet-period composer (default 10s or 0 for immediate send).
+  - Explicit generation phases (*Preparing*, *Thinking*, *Generating*, *Generating image*, *Stopped*).
+  - Persona/Profile identity attribution on assistant messages and exportable Markdown logs.
 
-The release artifact is signed but not automatically notarized. Build it with
-`scripts/package-dmg.sh 0.5.15`; notarization uses the separate
-`scripts/notarize-dmg.sh` credentialed step. See [CHANGELOG.md](CHANGELOG.md)
-for the complete release notes.
+The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.5.16`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 

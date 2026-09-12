@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.16] - 2026-09-12
+
+### Added
+- **Multi-Engine Runtime (`InferenceEngine`)**: Native support for GGUF models via `llama.cpp` (`llama-cpp-python` / `llama_cpp.server` with full Metal GPU acceleration) alongside native Apple Silicon MLX (`mlx_lm.server`).
+- **Real-Time Compatibility Badges**: Model search now tags compatible Hugging Face & local models with clear green badges indicating the engine (`MLX`, `llama.cpp`, `mflux`) and red badges for incompatible formats.
+- **Inference Engine Selector**: Model gear settings allow user override between `Auto`, `MLX`, and `llama.cpp`.
+- **Fair Multi-Model KV Cache Partitioning**: ResidencyPlanner partitions the available memory budget fairly across all active text model instances.
+
 ## [0.5.15] - 2026-09-12
 
 ### Changed

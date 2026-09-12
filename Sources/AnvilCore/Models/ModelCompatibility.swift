@@ -1,44 +1,24 @@
 import Foundation
 
-/// Whether a Hugging Face search result's own file layout looks
-/// loadable by Anvil's actual image backend (`mflux`, a diffusers-style
-/// pipeline loader) — computed from the repo's file list (`siblings`),
-/// available straight from the search API before ever downloading
-/// anything. This exists because of a real, reported case: a raw,
-/// flat-single-`.safetensors`-file Flux checkpoint
-/// (`black-forest-labs/FLUX.2-klein-4b-nvfp4`) downloaded and registered
-/// fine, then failed to *load* with a real Python traceback — `mflux`
-/// expects `transformer/`/`vae/`/`text_encoder/` component subfolders,
-/// which that repo simply doesn't have. Filtering these out of search
-/// results catches the problem before a multi-gigabyte download, not
-/// after.
-public enum ModelCompatibility: String, Sendable, Equatable {
-    /// Looks like a proper diffusers-style pipeline (`model_index.json`,
-    /// or `transformer/`+`vae/` component subfolders) — the shape
-    /// `mflux` actually loads.
-    case compatible
-    /// A flat single (or few) `*.safetensors` file(s) with no pipeline
-    /// directory structure and no `config.json` — the shape that threw
-    /// `FileNotFoundError: No safetensors files found in .../vae` for
-    /// real. Almost always a raw checkpoint meant for a different tool
-    /// (ComfyUI, a CivitAI-style single-file loader, …), not something
-    /// `mflux` can open as-is.
-    case incompatible
-    /// Every real weight file in the repo is `.gguf` (llama.cpp's own
-    /// format) with no `.safetensors`/`config.json` alongside — a real,
-    /// reported case: a repo shaped exactly like this "downloaded" in a
-    /// few kilobytes (just its `.gitattributes`/`README.md`) because the
-    /// actual weight files aren't something either loader here can open
-    /// at all, not something either `mflux` (image) or `mlx_lm`/
-    /// `mlx-swift-lm` (text — both MLX-based, expecting Hugging Face's
-    /// own safetensors+config.json layout) reads directly; GGUF needs
-    /// converting to that shape first, a step this app doesn't do.
-    case ggufOnly
-    /// Neither pattern matched clearly enough to say — a plain causal
-    /// LM shape (`config.json` + flat safetensors, mlx_lm's own
-    /// territory) or something unusual. Not flagged either way rather
-    /// than guessed at.
+/// Whether a Hugging Face or catalog model's file layout looks
+/// loadable by Anvil's backend engines — and which engine it maps to.
+public enum ModelCompatibility: Sendable, Equatable {
+    /// Compatible with a specific inference engine.
+    case supported(InferenceEngine)
+    /// Incompatible layout (e.g. raw flat safetensors without pipeline config).
+    case incompatible(reason: String)
+    /// Structure not recognized or cannot be determined.
     case unknown
+
+    public var isSupported: Bool {
+        if case .supported = self { return true }
+        return false
+    }
+
+    public var engine: InferenceEngine? {
+        if case .supported(let engine) = self { return engine }
+        return nil
+    }
 
     /// `paths` is a repo's file list — `HFModelSummary.siblings`, or a
     /// local directory listing's relative paths.
@@ -46,32 +26,34 @@ public enum ModelCompatibility: String, Sendable, Equatable {
         guard !paths.isEmpty else { return .unknown }
         let lowerPaths = paths.map { $0.lowercased() }
 
+        // 1. Check for Diffusers / mflux image pipelines
         if lowerPaths.contains("model_index.json") {
-            return .compatible
+            return .supported(.mflux)
         }
         let hasTransformerDir = lowerPaths.contains { $0.hasPrefix("transformer/") }
         let hasVAEDir = lowerPaths.contains { $0.hasPrefix("vae/") }
         if hasTransformerDir && hasVAEDir {
-            return .compatible
+            return .supported(.mflux)
         }
 
+        // 2. Check for GGUF files (supported via llama.cpp)
+        let hasGGUF = lowerPaths.contains { $0.hasSuffix(".gguf") }
         let hasConfigJSON = lowerPaths.contains("config.json")
         let hasSafetensors = lowerPaths.contains { $0.hasSuffix(".safetensors") }
-        let hasGGUF = lowerPaths.contains { $0.hasSuffix(".gguf") }
-        if hasGGUF, !hasSafetensors, !hasConfigJSON {
-            return .ggufOnly
+
+        if hasGGUF {
+            return .supported(.llamaCpp)
+        }
+
+        // 3. Check for MLX / Safetensors Causal LM
+        if hasConfigJSON && hasSafetensors {
+            return .supported(.mlx)
         }
 
         let safetensorsCount = lowerPaths.filter { $0.hasSuffix(".safetensors") && !$0.contains("/") }.count
-        // A handful of flat safetensors files with no config.json and
-        // no pipeline subfolders at all — the exact shape that broke
-        // for real. Any subfolder structure at all (text_encoder/,
-        // tokenizer/, …) without transformer/+vae/ specifically is left
-        // as `.unknown` rather than guessed at — this only flags the
-        // confirmed-broken shape, not every layout it hasn't seen.
         let hasAnySubfolder = lowerPaths.contains { $0.contains("/") }
-        if safetensorsCount > 0, !hasConfigJSON, !hasAnySubfolder {
-            return .incompatible
+        if safetensorsCount > 0 && !hasConfigJSON && !hasAnySubfolder {
+            return .incompatible(reason: "Single-file safetensors checkpoint requires pipeline files")
         }
 
         return .unknown

@@ -44,14 +44,20 @@ public final class ResidencyPlanner: @unchecked Sendable {
     }
 
     /// KV cache is an optional working-set budget, not a reason to reject a
-    /// model before its first prompt. Give larger models the memory that is
-    /// actually available after their weights are reserved.
+    /// model before its first prompt. When multiple models run concurrently,
+    /// available budget is partitioned fairly among active text models.
     public func promptCacheBytes(for model: ModelEntry) -> String {
         guard model.kind == .text else { return "256M" }
-        let available = budgetBytes - reservedBytes
-        if available >= 2 * 1024 * 1024 * 1024 { return "2G" }
-        if available >= 1024 * 1024 * 1024 { return "1G" }
-        if available >= 512 * 1024 * 1024 { return "512M" }
+        lock.lock()
+        defer { lock.unlock() }
+        let currentReserved = reservations.values.reduce(0) { $0 + $1.bytes }
+        let available = budgetBytes - currentReserved
+        let activeCount = max(1, reservations.count)
+        let perModelAvailable = available / Int64(activeCount)
+
+        if perModelAvailable >= 2 * 1024 * 1024 * 1024 { return "2G" }
+        if perModelAvailable >= 1024 * 1024 * 1024 { return "1G" }
+        if perModelAvailable >= 512 * 1024 * 1024 { return "512M" }
         return "256M"
     }
 

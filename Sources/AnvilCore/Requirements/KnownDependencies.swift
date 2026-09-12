@@ -32,10 +32,10 @@ public struct HuggingFaceClientDependency: Dependency {
     }
 }
 
-/// Installs only when the user selects a text/chat model.
+/// Installs only when the user selects a text/chat model running on MLX.
 public struct TextModelRuntimeDependency: Dependency {
     public let id = "mlx-lm"
-    public let displayName = "Text generation"
+    public let displayName = "Text generation (MLX)"
 
     private let python = PythonEnvironment()
 
@@ -46,8 +46,31 @@ public struct TextModelRuntimeDependency: Dependency {
     }
 
     public func install(onProgress: @escaping @Sendable (InstallProgress) -> Void) async throws {
-        onProgress(InstallProgress(message: "Setting up text generation…"))
+        onProgress(InstallProgress(message: "Setting up MLX text generation…"))
         try await python.pipInstall(["mlx-lm"])
+    }
+}
+
+/// Installs only when the user selects a GGUF text model running via llama.cpp.
+public struct LlamaCppRuntimeDependency: Dependency {
+    public let id = "llama-cpp-server"
+    public let displayName = "GGUF generation (llama.cpp)"
+
+    private let python = PythonEnvironment()
+
+    public init() {}
+
+    public func isSatisfied() async -> Bool {
+        await python.isPackageInstalled("llama_cpp")
+    }
+
+    public func install(onProgress: @escaping @Sendable (InstallProgress) -> Void) async throws {
+        onProgress(InstallProgress(message: "Setting up llama.cpp runtime (Metal enabled)…"))
+        // Install with Metal GPU support enabled for Apple Silicon
+        try await python.pipInstall([
+            "llama-cpp-python",
+            "--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/metal"
+        ])
     }
 }
 

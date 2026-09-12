@@ -121,7 +121,13 @@ public final class ModelSessionManager: ObservableObject {
 
         upsert(Session(model: model, port: resolvedPort, access: access, status: .loading))
 
-        let ready = await requirements.ensure(TextModelRuntimeDependency())
+        let engine = model.effectiveEngine
+        let ready: Bool
+        if engine == .llamaCpp {
+            ready = await requirements.ensure(LlamaCppRuntimeDependency())
+        } else {
+            ready = await requirements.ensure(TextModelRuntimeDependency())
+        }
         guard ready else {
             residency.release(modelID: model.id)
             let reason = requirements.lastError ?? "Could not set up text generation"
@@ -134,6 +140,7 @@ public final class ModelSessionManager: ObservableObject {
             try await server.start(
                 modelPath: model.localPath,
                 displayName: model.displayName,
+                engine: engine,
                 host: access.host,
                 port: resolvedPort,
                 promptCacheBytes: residency.promptCacheBytes(for: model)

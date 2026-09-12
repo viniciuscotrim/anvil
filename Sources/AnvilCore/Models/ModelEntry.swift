@@ -29,6 +29,26 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
     /// back to `ImageGenerationSettings.default` (512×512).
     public var defaultImageWidth: Int?
     public var defaultImageHeight: Int?
+    /// User override for the inference engine. If nil, auto-detected from file layout.
+    public var engineOverride: InferenceEngine?
+
+    /// Resolves the actual inference engine to use for this model.
+    public var effectiveEngine: InferenceEngine {
+        if let engineOverride { return engineOverride }
+        if kind == .image { return .mflux }
+        // Inspect local path to see if it's GGUF or Safetensors/MLX
+        let url = URL(fileURLWithPath: localPath)
+        let fm = FileManager.default
+        if let contents = try? fm.contentsOfDirectory(atPath: url.path) {
+            let lower = contents.map { $0.lowercased() }
+            if lower.contains(where: { $0.hasSuffix(".gguf") }) {
+                return .llamaCpp
+            }
+        } else if localPath.lowercased().hasSuffix(".gguf") {
+            return .llamaCpp
+        }
+        return .mlx
+    }
 
     public init(
         id: String,
@@ -40,7 +60,8 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
         kind: ModelKind = .text,
         keepImageModelLoadedInChat: Bool = true,
         defaultImageWidth: Int? = nil,
-        defaultImageHeight: Int? = nil
+        defaultImageHeight: Int? = nil,
+        engineOverride: InferenceEngine? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -52,11 +73,13 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
         self.keepImageModelLoadedInChat = keepImageModelLoadedInChat
         self.defaultImageWidth = defaultImageWidth
         self.defaultImageHeight = defaultImageHeight
+        self.engineOverride = engineOverride
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, displayName, source, localPath, sizeBytes, addedAt, kind
         case keepImageModelLoadedInChat, defaultImageWidth, defaultImageHeight
+        case engineOverride
     }
 
     // A registry saved before a field existed just defaults it on next
@@ -73,6 +96,7 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
         keepImageModelLoadedInChat = try container.decodeIfPresent(Bool.self, forKey: .keepImageModelLoadedInChat) ?? true
         defaultImageWidth = try container.decodeIfPresent(Int.self, forKey: .defaultImageWidth)
         defaultImageHeight = try container.decodeIfPresent(Int.self, forKey: .defaultImageHeight)
+        engineOverride = try container.decodeIfPresent(InferenceEngine.self, forKey: .engineOverride)
     }
 }
 

@@ -312,19 +312,32 @@ struct ModelManagerView: View {
                             Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                             Text("· \(ModelSizeClass.classify(sizeBytes: bytes).label)")
                         }
-                        if summary.compatibility == .incompatible {
-                            Text("· raw checkpoint, likely won't load")
-                                .foregroundStyle(.orange)
-                        } else if summary.compatibility == .ggufOnly {
-                            Text("· GGUF only, can't load here")
-                                .foregroundStyle(.red)
+                        switch summary.compatibility {
+                        case .supported(let engine):
+                            HStack(spacing: 3) {
+                                Circle().fill(Color.green).frame(width: 6, height: 6)
+                                Text("· \(engine.displayName)")
+                                    .foregroundStyle(.green)
+                            }
+                        case .incompatible(let reason):
+                            HStack(spacing: 3) {
+                                Circle().fill(Color.red).frame(width: 6, height: 6)
+                                Text("· Incompatible (\(reason))")
+                                    .foregroundStyle(.red)
+                            }
+                        case .unknown:
+                            EmptyView()
                         }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
                 Spacer()
-                resultDownloadButton(for: .huggingFace(summary), disabled: summary.compatibility == .ggufOnly) {
+                let isDisabled: Bool = {
+                    if case .incompatible = summary.compatibility { return true }
+                    return false
+                }()
+                resultDownloadButton(for: .huggingFace(summary), disabled: isDisabled) {
                     viewModel.download(summary)
                 }
             }
@@ -703,6 +716,25 @@ struct ModelManagerView: View {
                     set: { viewModel.setPortText($0, for: entry.id, currentPort: currentPort, currentAccess: currentAccess) }
                 ))
                 .frame(width: 80)
+            }
+
+            if entry.kind == .text {
+                Divider()
+                Text("Inference Engine").font(.headline)
+                Picker("Engine", selection: Binding(
+                    get: { entry.engineOverride },
+                    set: { newEngine in
+                        Task { await viewModel.updateEngineOverride(for: entry.id, engine: newEngine) }
+                    }
+                )) {
+                    Text("Auto (\(entry.effectiveEngine.shortLabel))").tag(Optional<InferenceEngine>.none)
+                    Text("MLX (Apple Silicon)").tag(Optional(InferenceEngine.mlx))
+                    Text("llama.cpp (GGUF)").tag(Optional(InferenceEngine.llamaCpp))
+                }
+                .labelsHidden()
+                Text("Default is auto-detected from files (GGUF uses llama.cpp, Safetensors uses MLX).")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             if entry.kind == .image {

@@ -39,6 +39,7 @@ public actor LLMServer {
     public func start(
         modelPath: String,
         displayName: String,
+        engine: InferenceEngine = .mlx,
         host: String = "127.0.0.1",
         port: Int = 8000,
         promptCacheSize: Int = 16,
@@ -47,23 +48,55 @@ public actor LLMServer {
     ) async throws {
         if isRunning { await stop() }
 
-        let script = RuntimePaths.venvDirectory.appendingPathComponent("bin/mlx_lm.server")
-        guard FileManager.default.isExecutableFile(atPath: script.path) else {
-            throw ServingError.serverFailedToStart("mlx_lm.server isn't installed")
-        }
-
+        let resolvedModelPath: String
+        let arguments: [String]
         let launcher = await NamedLauncher.shared.makeLauncher(displayName: displayName)
+
+        switch engine {
+        case .mlx, .mflux:
+            let script = RuntimePaths.venvDirectory.appendingPathComponent("bin/mlx_lm.server")
+            guard FileManager.default.isExecutableFile(atPath: script.path) else {
+                throw ServingError.serverFailedToStart("mlx_lm.server isn't installed")
+            }
+            resolvedModelPath = modelPath
+            arguments = [
+                script.path,
+                "--model", resolvedModelPath,
+                "--host", host,
+                "--port", String(port),
+                "--prompt-cache-size", String(promptCacheSize),
+                "--prompt-cache-bytes", promptCacheBytes
+            ]
+
+        case .llamaCpp:
+            let pythonBin = RuntimePaths.venvDirectory.appendingPathComponent("bin/python3")
+            guard FileManager.default.isExecutableFile(atPath: pythonBin.path) else {
+                throw ServingError.serverFailedToStart("Python runtime isn't ready")
+            }
+            // Resolve actual GGUF file if path is a directory
+            let fm = FileManager.default
+            var targetFile = modelPath
+            if let files = try? fm.contentsOfDirectory(atPath: modelPath) {
+                if let gguf = files.first(where: { $0.lowercased().hasSuffix(".gguf") }) {
+                    targetFile = URL(fileURLWithPath: modelPath).appendingPathComponent(gguf).path
+                }
+            }
+            resolvedModelPath = targetFile
+            // Runs llama_cpp.server with Metal offloading (-ngl -1) and slot cache enabled
+            arguments = [
+                "-m", "llama_cpp.server",
+                "--model", resolvedModelPath,
+                "--host", host,
+                "--port", String(port),
+                "--n_gpu_layers", "-1",
+                "--cache", "true",
+                "--cache_type", "ram"
+            ]
+        }
 
         let proc = Process()
         proc.executableURL = launcher
-        proc.arguments = [
-            script.path,
-            "--model", modelPath,
-            "--host", host,
-            "--port", String(port),
-            "--prompt-cache-size", String(promptCacheSize),
-            "--prompt-cache-bytes", promptCacheBytes
-        ]
+        proc.arguments = arguments
 
         outputTail = OutputTail()
         let tail = outputTail

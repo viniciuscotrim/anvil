@@ -107,7 +107,9 @@ final class ModelManagerViewModel: ObservableObject {
     /// it by.
     var filteredSearchResults: [HFModelSummary] {
         let filtered = searchResults.filter { summary in
-            if hideIncompatibleModels, summary.compatibility == .incompatible || summary.compatibility == .ggufOnly { return false }
+            if hideIncompatibleModels {
+                if case .incompatible = summary.compatibility { return false }
+            }
             guard let sizeFilter else { return true }
             guard let bytes = summary.sizeBytes else { return false }
             return ModelSizeClass.classify(sizeBytes: bytes, ramBytes: ramBytes) == sizeFilter
@@ -524,6 +526,16 @@ final class ModelManagerViewModel: ObservableObject {
     }
 
     // MARK: - Image model defaults (keep-loaded toggle, resolution)
+
+    /// Updates engine preference for a model in the registry.
+    func updateEngineOverride(for modelID: String, engine: InferenceEngine?) async {
+        guard var entry = registeredModels.first(where: { $0.id == modelID }) else { return }
+        entry.engineOverride = engine
+        guard let updated = try? await registry.upsert(entry) else { return }
+        if let index = registeredModels.firstIndex(where: { $0.id == modelID }) {
+            registeredModels[index] = updated
+        }
+    }
 
     /// Persists this image model's chat-unload preference and default
     /// resolution straight to the registry — read by `ChatViewModel`

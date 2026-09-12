@@ -53,12 +53,14 @@ remain on their own internal ports. The gateway routes by the request's
 `conversation_id`, propagated from the Swift thread but optional for external
 OpenAI-compatible clients.
 
-Text servers enable `mlx-lm`'s prefix `LRUPromptCache` with bounded size and
-bytes. The cache is prefix-based rather than a separate Python session map:
-the full conversation prompt is sent as before, and `mlx-lm` reuses the
-longest cached prefix. The shared residency planner reserves headroom for
-that cache and records managed process RSS after readiness. Tool calling
-continues through the official `mlx_lm.server` implementation.
+**Multi-Engine Serving**:
+- **MLX (`mlx_lm.server`)**: Serves Hugging Face safetensors models with Metal acceleration and prefix `LRUPromptCache`.
+- **llama.cpp (`llama_cpp.server`)**: Serves single-file GGUF quantized models with Metal GPU offloading (`-ngl -1`) and RAM slot caching.
+- **mflux (`image_server.py`)**: Resident Flux generation pipeline with live step progress callbacks.
+
+The shared residency planner reserves headroom for weights and active caches,
+enforcing multi-model fairness across concurrent sessions and recording managed
+process RSS. Tool calling continues through OpenAI-compatible schemas.
 
 ---
 
