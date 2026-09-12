@@ -39,6 +39,10 @@ public struct ChatMessage: Codable, Identifiable, Equatable, Sendable {
     public var reasoning: String?
     /// Which loaded model produced this reply — nil for user messages.
     public var modelDisplayName: String?
+    /// The human-facing Profile name used for this response, if any.
+    /// Stored on the message so history remains accurate after the user
+    /// changes or deletes the active profile.
+    public var responderName: String?
     public var tokensPerSecond: Double?
     /// Number of prompt tokens served from mlx-lm's prefix KV cache, when
     /// the server reports it. Nil means the backend did not provide usage.
@@ -58,6 +62,7 @@ public struct ChatMessage: Codable, Identifiable, Equatable, Sendable {
         content: String,
         reasoning: String? = nil,
         modelDisplayName: String? = nil,
+        responderName: String? = nil,
         tokensPerSecond: Double? = nil,
         cachedPromptTokens: Int? = nil,
         toolCalls: [ToolCall]? = nil,
@@ -70,6 +75,7 @@ public struct ChatMessage: Codable, Identifiable, Equatable, Sendable {
         self.content = content
         self.reasoning = reasoning
         self.modelDisplayName = modelDisplayName
+        self.responderName = responderName
         self.tokensPerSecond = tokensPerSecond
         self.cachedPromptTokens = cachedPromptTokens
         self.toolCalls = toolCalls

@@ -8,6 +8,28 @@ import AnvilCore
 /// the `@State` toolchain note in README.
 @MainActor
 final class ChatViewModel: ObservableObject {
+    enum GenerationPhase: Equatable {
+        case idle
+        case preparing
+        case reasoning
+        case generating
+        case generatingImage
+        case cancelled
+        case failed
+
+        var label: String? {
+            switch self {
+            case .idle: return nil
+            case .preparing: return "Preparing…"
+            case .reasoning: return "Thinking…"
+            case .generating: return "Generating response…"
+            case .generatingImage: return "Generating image…"
+            case .cancelled: return "Generation stopped"
+            case .failed: return "Generation failed"
+            }
+        }
+    }
+
     @Published var currentThread: ChatThread
     @Published private(set) var allThreads: [ChatThread] = []
     @Published private(set) var availableProfiles: [ChatProfile] = []
@@ -15,6 +37,7 @@ final class ChatViewModel: ObservableObject {
     @Published var selectedModelID: String?
     @Published var inputText: String = ""
     @Published var isSending = false
+    @Published private(set) var generationPhase: GenerationPhase = .idle
     @Published var errorMessage: String?
     @Published var hideReasoning = true
     @Published var settings = GenerationSettings.default
@@ -177,6 +200,7 @@ final class ChatViewModel: ObservableObject {
         currentThread.messages.removeAll()
         lastTokensPerSecond = nil
         lastCachedPromptTokens = nil
+        generationPhase = .idle
         lastImageGenerationByThread.removeValue(forKey: currentThread.id)
         if !isTemporaryModeActive {
             persistCurrentThread()
@@ -241,28 +265,36 @@ final class ChatViewModel: ObservableObject {
         }
         let tools: [ChatTool] = hasAnyImageModel ? [.generateImage] : []
         let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty)
+        let responderName = activeProfile?.name
 
         isSending = true
+        generationPhase = .preparing
         generationTask = Task { [weak self] in
             await self?.runChatLoop(
                 endpoint: endpoint,
                 modelDisplayName: modelDisplayName,
+            responderName: responderName,
                 tools: tools,
                 systemPrompt: systemPrompt
             )
             guard let self else { return }
             self.isSending = false
+            if self.generationPhase == .preparing || self.generationPhase == .reasoning || self.generationPhase == .generating {
+                self.generationPhase = .idle
+            }
             self.generationTask = nil
         }
     }
 
     func stopGeneration() {
+        generationPhase = .cancelled
         generationTask?.cancel()
     }
 
     private func runChatLoop(
         endpoint: URL,
         modelDisplayName: String,
+        responderName: String?,
         tools: [ChatTool],
         systemPrompt: String?
     ) async {
@@ -270,7 +302,8 @@ final class ChatViewModel: ObservableObject {
             currentThread.messages.append(ChatMessage(
                 role: .assistant,
                 content: "",
-                modelDisplayName: modelDisplayName
+                modelDisplayName: modelDisplayName,
+                responderName: responderName
             ))
             let replyIndex = currentThread.messages.count - 1
             let historyForRequest = Array(currentThread.messages.dropLast())
@@ -285,23 +318,28 @@ final class ChatViewModel: ObservableObject {
                 conversationID: currentThread.id.uuidString
             )
 
+            generationPhase = .reasoning
             var reply: ChatMessage?
             for try await event in stream {
                 try Task.checkCancellation()
                 switch event {
                 case .contentDelta(let delta):
+                    generationPhase = .generating
                     currentThread.messages[replyIndex].content += delta
                 case .reasoningDelta(let delta):
+                    generationPhase = .reasoning
                     currentThread.messages[replyIndex].reasoning =
                         (currentThread.messages[replyIndex].reasoning ?? "") + delta
                 case .done(let message):
                     reply = message
                 }
             }
-            guard let reply else { return }
+            guard var reply else { return }
+            reply.responderName = responderName
             currentThread.messages[replyIndex] = reply
 
             if let toolCall = reply.toolCalls?.first(where: { $0.name == "generate_image" }) {
+                generationPhase = .generatingImage
                 let (toolResult, generatedPath) = await runGenerateImageTool(toolCall)
                 currentThread.messages.append(toolResult)
                 let followUpStream = client.streamSend(
@@ -316,7 +354,8 @@ final class ChatViewModel: ObservableObject {
                 currentThread.messages.append(ChatMessage(
                     role: .assistant,
                     content: "",
-                    modelDisplayName: modelDisplayName
+                    modelDisplayName: modelDisplayName,
+                    responderName: responderName
                 ))
                 let followUpIndex = currentThread.messages.count - 1
                 var followUpReply: ChatMessage?
@@ -324,6 +363,7 @@ final class ChatViewModel: ObservableObject {
                     try Task.checkCancellation()
                     switch event {
                     case .contentDelta(let delta):
+                        generationPhase = .generating
                         currentThread.messages[followUpIndex].content += delta
                     case .reasoningDelta(let delta):
                         currentThread.messages[followUpIndex].reasoning =
@@ -334,6 +374,7 @@ final class ChatViewModel: ObservableObject {
                 }
                 if var followUpReply {
                     followUpReply.generatedImagePath = generatedPath
+                    followUpReply.responderName = responderName
                     currentThread.messages[followUpIndex] = followUpReply
                 }
             }
@@ -356,7 +397,17 @@ final class ChatViewModel: ObservableObject {
                 persistCurrentThread()
             }
         } catch {
+            if let last = currentThread.messages.last,
+               last.role == .assistant,
+               last.content.isEmpty,
+               last.toolCalls == nil {
+                currentThread.messages.removeLast()
+            }
+            generationPhase = .failed
             errorMessage = error.localizedDescription
+            if !isTemporaryModeActive {
+                persistCurrentThread()
+            }
         }
     }
 

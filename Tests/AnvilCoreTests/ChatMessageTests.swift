@@ -16,6 +16,7 @@ struct ChatMessageTests {
             content: "hello",
             reasoning: "because you said hi",
             modelDisplayName: "SmolLM2-135M",
+            responderName: "Sofia",
             tokensPerSecond: 42.5,
             createdAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
@@ -24,6 +25,20 @@ struct ChatMessageTests {
         let decoded = try JSONDecoder.anvil.decode(ChatMessage.self, from: data)
 
         #expect(decoded == message)
+    }
+
+    @Test
+    func preservesResponderNameWhenPersisted() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "hello",
+            responderName: "Sofia"
+        )
+
+        let data = try JSONEncoder.anvil.encode(message)
+        let decoded = try JSONDecoder.anvil.decode(ChatMessage.self, from: data)
+
+        #expect(decoded.responderName == "Sofia")
     }
 }
 

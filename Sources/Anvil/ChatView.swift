@@ -29,9 +29,29 @@ struct ChatView: View {
                 }
 
                 if let error = chat.errorMessage {
-                    Text(error)
-                        .font(.callout)
-                        .foregroundStyle(.red)
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(error)
+                        Spacer()
+                        Button {
+                            chat.errorMessage = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal)
+                    .padding(.top, 4)
+                }
+
+                if !chat.isSending,
+                   let phase = chat.generationPhase.label,
+                   chat.generationPhase == .cancelled {
+                    Text(phase)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         .padding(.horizontal)
                         .padding(.top, 4)
                 }
@@ -147,8 +167,8 @@ struct ChatView: View {
                         HStack(spacing: 6) {
                             CircularProgressView(fraction: chat.imageToolProgress)
                                 .frame(width: 16, height: 16)
-                            if chat.imageToolProgress != nil {
-                                Text("Generating image…")
+                            if let phase = chat.generationPhase.label {
+                                Text(phase)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -188,7 +208,7 @@ struct ChatView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
 
-                if message.content.isEmpty && message.reasoning != nil {
+                if message.content.isEmpty && message.reasoning != nil && !chat.isSending {
                     Text("_(cut off before an answer — try again, or raise Max Tokens)_")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -216,7 +236,11 @@ struct ChatView: View {
         switch message.role {
         case .user: return "You"
         case .system: return "System"
-        case .assistant: return message.modelDisplayName.map { "Assistant · \($0)" } ?? "Assistant"
+        case .assistant:
+            if let responderName = message.responderName, !responderName.isEmpty {
+                return responderName
+            }
+            return message.modelDisplayName.map { "Assistant · \($0)" } ?? "Assistant"
         case .tool: return "Tool" // never actually shown — visibleMessages filters these out
         }
     }
@@ -299,15 +323,18 @@ struct ChatView: View {
 
             Section("Generation") {
                 LabeledContent("Max Tokens") {
-                    TextField("Unlimited", text: Binding(
+                    TextField(String(GenerationSettings.effectivelyUnlimited), text: Binding(
                         get: { chat.settings.maxTokens.map(String.init) ?? "" },
                         set: { chat.settings.maxTokens = Int($0.trimmingCharacters(in: .whitespaces)) }
                     ))
                         .frame(width: 80)
                         .help(
-                            "Empty = a generous \(GenerationSettings.effectivelyUnlimited)-token budget instead "
-                            + "of a small fixed cap — type a number for an explicit limit, higher or lower."
+                            "Empty uses \(GenerationSettings.effectivelyUnlimited) tokens, including reasoning. "
+                            + "Set a lower value for faster bounded replies."
                         )
+                Text("Effective budget: \(chat.settings.wireMaxTokens) tokens")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 LabeledContent("Temperature") {
                     TextField("", value: Binding(

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.6] - 2026-09-12
+
+### Improved
+
+- Added explicit chat generation phases for preparing, reasoning, response generation, image generation, cancellation, and failure.
+- Prevented premature cut-off messaging while a reasoning response is still streaming.
+- Improved error dismissal and removal of empty assistant placeholders after failures.
+- Displayed the effective token budget in the Chat settings.
+- Persisted the selected Profile name as the assistant identity in chat history.
+
 ## [0.5.5] - 2026-09-12
 
 ### Fixed
