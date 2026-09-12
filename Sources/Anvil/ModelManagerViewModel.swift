@@ -202,6 +202,8 @@ final class ModelManagerViewModel: ObservableObject {
         let trimmed = civitaiQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         errorMessage = nil
+        isBusy = true
+        defer { isBusy = false }
         do {
             civitaiResults = try await civitaiCatalog.search(query: trimmed)
         } catch {
@@ -209,14 +211,28 @@ final class ModelManagerViewModel: ObservableObject {
         }
     }
 
+    func clearCivitAISearch() {
+        civitaiQuery = ""
+        civitaiResults = []
+        errorMessage = nil
+    }
+
     func searchDrawThings() async {
         let trimmed = drawThingsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         errorMessage = nil
+        isBusy = true
+        defer { isBusy = false }
         do {
             drawThingsResults = try await drawThingsCatalog.search(query: trimmed)
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func clearDrawThingsSearch() {
+        drawThingsQuery = ""
+        drawThingsResults = DrawThingsCatalog.curatedModels
+        errorMessage = nil
     }
 
     /// Sets (or, passing nil, clears) which image model chat should
@@ -338,11 +354,20 @@ final class ModelManagerViewModel: ObservableObject {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         errorMessage = nil
+        isBusy = true
+        defer { isBusy = false }
         do {
             searchResults = try await catalog.search(query: trimmed)
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func clearSearch() {
+        liveSearchTask?.cancel()
+        query = ""
+        searchResults = []
+        errorMessage = nil
     }
 
     /// Fire-and-forget by design — not `async` — so the caller (a

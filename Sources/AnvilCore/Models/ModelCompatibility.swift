@@ -26,10 +26,9 @@ public enum ModelCompatibility: Sendable, Equatable {
         guard !paths.isEmpty else { return .unknown }
         let lowerPaths = paths.map { $0.lowercased() }
 
-        // 1. Check for Draw Things checkpoints / libnnc packages
+        // 1. Check for genuine Draw Things checkpoints / libnnc packages (.ckpt, .nnc)
         let hasDrawThingsFile = lowerPaths.contains { $0.hasSuffix(".ckpt") || $0.hasSuffix(".nnc") }
-        let hasDrawThingsKeyword = lowerPaths.contains { $0.contains("drawthings") || $0.contains("libnnc") }
-        if hasDrawThingsFile || hasDrawThingsKeyword {
+        if hasDrawThingsFile {
             return .supported(.drawThings)
         }
 

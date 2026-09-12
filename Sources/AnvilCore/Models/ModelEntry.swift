@@ -43,7 +43,7 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
         if kind == .image {
             if lower.contains(where: { $0.hasSuffix(".ckpt") || $0.hasSuffix(".nnc") })
                 || localPath.lowercased().hasSuffix(".ckpt")
-                || localPath.lowercased().contains("drawthings") {
+                || localPath.lowercased().hasSuffix(".nnc") {
                 return .drawThings
             }
             return .mflux

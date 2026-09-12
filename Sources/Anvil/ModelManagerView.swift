@@ -124,6 +124,10 @@ struct ModelManagerView: View {
 
             Button("Search") { Task { await viewModel.search() } }
                 .disabled(viewModel.isBusy)
+
+            if !viewModel.query.isEmpty || !viewModel.searchResults.isEmpty {
+                Button("Clear") { viewModel.clearSearch() }
+            }
         }
     }
 
@@ -252,6 +256,10 @@ struct ModelManagerView: View {
 
             Button("Search") { Task { await viewModel.searchCivitAI() } }
                 .disabled(viewModel.isBusy)
+
+            if !viewModel.civitaiQuery.isEmpty || !viewModel.civitaiResults.isEmpty {
+                Button("Clear") { viewModel.clearCivitAISearch() }
+            }
         }
     }
 
@@ -322,6 +330,10 @@ struct ModelManagerView: View {
 
             Button("Search") { Task { await viewModel.searchDrawThings() } }
                 .disabled(viewModel.isBusy)
+
+            if !viewModel.drawThingsQuery.isEmpty || viewModel.drawThingsResults != DrawThingsCatalog.curatedModels {
+                Button("Clear") { viewModel.clearDrawThingsSearch() }
+            }
         }
     }
 

@@ -285,18 +285,18 @@ public struct DrawThingsCatalog: Sendable {
     ]
 
     /// Searches Draw Things models across official `drawthingsai` repositories and Hugging Face.
-    /// Breaks multi-file repositories down into distinct, individually downloadable quantization variants.
+    /// Only returns runnable 1-file checkpoints (.ckpt, .nnc) or complete packages,
+    /// avoiding clutter from hundreds of unrunnable sub-files or stray safetensors shards.
     public func search(query: String, limit: Int = 30) async throws -> [DrawThingsModelSummary] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Fetch from Hugging Face with broad search
+        // Fetch from Hugging Face targeting drawthingsai author and explicit drawthings checkpoints
         var fetchedSummaries: [HFModelSummary] = []
-        let searchKeywords = trimmed.isEmpty ? ["drawthings", "drawthingsai"] : [trimmed, "drawthings \(trimmed)", "drawthingsai"]
+        let searchQueries = trimmed.isEmpty ? ["author:drawthingsai", "drawthings"] : ["drawthingsai \(trimmed)", "drawthings \(trimmed)", trimmed]
 
-        for kw in searchKeywords {
+        for kw in searchQueries {
             var components = URLComponents(string: "https://huggingface.co/api/models")!
-            components.queryItems = [
-                URLQueryItem(name: "search", value: kw),
+            var queryItems = [
                 URLQueryItem(name: "limit", value: String(limit)),
                 URLQueryItem(name: "sort", value: "downloads"),
                 URLQueryItem(name: "direction", value: "-1"),
@@ -306,6 +306,13 @@ public struct DrawThingsCatalog: Sendable {
                 URLQueryItem(name: "expand", value: "safetensors"),
                 URLQueryItem(name: "expand", value: "siblings")
             ]
+            if kw.hasPrefix("author:") {
+                let author = String(kw.dropFirst(7))
+                queryItems.append(URLQueryItem(name: "author", value: author))
+            } else {
+                queryItems.append(URLQueryItem(name: "search", value: kw))
+            }
+            components.queryItems = queryItems
 
             guard let url = components.url else { continue }
             var request = URLRequest(url: url)
@@ -327,62 +334,48 @@ public struct DrawThingsCatalog: Sendable {
         var results: [DrawThingsModelSummary] = []
         var seenIDs = Set<String>()
 
-        // 1. Expand fetched Hugging Face repositories into per-quantization files
+        // 1. Filter and expand only genuine 1-file runnable checkpoints (.ckpt, .nnc)
         for hf in fetchedSummaries {
             let files = hf.filePaths ?? []
-            let modelFiles = files.filter { file in
+            // ONLY accept genuine Draw Things model formats (.ckpt, .nnc)
+            let runnableCheckpointFiles = files.filter { file in
                 let lower = file.lowercased()
-                return (lower.hasSuffix(".ckpt") || lower.hasSuffix(".nnc") || lower.hasSuffix(".gguf") || lower.hasSuffix(".safetensors"))
-                    && !lower.hasPrefix(".") && !lower.contains("mmproj")
+                return (lower.hasSuffix(".ckpt") || lower.hasSuffix(".nnc"))
+                    && !lower.hasPrefix(".")
+                    && !lower.contains("mmproj")
+                    && !lower.contains("adapter")
+                    && !lower.contains("lora")
+            }
+
+            guard !runnableCheckpointFiles.isEmpty else {
+                // If the repo has no .ckpt or .nnc files, do NOT display individual shard files
+                continue
             }
 
             let base = extractBaseModel(from: hf.modelID, tags: hf.tags)
             let baseName = formatDisplayName(repoID: hf.modelID)
 
-            if modelFiles.count > 1 {
-                // Multi-variant repo: create a distinct summary per model file
-                for file in modelFiles {
-                    let quant = extractQuantization(from: file, tags: hf.tags)
-                    let variantID = "drawthings:\(hf.modelID):\(file)"
-                    guard !seenIDs.contains(variantID) else { continue }
-                    seenIDs.insert(variantID)
+            for file in runnableCheckpointFiles {
+                let quant = extractQuantization(from: file, tags: hf.tags)
+                let variantID = "drawthings:\(hf.modelID):\(file)"
+                guard !seenIDs.contains(variantID) else { continue }
+                seenIDs.insert(variantID)
 
-                    let estimatedSize = estimateFileSize(filename: file, fallbackTotal: hf.sizeBytes, totalFiles: modelFiles.count, baseModel: base)
-                    let cleanFilename = (file as NSString).lastPathComponent
-                    let variantName = "\(baseName) - \(cleanFilename)"
-
-                    results.append(DrawThingsModelSummary(
-                        id: variantID,
-                        name: variantName,
-                        repoID: hf.modelID,
-                        filename: file,
-                        baseModel: base,
-                        quantization: quant,
-                        downloads: hf.downloads,
-                        likes: hf.likes,
-                        sizeBytes: estimatedSize,
-                        filePaths: [file]
-                    ))
-                }
-            } else {
-                // Single model file or root package
-                let singleFile = modelFiles.first
-                let quant = extractQuantization(from: singleFile ?? hf.modelID, tags: hf.tags)
-                let itemID = "drawthings:\(hf.modelID)" + (singleFile.map { ":\($0)" } ?? "")
-                guard !seenIDs.contains(itemID) else { continue }
-                seenIDs.insert(itemID)
+                let estimatedSize = estimateFileSize(filename: file, fallbackTotal: hf.sizeBytes, totalFiles: runnableCheckpointFiles.count, baseModel: base)
+                let cleanFilename = (file as NSString).lastPathComponent
+                let variantName = "\(baseName) - \(cleanFilename)"
 
                 results.append(DrawThingsModelSummary(
-                    id: itemID,
-                    name: singleFile != nil ? "\(baseName) (\(quant))" : baseName,
+                    id: variantID,
+                    name: variantName,
                     repoID: hf.modelID,
-                    filename: singleFile,
+                    filename: file,
                     baseModel: base,
                     quantization: quant,
                     downloads: hf.downloads,
                     likes: hf.likes,
-                    sizeBytes: hf.sizeBytes ?? estimateFileSize(filename: singleFile ?? "", fallbackTotal: nil, totalFiles: 1, baseModel: base),
-                    filePaths: singleFile.map { [$0] } ?? hf.filePaths
+                    sizeBytes: estimatedSize,
+                    filePaths: [file]
                 ))
             }
         }

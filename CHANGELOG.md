@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.6] - 2026-09-12
+
+### Fixed & Improved
+- **Clean Draw Things Search Filtering**: Excludes unrunnable shards and loose raw safetensors fragments, filtering results strictly to 1-file runnable checkpoints (`.ckpt`, `.nnc`) and complete packages.
+- **Search Clear Buttons**: Added "Clear" buttons to all search bars (Hugging Face, CivitAI, Draw Things) to quickly reset search fields and reveal registered models.
+- **Standalone Image Checkpoint Loading**: Added automatic base model fallback resolution when loading standalone flat FLUX transformer checkpoints without local diffusers subfolders.
+
 ## [0.6.5] - 2026-09-12
 
 ### Added
