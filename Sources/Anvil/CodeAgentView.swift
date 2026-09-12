@@ -166,7 +166,7 @@ struct CodeAgentView: View {
             let elapsed = codeAgent.currentRoundStartedAt.map { max(0, Int(context.date.timeIntervalSince($0))) } ?? 0
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text("Generating… \(elapsed)s")
+                Text("\(codeAgent.generationPhase.label) \(elapsed)s")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -184,6 +184,14 @@ struct CodeAgentView: View {
                 ForEach(toolCalls) { call in
                     toolCallRow(call)
                 }
+                if let reasoning = message.reasoning, !reasoning.isEmpty {
+                    reasoningRow(reasoning)
+                }
+                if !message.content.isEmpty {
+                    bubble(text: message.content, isUser: false)
+                }
+            } else if let reasoning = message.reasoning, !reasoning.isEmpty {
+                reasoningRow(reasoning)
                 if !message.content.isEmpty {
                     bubble(text: message.content, isUser: false)
                 }
@@ -208,6 +216,19 @@ struct CodeAgentView: View {
                 .background(isUser ? Color.accentColor.opacity(0.15) : Color.gray.opacity(0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             if !isUser { Spacer(minLength: 40) }
+        }
+    }
+
+    private func reasoningRow(_ text: String) -> some View {
+        HStack {
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .padding(8)
+                .background(Color.gray.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            Spacer(minLength: 40)
         }
     }
 

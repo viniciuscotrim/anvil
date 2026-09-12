@@ -15,11 +15,34 @@ import AnvilCore
 /// `@StateObject` — see the `@State` toolchain note in README.
 @MainActor
 final class CodeAgentViewModel: ObservableObject {
+    enum GenerationPhase: Equatable {
+        case idle
+        case thinking
+        case responding
+        case runningTool
+        case waitingForApproval
+        case failed
+        case cancelled
+
+        var label: String {
+            switch self {
+            case .idle: return ""
+            case .thinking: return "Thinking…"
+            case .responding: return "Writing…"
+            case .runningTool: return "Working with tools…"
+            case .waitingForApproval: return "Waiting for approval…"
+            case .failed: return "Generation failed"
+            case .cancelled: return "Generation stopped"
+            }
+        }
+    }
+
     @Published var currentThread: ChatThread
     @Published private(set) var allThreads: [ChatThread] = []
     @Published var selectedModelID: String?
     @Published var inputText: String = ""
     @Published var isSending = false
+    @Published private(set) var generationPhase: GenerationPhase = .idle
     @Published var errorMessage: String?
     @Published var settings = GenerationSettings.default
     @Published var isExportPresented = false
@@ -254,6 +277,7 @@ final class CodeAgentViewModel: ObservableObject {
         let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty)
 
         isSending = true
+        generationPhase = .thinking
         generationTask = Task { [weak self] in
             await self?.runAgentLoop(
                 endpoint: endpoint,
@@ -265,6 +289,9 @@ final class CodeAgentViewModel: ObservableObject {
             guard let self else { return }
             self.isSending = false
             self.currentRoundStartedAt = nil
+            if self.generationPhase == .thinking || self.generationPhase == .responding || self.generationPhase == .runningTool {
+                self.generationPhase = .idle
+            }
             self.generationTask = nil
         }
     }
@@ -276,6 +303,7 @@ final class CodeAgentViewModel: ObservableObject {
     /// Whatever already streamed in before the cancel lands stays in the
     /// conversation rather than being discarded.
     func stopGeneration() {
+        generationPhase = .cancelled
         generationTask?.cancel()
     }
 
@@ -311,9 +339,12 @@ final class CodeAgentViewModel: ObservableObject {
                     try Task.checkCancellation()
                     switch event {
                     case .contentDelta(let delta):
+                        generationPhase = .responding
                         currentThread.messages[replyIndex].content += delta
-                    case .reasoningDelta:
-                        break
+                    case .reasoningDelta(let delta):
+                        generationPhase = .thinking
+                        currentThread.messages[replyIndex].reasoning =
+                            (currentThread.messages[replyIndex].reasoning ?? "") + delta
                     case .done(let message):
                         finalMessage = message
                     }
@@ -329,6 +360,7 @@ final class CodeAgentViewModel: ObservableObject {
                 var haltedForManual = false
                 for call in toolCalls {
                     try Task.checkCancellation()
+                    generationPhase = .runningTool
                     currentRoundStartedAt = Date()
                     let resultMessage = await dispatch(call, haltedForManual: &haltedForManual)
                     currentThread.messages.append(resultMessage)
@@ -349,7 +381,15 @@ final class CodeAgentViewModel: ObservableObject {
             }
             persistCurrentThread()
         } catch {
+            if let last = currentThread.messages.last,
+               last.role == .assistant,
+               last.content.isEmpty,
+               last.toolCalls == nil {
+                currentThread.messages.removeLast()
+            }
+            generationPhase = .failed
             errorMessage = error.localizedDescription
+            persistCurrentThread()
         }
     }
 
@@ -499,6 +539,7 @@ final class CodeAgentViewModel: ObservableObject {
     // MARK: - Approval
 
     private func requestApproval(summary: String, rememberKey: String) async -> Bool {
+        generationPhase = .waitingForApproval
         pendingApproval = PendingApproval(summary: summary, rememberKey: rememberKey)
         let approved = await withCheckedContinuation { continuation in
             approvalContinuation = continuation

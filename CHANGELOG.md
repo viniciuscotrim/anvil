@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.8] - 2026-09-12
+
+### Fixed
+
+- Code-agent reasoning deltas are now retained and rendered instead of being silently discarded.
+- Code now reports whether it is thinking, writing, running tools, or waiting for approval.
+- Empty assistant placeholders are removed after Code-agent failures.
+- Cancellation and failure states are visible instead of looking like an idle low-memory process.
+
 ## [0.5.7] - 2026-09-12
 
 ### Added
