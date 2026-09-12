@@ -344,6 +344,9 @@ struct NativeChatView: View {
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: 220)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .contextMenu {
+                            ShareLink(item: URL(fileURLWithPath: path))
+                        }
                 }
                 if !message.content.isEmpty {
                     Text(message.content)

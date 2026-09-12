@@ -63,6 +63,11 @@ struct NativeImageView: View {
             .dismissKeyboardOnTap()
             .navigationTitle("Images (on-device)")
             .toolbar {
+                if let path = engine.selectedImage?.localPath {
+                    ToolbarItem(placement: .primaryAction) {
+                        ShareLink(item: URL(fileURLWithPath: path))
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button { isSettingsPresented = true } label: { Image(systemName: "slider.horizontal.3") }
                         .disabled(!engine.isLoaded)
@@ -198,6 +203,7 @@ struct NativeImageView: View {
                     thumbnail(for: image, isSelected: false)
                         .onTapGesture { Task { await engine.selectImage(image) } }
                         .contextMenu {
+                            ShareLink(item: URL(fileURLWithPath: image.localPath))
                             Button("Delete", role: .destructive) {
                                 Task { await engine.delete(image) }
                             }
