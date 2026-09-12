@@ -26,6 +26,11 @@ struct ProfilesView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
+                            if let origin = profile.originDeviceName {
+                                Text("From \(origin)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
                     }
                     .swipeActions {
@@ -103,7 +108,8 @@ private struct ProfileEditView: View {
                                 name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                                 prompt: prompt,
                                 defaultForModelID: defaultForModelID,
-                                createdAt: profile?.createdAt ?? Date()
+                                createdAt: profile?.createdAt ?? Date(),
+                                originDeviceName: profile?.originDeviceName ?? DeviceIdentity.currentName
                             )
                             await viewModel.save(saved)
                             dismiss()

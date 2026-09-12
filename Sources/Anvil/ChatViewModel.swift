@@ -114,7 +114,7 @@ final class ChatViewModel: ObservableObject {
         self.memoryStore = memoryStore
         self.modelRegistry = modelRegistry
         self.requirements = requirements
-        self.currentThread = ChatThread()
+        self.currentThread = ChatThread(originDeviceName: DeviceIdentity.currentName)
         let appSettings = AppSettings.load()
         self.chatMessageWaitSeconds = max(0, appSettings.chatMessageWaitSeconds)
         self.maxEstimatedContextTokens = max(512, appSettings.chatMaxEstimatedContextTokens)
@@ -201,7 +201,7 @@ final class ChatViewModel: ObservableObject {
         availableProfiles = await profileStore.all()
         memories = await memoryStore.all()
         if !hasLoadedInitialState {
-            currentThread = allThreads.first ?? ChatThread()
+            currentThread = allThreads.first ?? ChatThread(originDeviceName: DeviceIdentity.currentName)
             hasLoadedInitialState = true
         }
         syncSelectedModel()
@@ -257,7 +257,8 @@ final class ChatViewModel: ObservableObject {
             kind: kind,
             source: source,
             confidence: confidence,
-            profileID: profileID
+            profileID: profileID,
+            originDeviceName: DeviceIdentity.currentName
         ))
         memories = await memoryStore.all()
     }
@@ -360,7 +361,7 @@ final class ChatViewModel: ObservableObject {
     func newThread() {
         guard !isSending else { return }
         if isTemporaryModeActive { rememberTemporaryThread() }
-        currentThread = ChatThread()
+        currentThread = ChatThread(originDeviceName: DeviceIdentity.currentName)
         isTemporaryModeActive = false
     }
 
@@ -394,7 +395,7 @@ final class ChatViewModel: ObservableObject {
         lastImageGenerationByThread.removeValue(forKey: thread.id)
         temporaryThreads.removeValue(forKey: thread.id)
         if currentThread.id == thread.id {
-            currentThread = allThreads.first ?? ChatThread()
+            currentThread = allThreads.first ?? ChatThread(originDeviceName: DeviceIdentity.currentName)
         }
     }
 
@@ -421,11 +422,11 @@ final class ChatViewModel: ObservableObject {
         if isTemporaryModeActive {
             rememberTemporaryThread()
             isTemporaryModeActive = false
-            currentThread = allThreads.first(where: { temporaryThreads[$0.id] == nil }) ?? ChatThread()
+            currentThread = allThreads.first(where: { temporaryThreads[$0.id] == nil }) ?? ChatThread(originDeviceName: DeviceIdentity.currentName)
             threadBeforeTemporaryMode = nil
         } else {
             threadBeforeTemporaryMode = currentThread
-            currentThread = ChatThread(title: "Temporary Chat")
+            currentThread = ChatThread(title: "Temporary Chat", originDeviceName: DeviceIdentity.currentName)
             isTemporaryModeActive = true
             rememberTemporaryThread()
         }

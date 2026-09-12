@@ -59,11 +59,15 @@ final class ProfilesViewModel: ObservableObject {
             return
         }
         draft.name = name
+        // Preserve an existing profile's origin on edit — only a
+        // brand-new one gets tagged with this device.
+        let existingOrigin = draft.id.flatMap { id in profiles.first { $0.id == id }?.originDeviceName }
         let profile = ChatProfile(
             id: draft.id ?? UUID(),
             name: name,
             prompt: draft.prompt,
-            defaultForModelID: draft.defaultForModelID
+            defaultForModelID: draft.defaultForModelID,
+            originDeviceName: existingOrigin ?? DeviceIdentity.currentName
         )
         do {
             _ = try await store.upsert(profile)

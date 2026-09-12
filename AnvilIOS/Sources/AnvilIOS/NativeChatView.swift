@@ -187,6 +187,11 @@ struct NativeChatView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
+                            if let origin = thread.originDeviceName {
+                                Text("From \(origin)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
                     }
                     .swipeActions {

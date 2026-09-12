@@ -17,6 +17,15 @@ public struct ChatThread: Codable, Sendable, Equatable, Identifiable {
     /// any of the history already generated under the old one. The UI
     /// enforces that; this type doesn't.
     public var profileID: UUID?
+    /// Which device this thread was first created on (e.g. "Vinicius's
+    /// MacBook Pro", "Vinicius's iPhone") — set once, at creation, never
+    /// changed afterward even as later messages come from either device
+    /// once Mac Sync merges it. Nil for a thread saved before this field
+    /// existed, or if the creating platform didn't supply one. Purely
+    /// informational — nothing here reads it to make a decision, it's
+    /// only so the UI can show provenance instead of a two-way-synced
+    /// list looking like everything came from nowhere in particular.
+    public var originDeviceName: String?
 
     public init(
         id: UUID = UUID(),
@@ -24,7 +33,8 @@ public struct ChatThread: Codable, Sendable, Equatable, Identifiable {
         messages: [ChatMessage] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        profileID: UUID? = nil
+        profileID: UUID? = nil,
+        originDeviceName: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -32,6 +42,7 @@ public struct ChatThread: Codable, Sendable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.profileID = profileID
+        self.originDeviceName = originDeviceName
     }
 
     /// A short preview for a threads list — the first user message, or

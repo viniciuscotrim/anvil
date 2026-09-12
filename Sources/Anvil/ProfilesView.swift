@@ -62,6 +62,11 @@ struct ProfilesView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
+                if let origin = profile.originDeviceName {
+                    Text("From \(origin)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
             Spacer()
             Button("Edit") { viewModel.startEditing(profile) }

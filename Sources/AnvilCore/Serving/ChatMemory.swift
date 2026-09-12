@@ -42,6 +42,10 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
     public var profileID: UUID?
     public var createdAt: Date
     public var updatedAt: Date
+    /// Which device this memory was first created on — see
+    /// `ChatThread.originDeviceName`'s doc comment for the same purpose
+    /// and contract.
+    public var originDeviceName: String?
 
     public init(
         id: UUID = UUID(),
@@ -51,7 +55,8 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         confidence: Double? = nil,
         profileID: UUID? = nil,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        originDeviceName: String? = nil
     ) {
         self.id = id
         self.content = content
@@ -61,10 +66,11 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         self.profileID = profileID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.originDeviceName = originDeviceName
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, content, kind, source, confidence, profileID, createdAt, updatedAt
+        case id, content, kind, source, confidence, profileID, createdAt, updatedAt, originDeviceName
     }
 
     public init(from decoder: Decoder) throws {
@@ -77,6 +83,7 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         profileID = try container.decodeIfPresent(UUID.self, forKey: .profileID)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        originDeviceName = try container.decodeIfPresent(String.self, forKey: .originDeviceName)
     }
 }
 

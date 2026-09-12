@@ -36,7 +36,7 @@ enum ChatSourceSelection: Equatable {
 /// equivalent, the same place Mac's own `ChatViewModel` keeps both.
 @Observable @MainActor
 final class ChatThreadsViewModel {
-    var currentThread = ChatThread()
+    var currentThread = ChatThread(originDeviceName: DeviceIdentity.currentName)
     private(set) var allThreads: [ChatThread] = []
     private(set) var memories: [ChatMemory] = []
     private(set) var memorySuggestions: [ChatMemorySuggestion] = []
@@ -78,7 +78,7 @@ final class ChatThreadsViewModel {
         allThreads = await store.all()
         memories = await memoryStore.all()
         if !hasLoadedInitialState {
-            currentThread = allThreads.first ?? ChatThread()
+            currentThread = allThreads.first ?? ChatThread(originDeviceName: DeviceIdentity.currentName)
             hasLoadedInitialState = true
         }
     }
@@ -188,7 +188,9 @@ final class ChatThreadsViewModel {
     ) async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let memory = ChatMemory(content: trimmed, kind: kind, source: source, confidence: confidence, profileID: profileID)
+        let memory = ChatMemory(
+            content: trimmed, kind: kind, source: source, confidence: confidence, profileID: profileID,
+            originDeviceName: DeviceIdentity.currentName)
         _ = try? await memoryStore.upsert(memory)
         memories = await memoryStore.all()
         await pushMemoryIfMacActive(memory)
@@ -276,7 +278,7 @@ final class ChatThreadsViewModel {
 
     func newThread() {
         guard !isTemporaryModeActive else { return }
-        currentThread = ChatThread()
+        currentThread = ChatThread(originDeviceName: DeviceIdentity.currentName)
     }
 
     func selectThread(_ thread: ChatThread) {
@@ -291,7 +293,7 @@ final class ChatThreadsViewModel {
         }
         allThreads.removeAll { $0.id == thread.id }
         if currentThread.id == thread.id {
-            currentThread = allThreads.first ?? ChatThread()
+            currentThread = allThreads.first ?? ChatThread(originDeviceName: DeviceIdentity.currentName)
         }
     }
 
@@ -301,11 +303,11 @@ final class ChatThreadsViewModel {
     func toggleTemporaryMode() {
         if isTemporaryModeActive {
             isTemporaryModeActive = false
-            currentThread = threadBeforeTemporaryMode ?? allThreads.first ?? ChatThread()
+            currentThread = threadBeforeTemporaryMode ?? allThreads.first ?? ChatThread(originDeviceName: DeviceIdentity.currentName)
             threadBeforeTemporaryMode = nil
         } else {
             threadBeforeTemporaryMode = currentThread
-            currentThread = ChatThread(title: "Temporary Chat")
+            currentThread = ChatThread(title: "Temporary Chat", originDeviceName: DeviceIdentity.currentName)
             isTemporaryModeActive = true
         }
     }

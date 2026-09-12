@@ -152,6 +152,9 @@ struct MemoryView: View {
                     if let confidence = memory.confidence {
                         Text(String(format: "%.0f%% confidence", confidence * 100))
                     }
+                    if let origin = memory.originDeviceName {
+                        Text("· \(origin)")
+                    }
                     Text(memory.updatedAt, style: .relative)
                 }
                 .font(.caption)

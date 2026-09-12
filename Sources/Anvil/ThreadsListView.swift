@@ -55,9 +55,14 @@ struct ThreadsListView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                Text(thread.updatedAt, style: .relative)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(thread.updatedAt, style: .relative)
+                    if let origin = thread.originDeviceName {
+                        Text("· \(origin)")
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
