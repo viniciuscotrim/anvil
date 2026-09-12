@@ -47,6 +47,12 @@ public struct ChatMessage: Codable, Identifiable, Equatable, Sendable {
     /// Number of prompt tokens served from mlx-lm's prefix KV cache, when
     /// the server reports it. Nil means the backend did not provide usage.
     public var cachedPromptTokens: Int?
+    /// Memory records injected into this request. Optional for backward
+    /// compatibility with transcripts created before memory provenance.
+    public var memoryIDsUsed: [UUID]?
+    /// Memory records created by this response, when an explicit memory
+    /// extraction flow is enabled. Kept separate from used memories.
+    public var memoryIDsCreated: [UUID]?
     /// Set on an assistant message that asked to call a tool.
     public var toolCalls: [ToolCall]?
     /// Set on a `.tool`-role message: which call this is the result of.
@@ -65,6 +71,8 @@ public struct ChatMessage: Codable, Identifiable, Equatable, Sendable {
         responderName: String? = nil,
         tokensPerSecond: Double? = nil,
         cachedPromptTokens: Int? = nil,
+        memoryIDsUsed: [UUID]? = nil,
+        memoryIDsCreated: [UUID]? = nil,
         toolCalls: [ToolCall]? = nil,
         toolCallID: String? = nil,
         generatedImagePath: String? = nil,
@@ -78,6 +86,8 @@ public struct ChatMessage: Codable, Identifiable, Equatable, Sendable {
         self.responderName = responderName
         self.tokensPerSecond = tokensPerSecond
         self.cachedPromptTokens = cachedPromptTokens
+        self.memoryIDsUsed = memoryIDsUsed
+        self.memoryIDsCreated = memoryIDsCreated
         self.toolCalls = toolCalls
         self.toolCallID = toolCallID
         self.generatedImagePath = generatedImagePath

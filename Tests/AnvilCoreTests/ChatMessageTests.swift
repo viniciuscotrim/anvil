@@ -40,6 +40,24 @@ struct ChatMessageTests {
 
         #expect(decoded.responderName == "Sofia")
     }
+
+    @Test
+    func preservesMemoryProvenanceWhenPersisted() throws {
+        let used = UUID()
+        let created = UUID()
+        let message = ChatMessage(
+            role: .assistant,
+            content: "answer",
+            memoryIDsUsed: [used],
+            memoryIDsCreated: [created]
+        )
+
+        let data = try JSONEncoder.anvil.encode(message)
+        let decoded = try JSONDecoder.anvil.decode(ChatMessage.self, from: data)
+
+        #expect(decoded.memoryIDsUsed == [used])
+        #expect(decoded.memoryIDsCreated == [created])
+    }
 }
 
 // Serialized: tests below share MockURLProtocol's mutable static state.

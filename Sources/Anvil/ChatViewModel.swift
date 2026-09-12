@@ -175,10 +175,27 @@ final class ChatViewModel: ObservableObject {
         currentThread.profileID = profile?.id
     }
 
-    func addMemory(_ content: String) async {
+    func addMemory(
+        _ content: String,
+        kind: ChatMemoryKind = .fact,
+        source: ChatMemorySource = .explicit,
+        confidence: Double? = nil,
+        profileID: UUID? = nil
+    ) async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        _ = try? await memoryStore.upsert(ChatMemory(content: trimmed))
+        _ = try? await memoryStore.upsert(ChatMemory(
+            content: trimmed,
+            kind: kind,
+            source: source,
+            confidence: confidence,
+            profileID: profileID
+        ))
+        memories = await memoryStore.all()
+    }
+
+    func updateMemory(_ memory: ChatMemory) async {
+        _ = try? await memoryStore.upsert(memory)
         memories = await memoryStore.all()
     }
 
@@ -389,7 +406,9 @@ final class ChatViewModel: ObservableObject {
             maxEstimatedTokens: maxEstimatedContextTokens,
             recentMessageCount: recentMessageCount
         )
-        let context = contextBuilder.build(messages: currentThread.messages, memories: memories)
+        let activeProfileID = currentThread.profileID
+        let contextMemories = memories.filter { $0.profileID == nil || $0.profileID == activeProfileID }
+        let context = contextBuilder.build(messages: currentThread.messages, memories: contextMemories)
         lastEstimatedContextTokens = context.messages.reduce(0) { $0 + ChatContextBuilder.estimateTokens($1.content) }
         let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty, memoryPrompt: context.memoryPrompt)
         let responderName = activeProfile?.name
@@ -403,7 +422,8 @@ final class ChatViewModel: ObservableObject {
             responderName: responderName,
                 tools: tools,
                 systemPrompt: systemPrompt,
-                contextMessages: context.messages
+                contextMessages: context.messages,
+                memoryIDsUsed: context.memoryIDs
             )
             guard let self else { return }
             self.isSending = false
@@ -425,7 +445,8 @@ final class ChatViewModel: ObservableObject {
         responderName: String?,
         tools: [ChatTool],
         systemPrompt: String?,
-        contextMessages: [ChatMessage]
+        contextMessages: [ChatMessage],
+        memoryIDsUsed: [UUID]
     ) async {
         do {
             currentThread.messages.append(ChatMessage(
@@ -465,6 +486,7 @@ final class ChatViewModel: ObservableObject {
             }
             guard var reply else { return }
             reply.responderName = responderName
+            reply.memoryIDsUsed = memoryIDsUsed
             currentThread.messages[replyIndex] = reply
 
             if let toolCall = reply.toolCalls?.first(where: { $0.name == "generate_image" }) {
@@ -475,7 +497,8 @@ final class ChatViewModel: ObservableObject {
                     maxEstimatedTokens: maxEstimatedContextTokens,
                     recentMessageCount: recentMessageCount
                 )
-                let followUpContext = followUpBuilder.build(messages: currentThread.messages, memories: memories)
+                let followUpMemories = memories.filter { $0.profileID == nil || $0.profileID == currentThread.profileID }
+                let followUpContext = followUpBuilder.build(messages: currentThread.messages, memories: followUpMemories)
                 lastEstimatedContextTokens = followUpContext.messages.reduce(0) { $0 + ChatContextBuilder.estimateTokens($1.content) }
                 let followUpStream = client.streamSend(
                     messages: followUpContext.messages,
@@ -510,6 +533,7 @@ final class ChatViewModel: ObservableObject {
                 if var followUpReply {
                     followUpReply.generatedImagePath = generatedPath
                     followUpReply.responderName = responderName
+                    followUpReply.memoryIDsUsed = followUpContext.memoryIDs
                     currentThread.messages[followUpIndex] = followUpReply
                 }
             }

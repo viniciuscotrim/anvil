@@ -11,6 +11,7 @@ struct ChatView: View {
     @EnvironmentObject private var chat: ChatViewModel
     @Environment(\.openWindow) private var openWindow
     @State private var newMemoryText = ""
+    @State private var memoryMessageID: UUID?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -205,6 +206,24 @@ struct ChatView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
+                if message.role == .assistant,
+                   !(message.memoryIDsUsed ?? []).isEmpty || !(message.memoryIDsCreated ?? []).isEmpty {
+                    Button {
+                        memoryMessageID = message.id
+                    } label: {
+                        Label("Memory context", systemImage: "brain.head.profile")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .popover(isPresented: Binding(
+                        get: { memoryMessageID == message.id },
+                        set: { if !$0 { memoryMessageID = nil } }
+                    )) {
+                        memoryInspector(for: message)
+                    }
+                }
+
                 if !chat.hideReasoning, let reasoning = message.reasoning, !reasoning.isEmpty {
                     Text(reasoning)
                         .font(.callout)
@@ -236,6 +255,39 @@ struct ChatView: View {
             .background(message.role == .user ? Color.accentColor.opacity(0.15) : Color.gray.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 10))
             if message.role != .user { Spacer(minLength: 40) }
+        }
+    }
+
+    private func memoryInspector(for message: ChatMessage) -> some View {
+        let used = Set(message.memoryIDsUsed ?? [])
+        let created = Set(message.memoryIDsCreated ?? [])
+        let usedMemories = chat.memories.filter { used.contains($0.id) }
+        let createdMemories = chat.memories.filter { created.contains($0.id) }
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Memory for this response").font(.headline)
+            memorySection("Used", memories: usedMemories, empty: "No durable memories were injected.")
+            memorySection("Created", memories: createdMemories, empty: "No memory was created by this response.")
+        }
+        .padding()
+        .frame(width: 380)
+    }
+
+    @ViewBuilder
+    private func memorySection(_ title: String, memories: [ChatMemory], empty: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.subheadline).bold()
+            if memories.isEmpty {
+                Text(empty).font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(memories) { memory in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(memory.content).font(.caption)
+                        Text("\(memory.kind.label) · \(memory.source.label)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 
@@ -342,6 +394,11 @@ struct ChatView: View {
             }
 
             Section("Memory") {
+                Button {
+                    openWindow(id: "memory")
+                } label: {
+                    Label("Open Memory…", systemImage: "brain.head.profile")
+                }
                 TextField("Add a durable fact or preference…", text: $newMemoryText, axis: .vertical)
                     .lineLimit(2...4)
                 Button {

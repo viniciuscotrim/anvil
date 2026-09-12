@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.12] - 2026-09-12
+
+### Added
+
+- Dedicated local Memory window linked from Chat.
+- Auditable memory categories: fact, preference, date, number, and impression.
+- Memory source labels: explicitly told by the user versus inferred.
+- Optional confidence and Profile scope for each memory.
+- Per-response memory provenance indicator showing memories used and created.
+- Legacy memory and transcript files remain readable with safe defaults.
+
 ## [0.5.11] - 2026-09-12
 
 ### Improved
