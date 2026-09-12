@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
 struct CodeAgentView: View {
     @EnvironmentObject private var sessions: ModelSessionManager
     @EnvironmentObject private var codeAgent: CodeAgentViewModel
+    @Environment(\.openWindow) private var openWindow
     @State private var isSidebarOpen = true
     @State private var isChoosingFolder = false
 
@@ -60,6 +61,15 @@ struct CodeAgentView: View {
         }
         .task { await codeAgent.loadInitialState() }
         .onChange(of: sessions.sessions) { _, _ in codeAgent.syncSelectedModel() }
+        .fileExporter(
+            isPresented: Binding(
+                get: { codeAgent.isExportPresented },
+                set: { codeAgent.isExportPresented = $0 }
+            ),
+            document: TranscriptDocument(text: codeAgent.exportMarkdown()),
+            contentType: .markdownTranscript,
+            defaultFilename: codeAgent.currentThread.title + ".md"
+        ) { _ in }
     }
 
     private var workingFolderLabel: String {
@@ -279,22 +289,30 @@ struct CodeAgentView: View {
         Form {
             Section("Conversation") {
                 Button("New Thread") { codeAgent.newThread() }
-                if !codeAgent.allThreads.isEmpty {
-                    Picker("History", selection: Binding(
-                        get: { codeAgent.currentThread.id },
-                        set: { id in
-                            if let thread = codeAgent.allThreads.first(where: { $0.id == id }) {
-                                codeAgent.selectThread(thread)
-                            }
-                        }
-                    )) {
-                        ForEach(codeAgent.allThreads) { thread in
-                            Text(thread.title).tag(thread.id)
-                        }
-                    }
+                Button("Code History…") {
+                    openWindow(id: "code-threads")
                 }
                 Button("Clear Conversation") { codeAgent.clearCurrentConversation() }
                     .disabled(codeAgent.messages.isEmpty)
+                Text("Saved permanently, the same as Chat — every Code conversation persists across relaunches; there's no temporary mode here.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Export") {
+                Button {
+                    copyToPasteboard(codeAgent.exportMarkdown())
+                } label: {
+                    Label("Copy All", systemImage: "doc.on.doc")
+                }
+                .disabled(codeAgent.messages.isEmpty)
+
+                Button {
+                    codeAgent.isExportPresented = true
+                } label: {
+                    Label("Export…", systemImage: "square.and.arrow.up")
+                }
+                .disabled(codeAgent.messages.isEmpty)
             }
 
             Section("Working Folder") {

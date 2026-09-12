@@ -22,6 +22,7 @@ final class CodeAgentViewModel: ObservableObject {
     @Published var isSending = false
     @Published var errorMessage: String?
     @Published var settings = GenerationSettings.default
+    @Published var isExportPresented = false
 
     // MARK: - Settings (persisted to AppSettings)
 
@@ -168,6 +169,20 @@ final class CodeAgentViewModel: ObservableObject {
         currentThread.messages.removeAll()
         manualProposal = nil
         persistCurrentThread()
+    }
+
+    /// A structured, traceable Markdown export — every tool call and
+    /// its result gets its own timestamped section (see
+    /// `TranscriptFormatter.codeAgentMarkdown`'s own doc comment for
+    /// why the plain Chat-style narrative export would lose exactly the
+    /// part worth exporting here), meant to be handed to a separate
+    /// conversation as reference material.
+    func exportMarkdown() -> String {
+        TranscriptFormatter.codeAgentMarkdown(
+            threadTitle: currentThread.title,
+            workingDirectoryPath: workingDirectoryPath,
+            messages: currentThread.messages
+        )
     }
 
     private func persistCurrentThread() {

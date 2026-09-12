@@ -33,6 +33,11 @@ struct AnvilApp: App {
                 .environmentObject(appState.chat)
         }
 
+        WindowGroup("Code History", id: "code-threads") {
+            CodeThreadsListView()
+                .environmentObject(appState.codeAgent)
+        }
+
         // A detached copy of the same live chat — same `ChatViewModel`
         // instance, so it's the identical conversation, not a fork —
         // opened via the "Pop Out" button in Chat's sidebar so the user
