@@ -140,21 +140,13 @@ public struct ModelDownloader: Sendable {
         repoID.replacingOccurrences(of: "/", with: "--")
     }
 
-    /// Root-level (no `/` in the path) weight files to skip — only when
-    /// `model_index.json` is present, confirming a real diffusers
-    /// pipeline exists in this repo's component subfolders, so a
-    /// same-named-pattern file sitting loose at the top level is a
-    /// redundant duplicate for a different tool, not something this
-    /// pipeline itself needs. See `download`'s doc comment for the real
-    /// case (and real byte counts) this was found on.
+    /// Moved to `ModelCompatibility.redundantRootLevelWeightFiles` —
+    /// pure path logic with no platform-specific download mechanism
+    /// involved, so it's shared with the native (iOS-compatible)
+    /// per-file downloader too. Kept here as a thin forward so existing
+    /// callers/tests don't need to change.
     static func redundantRootLevelWeightFiles(in filePaths: [String]) -> [String] {
-        guard filePaths.contains(where: { $0.caseInsensitiveCompare("model_index.json") == .orderedSame }) else {
-            return []
-        }
-        let weightExtensions: Set<String> = ["safetensors", "bin", "ckpt", "pt", "gguf"]
-        return filePaths.filter { path in
-            !path.contains("/") && weightExtensions.contains((path as NSString).pathExtension.lowercased())
-        }
+        ModelCompatibility.redundantRootLevelWeightFiles(in: filePaths)
     }
 }
 

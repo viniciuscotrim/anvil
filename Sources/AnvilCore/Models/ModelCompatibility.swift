@@ -60,4 +60,27 @@ public enum ModelCompatibility: String, Sendable, Equatable {
 
         return .unknown
     }
+
+    /// Root-level (no `/` in the path) weight files to skip when
+    /// downloading — only when `model_index.json` is present,
+    /// confirming a real diffusers pipeline exists in this repo's
+    /// component subfolders, so a same-shaped file sitting loose at the
+    /// top level is a redundant duplicate for a different tool, not
+    /// something this pipeline itself needs. Real, reported case:
+    /// `black-forest-labs/FLUX.2-klein-4B` ships a 7.8GB root-level
+    /// `flux-2-klein-4b.safetensors` byte-for-byte the same size as
+    /// `transformer/diffusion_pytorch_model.safetensors` — downloading
+    /// it turned a real ~16GB need into ~24GB for nothing. Cross-platform
+    /// (both the macOS Python-based `ModelDownloader` and any native
+    /// per-file downloader use this same check) since it's pure path
+    /// logic, no platform-specific download mechanism involved.
+    public static func redundantRootLevelWeightFiles(in filePaths: [String]) -> [String] {
+        guard filePaths.contains(where: { $0.caseInsensitiveCompare("model_index.json") == .orderedSame }) else {
+            return []
+        }
+        let weightExtensions: Set<String> = ["safetensors", "bin", "ckpt", "pt", "gguf"]
+        return filePaths.filter { path in
+            !path.contains("/") && weightExtensions.contains((path as NSString).pathExtension.lowercased())
+        }
+    }
 }
