@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3] - 2026-09-12
+
+### Fixed
+
+- Fixed an `EXC_BAD_ACCESS` crash while loading models when sampling child-process RSS.
+- Added a regression test for the Darwin `proc_pid_rusage` buffer bridge.
+
 ## [0.5.2] - 2026-09-12
 
 ### Fixed
