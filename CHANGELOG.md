@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.2] - 2026-09-12
+
+### Fixed
+
+- Large text models are no longer rejected because of the full optional KV-cache budget.
+- KV-cache capacity now adapts to the memory remaining after model weights are reserved (`2G`, `1G`, `512M`, or `256M`).
+- Added a regression test covering a Qwen-sized model on a 24 GB Mac.
+
 ## [0.5.1] - 2026-09-12
 
 ### Added

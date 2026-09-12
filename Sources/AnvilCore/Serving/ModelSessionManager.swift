@@ -135,7 +135,8 @@ public final class ModelSessionManager: ObservableObject {
                 modelPath: model.localPath,
                 displayName: model.displayName,
                 host: access.host,
-                port: resolvedPort
+                port: resolvedPort,
+                promptCacheBytes: residency.promptCacheBytes(for: model)
             )
             servers[model.id] = server
             if let gateway {

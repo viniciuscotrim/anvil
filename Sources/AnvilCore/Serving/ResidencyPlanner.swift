@@ -40,11 +40,19 @@ public final class ResidencyPlanner: @unchecked Sendable {
     public func estimate(for model: ModelEntry) -> Int64 {
         let diskBytes = model.sizeBytes ?? 0
         let runtimeOverhead = 512 * 1024 * 1024
-        let kvCacheAllowance = model.kind == .text ? 2 * 1024 * 1024 * 1024 : 0
-        return max(
-            Int64(runtimeOverhead + kvCacheAllowance),
-            Int64(Double(diskBytes) * 1.25) + Int64(runtimeOverhead + kvCacheAllowance)
-        )
+        return max(Int64(runtimeOverhead), Int64(Double(diskBytes) * 1.10) + Int64(runtimeOverhead))
+    }
+
+    /// KV cache is an optional working-set budget, not a reason to reject a
+    /// model before its first prompt. Give larger models the memory that is
+    /// actually available after their weights are reserved.
+    public func promptCacheBytes(for model: ModelEntry) -> String {
+        guard model.kind == .text else { return "256M" }
+        let available = budgetBytes - reservedBytes
+        if available >= 2 * 1024 * 1024 * 1024 { return "2G" }
+        if available >= 1024 * 1024 * 1024 { return "1G" }
+        if available >= 512 * 1024 * 1024 { return "512M" }
+        return "256M"
     }
 
     @discardableResult

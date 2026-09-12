@@ -45,4 +45,20 @@ struct ResidencyPlannerTests {
         #expect(!planner.reserve(second))
         #expect(planner.reservation(for: second.id) == nil)
     }
+
+    @Test
+    func largeTextModelReservesWeightsBeforeOptionalCacheBudget() {
+        let planner = ResidencyPlanner(physicalMemory: 24 * 1024 * 1024 * 1024)
+        let model = ModelEntry(
+            id: "qwen",
+            displayName: "Qwen",
+            source: source,
+            localPath: "/tmp/qwen",
+            sizeBytes: 15 * 1024 * 1024 * 1024,
+            kind: .text
+        )
+
+        #expect(planner.reserve(model))
+        #expect(planner.promptCacheBytes(for: model) == "1G")
+    }
 }
