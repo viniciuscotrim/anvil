@@ -1,5 +1,13 @@
 import Foundation
 
+// macOS-only: this whole file is built around `Foundation.Process`,
+// which doesn't exist on iOS at all (confirmed for real — even a
+// bare `Process()` reference inside a function body fails to
+// typecheck for an iOS target). The iOS port needs a genuinely
+// different mechanism here (native `mlx-swift` inference in-process,
+// not a subprocess server) rather than a port of this approach.
+#if os(macOS)
+
 /// Downloads a model's files via `huggingface_hub.snapshot_download`
 /// (through the app's private Python venv) and registers the result.
 /// Reuses whatever `huggingface_hub` already cached — a repeat download
@@ -149,3 +157,5 @@ public struct ModelDownloader: Sendable {
         }
     }
 }
+
+#endif

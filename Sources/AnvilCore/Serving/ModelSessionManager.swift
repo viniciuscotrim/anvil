@@ -1,5 +1,12 @@
 import Foundation
 
+// macOS-only: wraps LLMServer/ImageServer, both Process-based (see
+// their own file headers) — doesn't exist on iOS at all today. The
+// iOS chat/image UI will need an iOS-native session manager backed
+// by in-process mlx-swift inference instead of this subprocess-
+// server model.
+#if os(macOS)
+
 /// Tracks which models are actually loaded into memory right now — the
 /// thing the app was missing: a way to see what's loaded, load one, and
 /// unload it, independent of any chat window. Each loaded model gets
@@ -167,3 +174,5 @@ public final class ModelSessionManager: ObservableObject {
         }
     }
 }
+
+#endif

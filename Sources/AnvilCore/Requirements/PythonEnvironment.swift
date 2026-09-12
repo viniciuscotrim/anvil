@@ -1,5 +1,9 @@
 import Foundation
 
+// macOS-only: shells out via ProcessRunner (Process-based) to the
+// app's private Python venv — no such thing exists on iOS.
+#if os(macOS)
+
 /// The single private Python venv Anvil's backend runs in, managed
 /// entirely through the bootstrapped `uv` binary. One venv, grown
 /// incrementally as the user's choices require more packages —
@@ -57,3 +61,5 @@ public struct PythonEnvironment: Sendable {
         )
     }
 }
+
+#endif

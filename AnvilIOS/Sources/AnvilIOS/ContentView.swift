@@ -1,11 +1,26 @@
 import SwiftUI
 
+/// Two tabs: the original device-info scaffold check, and a real
+/// Hugging Face search screen running `AnvilCore` directly — the first
+/// real evidence this is genuinely the same codebase as the Mac app,
+/// not a from-scratch iOS rewrite.
+struct ContentView: View {
+    var body: some View {
+        TabView {
+            DeviceInfoView()
+                .tabItem { Label("Info", systemImage: "info.circle") }
+            ModelSearchView()
+                .tabItem { Label("Models", systemImage: "square.grid.2x2") }
+        }
+    }
+}
+
 /// A real check, not a placeholder label: this Mac's iOS port has to
 /// eventually plan around whatever RAM a real iPhone actually reports,
 /// the same way the macOS app already plans around this Mac's own
 /// physical memory (`ModelSizeClass`) — worth seeing on the very first
 /// screen that ever runs here.
-struct ContentView: View {
+struct DeviceInfoView: View {
     var body: some View {
         VStack(spacing: 16) {
             Image(systemName: "hammer.fill")

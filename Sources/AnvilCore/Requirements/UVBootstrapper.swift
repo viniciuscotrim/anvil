@@ -1,6 +1,11 @@
 import Foundation
 import CryptoKit
 
+// macOS-only: bootstraps `uv` and a private Python venv via
+// ProcessRunner (Process-based) — no subprocess execution or
+// Python venv concept exists on iOS.
+#if os(macOS)
+
 /// Bootstraps `uv` (the Python package/venv manager) as a private binary
 /// under `RuntimePaths.binDirectory` — never installed globally, never
 /// touching the user's shell profile or PATH.
@@ -122,3 +127,5 @@ public struct UVBootstrapper: Sendable {
         return nil
     }
 }
+
+#endif

@@ -1,5 +1,13 @@
 import Foundation
 
+// macOS-only: every concrete Dependency here is built around
+// UVBootstrapper/PythonEnvironment, both Process-based and thus
+// macOS-only themselves. The `Dependency` protocol they conform to
+// stays cross-platform (see Dependency.swift) — iOS just needs its
+// own concrete dependencies (e.g. downloading an mlx-swift model)
+// rather than a port of these.
+#if os(macOS)
+
 /// Enough to browse Hugging Face and pick a model. This is the *only*
 /// thing that installs on first launch — everything below is lazy.
 public struct HuggingFaceClientDependency: Dependency {
@@ -80,3 +88,5 @@ public struct VoiceRuntimeDependency: Dependency {
         try await python.pipInstall(["mlx-audio"])
     }
 }
+
+#endif

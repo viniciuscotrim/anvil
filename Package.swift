@@ -4,7 +4,8 @@ import PackageDescription
 let package = Package(
     name: "Anvil",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v14),
+        .iOS(.v17)
     ],
     products: [
         .executable(name: "Anvil", targets: ["Anvil"]),

@@ -1,6 +1,9 @@
 name: AnvilIOS
 options:
   bundleIdPrefix: com.viniciuscotrim
+packages:
+  AnvilCore:
+    path: ..
 targets:
   AnvilIOS:
     type: application
@@ -8,6 +11,9 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - Sources/AnvilIOS
+    dependencies:
+      - package: AnvilCore
+        product: AnvilCore
     info:
       path: Sources/AnvilIOS/Info.plist
       properties:

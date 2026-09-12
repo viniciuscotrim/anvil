@@ -1,5 +1,13 @@
 import Foundation
 
+// macOS-only: this whole file is built around `Foundation.Process`,
+// which doesn't exist on iOS at all (confirmed for real — even a
+// bare `Process()` reference inside a function body fails to
+// typecheck for an iOS target). The iOS port needs a genuinely
+// different mechanism here (native `mlx-swift` inference in-process,
+// not a subprocess server) rather than a port of this approach.
+#if os(macOS)
+
 /// Guarantees a spawned server subprocess dies with Anvil no matter how
 /// Anvil itself goes away — not just a clean Quit (already handled by
 /// `AppDelegate.applicationShouldTerminate`), but a force-quit, a
@@ -64,3 +72,5 @@ enum ProcessWatchdog {
     done
     """#
 }
+
+#endif

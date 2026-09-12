@@ -1,5 +1,12 @@
 import Foundation
 
+// macOS-only: wraps LLMServer/ImageServer, both Process-based (see
+// their own file headers) — doesn't exist on iOS at all today. The
+// iOS chat/image UI will need an iOS-native session manager backed
+// by in-process mlx-swift inference instead of this subprocess-
+// server model.
+#if os(macOS)
+
 /// Tracks which image models are actually loaded into memory — the
 /// image-generation counterpart of `ModelSessionManager`, kept separate
 /// because it wraps a different server (`ImageServer`/`mflux`, not
@@ -156,3 +163,5 @@ public final class ImageSessionManager: ObservableObject {
         }
     }
 }
+
+#endif
