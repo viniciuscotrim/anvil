@@ -13,6 +13,8 @@ struct ContentView: View {
                 .tabItem { Label("Models", systemImage: "square.grid.2x2") }
             NativeChatView()
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+            NativeImageView()
+                .tabItem { Label("Images", systemImage: "photo") }
         }
     }
 }
