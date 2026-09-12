@@ -30,7 +30,12 @@ final class ProfilesViewModel {
             do {
                 profiles = try await syncClient.profiles(host: activeHost)
             } catch {
-                errorMessage = error.localizedDescription
+                // Not surfaced as `errorMessage` — overwhelmingly just
+                // means this Mac doesn't have Mac Sync turned on, an
+                // expected, common state (see
+                // `ChatThreadsViewModel.isMacSyncAvailable`'s doc
+                // comment), not a real failure.
+                profiles = []
             }
         } else {
             profiles = await store.all()

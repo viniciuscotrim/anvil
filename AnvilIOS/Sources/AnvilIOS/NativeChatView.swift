@@ -92,6 +92,11 @@ struct NativeChatView: View {
                     Text(errorMessage).foregroundStyle(.red).font(.caption).padding(8)
                 } else if let syncError = threads.errorMessage {
                     Text(syncError).foregroundStyle(.red).font(.caption).padding(8)
+                } else if case .mac = source, !threads.isMacSyncAvailable {
+                    Text("Mac Sync isn't on for this Mac — chatting still works, just without shared threads/profiles/memories. Turn it on in the Chat sidebar on the Mac for that.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(8)
                 }
 
                 if threads.isTemporaryModeActive {

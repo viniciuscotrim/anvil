@@ -41,8 +41,16 @@ final class ChatThreadsViewModel {
     /// Change it via `selectSource(_:)`, not directly, so the switch
     /// actually reloads threads/memories from the newly active side.
     private(set) var activeSource: ChatSourceSelection = .local
-    /// Memory-suggestion / source-switch errors. Each engine (local/
-    /// remote) tracks its own send errors separately.
+    /// False whenever the active Mac doesn't answer `AnvilSyncServer` —
+    /// overwhelmingly just because Mac Sync is an opt-in feature the
+    /// user hasn't turned on for that Mac yet, not a real error. Chat
+    /// still works fine without it (send/receive don't need sync at
+    /// all); this only means threads/profiles/memories stay this
+    /// phone's own local ones instead of that Mac's, so the UI shows a
+    /// quiet note here rather than a scary connection-failure banner.
+    private(set) var isMacSyncAvailable = true
+    /// Memory-suggestion errors only — a real failure worth surfacing
+    /// loudly, unlike a Mac simply not having sync turned on.
     var errorMessage: String?
     /// While on, the active conversation is never saved to disk — same
     /// restriction and behavior as the Mac app's own temporary mode:
@@ -87,14 +95,21 @@ final class ChatThreadsViewModel {
     private func reloadThreadsAndMemories() async {
         switch activeSource {
         case .local:
+            isMacSyncAvailable = true
             allThreads = await store.all()
             memories = await memoryStore.all()
         case .mac(let connection):
             do {
                 allThreads = try await syncClient.threads(host: connection.host)
                 memories = try await syncClient.memories(host: connection.host)
+                isMacSyncAvailable = true
             } catch {
-                errorMessage = error.localizedDescription
+                // Not surfaced as `errorMessage` — see `isMacSyncAvailable`'s
+                // own doc comment for why this is an expected, common
+                // state, not a real failure worth a red banner.
+                isMacSyncAvailable = false
+                allThreads = []
+                memories = []
             }
         }
     }
