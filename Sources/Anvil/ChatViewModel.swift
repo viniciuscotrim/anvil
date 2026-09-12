@@ -36,7 +36,9 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var isTemporaryModeActive = false
     @Published var selectedModelID: String?
     @Published var inputText: String = ""
+    @Published var chatMessageWaitSeconds: Double
     @Published var isSending = false
+    @Published private(set) var isWaitingToSend = false
     @Published private(set) var generationPhase: GenerationPhase = .idle
     @Published var errorMessage: String?
     @Published var hideReasoning = true
@@ -77,6 +79,7 @@ final class ChatViewModel: ObservableObject {
     /// though only the clothing was meant to change.
     private var lastImageGenerationByThread: [UUID: (seed: Int, prompt: String)] = [:]
     private var generationTask: Task<Void, Never>?
+    private var bufferedSendTask: Task<Void, Never>?
 
     init(
         sessions: ModelSessionManager,
@@ -95,6 +98,7 @@ final class ChatViewModel: ObservableObject {
         self.modelRegistry = modelRegistry
         self.requirements = requirements
         self.currentThread = ChatThread()
+        self.chatMessageWaitSeconds = max(0, AppSettings.load().chatMessageWaitSeconds)
     }
 
     var messages: [ChatMessage] { currentThread.messages }
@@ -197,6 +201,7 @@ final class ChatViewModel: ObservableObject {
     /// Empties the active conversation without deleting the thread
     /// entry itself.
     func clearCurrentConversation() {
+        cancelBufferedSend()
         currentThread.messages.removeAll()
         lastTokensPerSecond = nil
         lastCachedPromptTokens = nil
@@ -212,6 +217,7 @@ final class ChatViewModel: ObservableObject {
     /// touches disk; turning it off restores whatever thread was active
     /// before.
     func toggleTemporaryMode() {
+        cancelBufferedSend()
         if isTemporaryModeActive {
             isTemporaryModeActive = false
             currentThread = threadBeforeTemporaryMode ?? allThreads.first ?? ChatThread()
@@ -225,7 +231,62 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Sending
 
+    func handleSubmit() {
+        if chatMessageWaitSeconds <= 0 {
+            Task { await send() }
+            return
+        }
+        guard !isSending else { return }
+        if !inputText.hasSuffix("\n") {
+            inputText.append("\n")
+        }
+        scheduleBufferedSend()
+    }
+
+    func scheduleBufferedSend() {
+        bufferedSendTask?.cancel()
+        isWaitingToSend = false
+        guard chatMessageWaitSeconds > 0,
+              !isSending,
+              !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        let delay = chatMessageWaitSeconds
+        isWaitingToSend = true
+        bufferedSendTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                guard let self else { return }
+                self.isWaitingToSend = false
+                await self.send()
+            } catch is CancellationError {
+                return
+            } catch {
+                return
+            }
+        }
+    }
+
+    func saveChatMessageWaitSeconds() {
+        chatMessageWaitSeconds = max(0, min(chatMessageWaitSeconds, 300))
+        var settings = AppSettings.load()
+        settings.chatMessageWaitSeconds = chatMessageWaitSeconds
+        try? settings.save()
+        if chatMessageWaitSeconds <= 0 {
+            cancelBufferedSend()
+        } else {
+            scheduleBufferedSend()
+        }
+    }
+
+    private func cancelBufferedSend() {
+        bufferedSendTask?.cancel()
+        bufferedSendTask = nil
+        isWaitingToSend = false
+    }
+
     func send() async {
+        cancelBufferedSend()
           guard let id = selectedModelID,
               let endpoint = sessions.gatewayEndpoint(for: id) ?? sessions.chatEndpoint(for: id) else {
             errorMessage = "Pick a loaded model first"

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.7] - 2026-09-12
+
+### Added
+
+- Configurable Chat composer quiet period, defaulting to 10 seconds.
+- Enter now adds a message block when batching is enabled.
+- New typing restarts the quiet-period timer; the Send button still sends immediately.
+- `0` seconds disables batching and restores direct send behavior.
+- Composer shows when it is waiting for more text.
+
 ## [0.5.6] - 2026-09-12
 
 ### Improved

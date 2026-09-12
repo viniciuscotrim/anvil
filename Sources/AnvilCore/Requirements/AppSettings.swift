@@ -20,6 +20,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// in the Models tab; picking one there clears it from any other
     /// model, so at most one is ever the default.
     public var defaultChatImageModelID: String?
+    /// Chat composer quiet period. Zero sends on submit immediately; a
+    /// positive value batches blocks until the user stops typing.
+    public var chatMessageWaitSeconds: Double
 
     /// The Code tab's own working folder — nil until the user picks
     /// one. `read_file`/`list_directory`/`write_file`/
@@ -38,6 +41,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public init(
         modelsRootPath: String? = nil,
         defaultChatImageModelID: String? = nil,
+        chatMessageWaitSeconds: Double = 10,
         codeAgentWorkingDirectoryPath: String? = nil,
         codeAgentAllowFullDiskAccess: Bool = false,
         codeAgentPermissionLevel: CodeAgentPermissionLevel = .manual,
@@ -45,6 +49,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     ) {
         self.modelsRootPath = modelsRootPath
         self.defaultChatImageModelID = defaultChatImageModelID
+        self.chatMessageWaitSeconds = chatMessageWaitSeconds
         self.codeAgentWorkingDirectoryPath = codeAgentWorkingDirectoryPath
         self.codeAgentAllowFullDiskAccess = codeAgentAllowFullDiskAccess
         self.codeAgentPermissionLevel = codeAgentPermissionLevel
@@ -52,7 +57,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case modelsRootPath, defaultChatImageModelID
+        case modelsRootPath, defaultChatImageModelID, chatMessageWaitSeconds
         case codeAgentWorkingDirectoryPath, codeAgentAllowFullDiskAccess
         case codeAgentPermissionLevel, codeAgentEnabledFeatures
     }
@@ -70,6 +75,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         modelsRootPath = try container.decodeIfPresent(String.self, forKey: .modelsRootPath)
         defaultChatImageModelID = try container.decodeIfPresent(String.self, forKey: .defaultChatImageModelID)
+        chatMessageWaitSeconds = try container.decodeIfPresent(Double.self, forKey: .chatMessageWaitSeconds) ?? 10
         codeAgentWorkingDirectoryPath = try container.decodeIfPresent(String.self, forKey: .codeAgentWorkingDirectoryPath)
         codeAgentAllowFullDiskAccess = try container.decodeIfPresent(Bool.self, forKey: .codeAgentAllowFullDiskAccess) ?? false
         codeAgentPermissionLevel = try container.decodeIfPresent(CodeAgentPermissionLevel.self, forKey: .codeAgentPermissionLevel) ?? .manual

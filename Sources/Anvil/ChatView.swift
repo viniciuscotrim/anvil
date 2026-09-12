@@ -248,24 +248,37 @@ struct ChatView: View {
     // MARK: - Input
 
     private var inputBar: some View {
-        HStack {
-            TextField("Message…", text: Binding(
-                get: { chat.inputText },
-                set: { chat.inputText = $0 }
-            ), axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...4)
-                .onSubmit { if !chat.isSending { Task { await chat.send() } } }
-                .disabled(sessions.readySessions.isEmpty)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                TextField("Message…", text: Binding(
+                    get: { chat.inputText },
+                    set: { chat.inputText = $0 }
+                ), axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...4)
+                    .onSubmit { chat.handleSubmit() }
+                    .onChange(of: chat.inputText) { _, _ in
+                        if chat.chatMessageWaitSeconds > 0 && !chat.isSending {
+                            chat.scheduleBufferedSend()
+                        }
+                    }
+                    .disabled(sessions.readySessions.isEmpty)
 
-            if chat.isSending {
-                Button("Stop", role: .destructive) { chat.stopGeneration() }
-            } else {
-                Button("Send") { Task { await chat.send() } }
-                    .disabled(
-                        sessions.readySessions.isEmpty
-                        || chat.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    )
+                if chat.isSending {
+                    Button("Stop", role: .destructive) { chat.stopGeneration() }
+                } else {
+                    Button("Send") { Task { await chat.send() } }
+                        .disabled(
+                            sessions.readySessions.isEmpty
+                            || chat.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
+                }
+            }
+
+            if chat.isWaitingToSend {
+                Text("Waiting for more text…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding()
@@ -319,6 +332,20 @@ struct ChatView: View {
                     get: { chat.hideReasoning },
                     set: { chat.hideReasoning = $0 }
                 ))
+            }
+
+            Section("Composer") {
+                LabeledContent("Wait after typing") {
+                    TextField("0", value: Binding(
+                        get: { chat.chatMessageWaitSeconds },
+                        set: { chat.chatMessageWaitSeconds = $0 }
+                    ), format: .number)
+                    .frame(width: 70)
+                    .onSubmit { chat.saveChatMessageWaitSeconds() }
+                }
+                Text("Seconds of silence before sending. Enter adds a block; 0 sends immediately.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Generation") {
