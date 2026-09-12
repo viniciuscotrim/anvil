@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0] - 2026-09-12
+
+### Added
+- **Draw Things Official Catalog Search**: Integrated a dedicated 3rd search source in Model Manager to search and download official Draw Things community models (Flux 8-bit/4-bit/3-bit, SDXL, SD 1.5).
+- **Draw Things Engine (`InferenceEngine.drawThings`)**: Support for `.ckpt` and `.nnc` image model quantizations.
+- **Engine Override for Image Models**: Model gear popover allows overriding image engine between `Auto`, `mflux`, and `Draw Things (libnnc)`.
+
 ## [0.5.16] - 2026-09-12
 
 ### Added

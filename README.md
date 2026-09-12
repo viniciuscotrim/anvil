@@ -3,17 +3,19 @@
 A single native macOS app that replaces three separate pieces of a local-LLM
 stack — **oMLX / OffGrid AI** (LLM serving & multi-model chat), **Draw Things**
 (image generation), and a standalone Flask image server — with one from-scratch
-app: download or import models, run text (MLX & GGUF via llama.cpp) + image (Flux)
+app: download or import models, run text (MLX & GGUF via llama.cpp) + image (Flux via mflux & Draw Things via libnnc)
 + voice models concurrently, and chat with durable auditable memory.
 No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.5.16 (Multi-Engine & Complete Local Serving)
+## Current release: 0.6.0 (Draw Things Integration & Complete Model Hub)
 
-This release delivers the unified architecture allowing full replacement of OffGrid AI:
-- **Multi-Engine Support (MLX + llama.cpp)**: Native GGUF loading and execution via Metal-accelerated `llama.cpp` alongside Apple Silicon native `MLX`. Automatic engine selection with manual override per model.
-- **Search Compatibility Badges**: Real-time compatibility classification in Hugging Face / catalog search showing green tags for compatible engines (`MLX`, `llama.cpp`, `mflux`) and red tags for incompatible formats.
+This release delivers the unified architecture allowing full replacement of Draw Things and OffGrid AI:
+- **Draw Things Official Catalog Search**: Dedicated 3rd search tab in Model Manager to discover and download official Draw Things community models (Flux.1 Schnell 8-bit/4-bit/3-bit, Flux.1 Dev, Generic SDXL, Realistic Vision SD 1.5).
+- **Draw Things Engine Integration (`InferenceEngine.drawThings`)**: Native support for `.ckpt` and `.nnc` quantized image models alongside `mflux`.
+- **Multi-Engine Support (MLX + llama.cpp + mflux + Draw Things)**: Native GGUF loading and execution via Metal-accelerated `llama.cpp` alongside Apple Silicon native `MLX`. Automatic engine selection with manual override per model.
+- **Search Compatibility Badges**: Real-time compatibility classification in Hugging Face / CivitAI / Draw Things search showing green tags for compatible engines (`MLX`, `llama.cpp`, `mflux`, `Draw Things`) and red tags for incompatible formats.
 - **Local OpenAI-Compatible Gateway (`127.0.0.1:8000`)**: Single entry point routing requests by `model` ID, with live SSE streaming proxy, connection retries, and readiness verification.
 - **Durable Auditable Memory Layer**:
   - Structured memory categorization: *Fact*, *Preference*, *Date*, *Number*, and *Impression*.
@@ -30,7 +32,7 @@ This release delivers the unified architecture allowing full replacement of OffG
   - Explicit generation phases (*Preparing*, *Thinking*, *Generating*, *Generating image*, *Stopped*).
   - Persona/Profile identity attribution on assistant messages and exportable Markdown logs.
 
-The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.5.16`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.6.0`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 

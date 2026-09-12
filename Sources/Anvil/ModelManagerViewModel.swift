@@ -2,16 +2,18 @@ import Foundation
 import AnvilCore
 
 /// One thing that can be downloaded — a Hugging Face repo or a CivitAI
-/// checkpoint — unified so a single queue/progress/pause-stop mechanism
-/// covers both sources: never simultaneous, whichever source it's from.
+/// checkpoint or a Draw Things package — unified so a single queue/progress/pause-stop mechanism
+/// covers all sources: never simultaneous, whichever source it's from.
 enum DownloadJob: Identifiable, Equatable {
     case huggingFace(HFModelSummary)
     case civitai(CivitAIModelSummary)
+    case drawThings(DrawThingsModelSummary)
 
     var id: String {
         switch self {
         case .huggingFace(let summary): return "hf:\(summary.modelID)"
         case .civitai(let summary): return "civitai:\(summary.id)"
+        case .drawThings(let summary): return "drawthings:\(summary.id)"
         }
     }
 
@@ -19,6 +21,7 @@ enum DownloadJob: Identifiable, Equatable {
         switch self {
         case .huggingFace(let summary): return summary.modelID
         case .civitai(let summary): return summary.name
+        case .drawThings(let summary): return summary.name
         }
     }
 }
@@ -28,6 +31,7 @@ enum DownloadJob: Identifiable, Equatable {
 enum ModelSearchSource: String, CaseIterable, Identifiable {
     case huggingFace = "Hugging Face"
     case civitai = "CivitAI"
+    case drawThings = "Draw Things"
     var id: String { rawValue }
 }
 
@@ -40,6 +44,8 @@ final class ModelManagerViewModel: ObservableObject {
     @Published var civitaiResults: [CivitAIModelSummary] = []
     @Published var civitaiTokenDraft: String = ""
     @Published private(set) var hasStoredCivitAIToken: Bool = false
+    @Published var drawThingsQuery: String = ""
+    @Published var drawThingsResults: [DrawThingsModelSummary] = DrawThingsCatalog.curatedModels
     @Published var registeredModels: [ModelEntry] = []
     @Published var statusMessage: String = ""
     @Published var isBusy: Bool = false
@@ -151,9 +157,11 @@ final class ModelManagerViewModel: ObservableObject {
     private let requirements: RequirementsManager
     private let catalog = HuggingFaceCatalog()
     private let civitaiCatalog = CivitAICatalog()
+    private let drawThingsCatalog = DrawThingsCatalog()
     private let registry: ModelRegistry
     private let downloader: ModelDownloader
     private let civitaiDownloader: CivitAIDownloader
+    private let drawThingsDownloader: DrawThingsDownloader
     private let importer: ModelImporter
     /// The in-flight download, if any — cancelling this is the whole
     /// mechanism behind both Pause and Stop; they differ only in
@@ -167,6 +175,7 @@ final class ModelManagerViewModel: ObservableObject {
         self.registry = registry
         self.downloader = ModelDownloader(registry: registry)
         self.civitaiDownloader = CivitAIDownloader(registry: registry)
+        self.drawThingsDownloader = DrawThingsDownloader(registry: registry)
         self.importer = ModelImporter(registry: registry)
         let settings = AppSettings.load()
         self.modelsRootPath = settings.modelsRootPath
@@ -195,6 +204,16 @@ final class ModelManagerViewModel: ObservableObject {
         errorMessage = nil
         do {
             civitaiResults = try await civitaiCatalog.search(query: trimmed)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func searchDrawThings() async {
+        let trimmed = drawThingsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        errorMessage = nil
+        do {
+            drawThingsResults = try await drawThingsCatalog.search(query: trimmed)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -342,6 +361,10 @@ final class ModelManagerViewModel: ObservableObject {
         enqueueOrStart(.civitai(summary))
     }
 
+    func download(_ summary: DrawThingsModelSummary) {
+        enqueueOrStart(.drawThings(summary))
+    }
+
     private func enqueueOrStart(_ job: DownloadJob) {
         guard downloadTask == nil else {
             guard job.id != activeDownloadID, !downloadQueue.contains(where: { $0.id == job.id }) else { return }
@@ -392,6 +415,11 @@ final class ModelManagerViewModel: ObservableObject {
                     _ = try await self.civitaiDownloader.download(summary) { fraction in
                         Task { @MainActor in self.downloadProgress = fraction }
                     }
+                case .drawThings(let summary):
+                    self.statusMessage = "Downloading Draw Things model \(summary.name)…"
+                    _ = try await self.drawThingsDownloader.download(summary) { fraction in
+                        Task { @MainActor in self.downloadProgress = fraction }
+                    }
                 }
                 await self.loadRegistry()
             } catch is CancellationError {
@@ -401,6 +429,8 @@ final class ModelManagerViewModel: ObservableObject {
                         try? FileManager.default.removeItem(at: ModelDownloader.destinationDirectory(forRepoID: summary.modelID))
                     case .civitai(let summary):
                         try? FileManager.default.removeItem(at: CivitAIDownloader.destinationDirectory(for: summary))
+                    case .drawThings(let summary):
+                        try? FileManager.default.removeItem(at: DrawThingsDownloader.destinationDirectory(for: summary))
                     }
                 }
                 // Paused (not deleted): nothing else to do — the partial

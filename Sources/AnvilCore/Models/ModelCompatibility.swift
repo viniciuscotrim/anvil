@@ -26,7 +26,14 @@ public enum ModelCompatibility: Sendable, Equatable {
         guard !paths.isEmpty else { return .unknown }
         let lowerPaths = paths.map { $0.lowercased() }
 
-        // 1. Check for Diffusers / mflux image pipelines
+        // 1. Check for Draw Things checkpoints / libnnc packages
+        let hasDrawThingsFile = lowerPaths.contains { $0.hasSuffix(".ckpt") || $0.hasSuffix(".nnc") }
+        let hasDrawThingsKeyword = lowerPaths.contains { $0.contains("drawthings") || $0.contains("libnnc") }
+        if hasDrawThingsFile || hasDrawThingsKeyword {
+            return .supported(.drawThings)
+        }
+
+        // 2. Check for Diffusers / mflux image pipelines
         if lowerPaths.contains("model_index.json") {
             return .supported(.mflux)
         }
@@ -36,7 +43,7 @@ public enum ModelCompatibility: Sendable, Equatable {
             return .supported(.mflux)
         }
 
-        // 2. Check for GGUF files (supported via llama.cpp)
+        // 3. Check for GGUF files (supported via llama.cpp)
         let hasGGUF = lowerPaths.contains { $0.hasSuffix(".gguf") }
         let hasConfigJSON = lowerPaths.contains("config.json")
         let hasSafetensors = lowerPaths.contains { $0.hasSuffix(".safetensors") }
@@ -45,7 +52,7 @@ public enum ModelCompatibility: Sendable, Equatable {
             return .supported(.llamaCpp)
         }
 
-        // 3. Check for MLX / Safetensors Causal LM
+        // 4. Check for MLX / Safetensors Causal LM
         if hasConfigJSON && hasSafetensors {
             return .supported(.mlx)
         }

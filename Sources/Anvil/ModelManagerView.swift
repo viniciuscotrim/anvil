@@ -24,26 +24,39 @@ struct ModelManagerView: View {
         VStack(alignment: .leading, spacing: 12) {
             sourcePicker
 
-            if viewModel.searchSource == .huggingFace {
+            switch viewModel.searchSource {
+            case .huggingFace:
                 searchBar
                 searchOptionsBar
                 hfTokenBar
-            } else {
+            case .civitai:
                 civitaiSearchBar
                 Text("Search and download work today — loading a downloaded CivitAI checkpoint doesn't yet (mflux needs a single-file loading path this hasn't been wired up to). It'll register and show up below either way.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 civitaiTokenBar
+            case .drawThings:
+                drawThingsSearchBar
+                Text("Official quantized community models from the Draw Things ecosystem (Flux, SDXL, SD 1.5 in 8-bit, 4-bit, 3-bit).")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             downloadsInProgressSection
 
-            if viewModel.searchSource == .huggingFace {
+            switch viewModel.searchSource {
+            case .huggingFace:
                 if !viewModel.searchResults.isEmpty {
                     searchResultsList
                 }
-            } else if !viewModel.civitaiResults.isEmpty {
-                civitaiResultsList
+            case .civitai:
+                if !viewModel.civitaiResults.isEmpty {
+                    civitaiResultsList
+                }
+            case .drawThings:
+                if !viewModel.drawThingsResults.isEmpty {
+                    drawThingsResultsList
+                }
             }
 
             modelsFolderBar
@@ -80,7 +93,7 @@ struct ModelManagerView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(maxWidth: 220)
+            .frame(maxWidth: 340)
 
             Button("Import Local Model…") { viewModel.isImportPanelPresented = true }
                 .disabled(viewModel.isBusy)
@@ -291,6 +304,57 @@ struct ModelManagerView: View {
                 }
                 Spacer()
                 resultDownloadButton(for: .civitai(summary), disabled: summary.primaryFile == nil) {
+                    viewModel.download(summary)
+                }
+            }
+        }
+        .frame(minHeight: 160, maxHeight: 220)
+    }
+
+    private var drawThingsSearchBar: some View {
+        HStack {
+            TextField("Search Draw Things official & community models…", text: Binding(
+                get: { viewModel.drawThingsQuery },
+                set: { viewModel.drawThingsQuery = $0 }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .onSubmit { Task { await viewModel.searchDrawThings() } }
+
+            Button("Search") { Task { await viewModel.searchDrawThings() } }
+                .disabled(viewModel.isBusy)
+        }
+    }
+
+    private var drawThingsResultsList: some View {
+        List(viewModel.drawThingsResults) { summary in
+            HStack {
+                VStack(alignment: .leading) {
+                    Text(summary.name)
+                        .font(.headline)
+                    HStack(spacing: 6) {
+                        if let baseModel = summary.baseModel {
+                            Text(baseModel)
+                        }
+                        if let quant = summary.quantization {
+                            Text("· \(quant)")
+                        }
+                        if let downloads = summary.downloads {
+                            Text("· \(downloads) downloads")
+                        }
+                        if let bytes = summary.sizeBytes {
+                            Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+                        }
+                        HStack(spacing: 3) {
+                            Circle().fill(Color.green).frame(width: 6, height: 6)
+                            Text("· Draw Things (libnnc)")
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer()
+                resultDownloadButton(for: .drawThings(summary)) {
                     viewModel.download(summary)
                 }
             }
@@ -733,6 +797,23 @@ struct ModelManagerView: View {
                 }
                 .labelsHidden()
                 Text("Default is auto-detected from files (GGUF uses llama.cpp, Safetensors uses MLX).")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if entry.kind == .image {
+                Divider()
+                Text("Inference Engine").font(.headline)
+                Picker("Engine", selection: Binding(
+                    get: { entry.engineOverride },
+                    set: { newEngine in
+                        Task { await viewModel.updateEngineOverride(for: entry.id, engine: newEngine) }
+                    }
+                )) {
+                    Text("Auto (\(entry.effectiveEngine.shortLabel))").tag(Optional<InferenceEngine>.none)
+                    Text("mflux (Flux Image)").tag(Optional(InferenceEngine.mflux))
+                    Text("Draw Things (libnnc)").tag(Optional(InferenceEngine.drawThings))
+                }
+                .labelsHidden()
+                Text("Default is auto-detected (Draw Things .ckpt uses libnnc, Diffusers uses mflux).")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

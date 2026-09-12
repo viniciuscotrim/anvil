@@ -35,16 +35,22 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
     /// Resolves the actual inference engine to use for this model.
     public var effectiveEngine: InferenceEngine {
         if let engineOverride { return engineOverride }
-        if kind == .image { return .mflux }
-        // Inspect local path to see if it's GGUF or Safetensors/MLX
         let url = URL(fileURLWithPath: localPath)
         let fm = FileManager.default
-        if let contents = try? fm.contentsOfDirectory(atPath: url.path) {
-            let lower = contents.map { $0.lowercased() }
-            if lower.contains(where: { $0.hasSuffix(".gguf") }) {
-                return .llamaCpp
+        let contents = (try? fm.contentsOfDirectory(atPath: url.path)) ?? []
+        let lower = contents.map { $0.lowercased() }
+
+        if kind == .image {
+            if lower.contains(where: { $0.hasSuffix(".ckpt") || $0.hasSuffix(".nnc") })
+                || localPath.lowercased().hasSuffix(".ckpt")
+                || localPath.lowercased().contains("drawthings") {
+                return .drawThings
             }
-        } else if localPath.lowercased().hasSuffix(".gguf") {
+            return .mflux
+        }
+
+        // Inspect local path to see if it's GGUF or Safetensors/MLX
+        if lower.contains(where: { $0.hasSuffix(".gguf") }) || localPath.lowercased().hasSuffix(".gguf") {
             return .llamaCpp
         }
         return .mlx

@@ -53,7 +53,7 @@ public actor LLMServer {
         let launcher = await NamedLauncher.shared.makeLauncher(displayName: displayName)
 
         switch engine {
-        case .mlx, .mflux:
+        case .mlx, .mflux, .drawThings:
             let script = RuntimePaths.venvDirectory.appendingPathComponent("bin/mlx_lm.server")
             guard FileManager.default.isExecutableFile(atPath: script.path) else {
                 throw ServingError.serverFailedToStart("mlx_lm.server isn't installed")
