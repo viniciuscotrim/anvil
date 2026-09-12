@@ -315,13 +315,16 @@ struct ModelManagerView: View {
                         if summary.compatibility == .incompatible {
                             Text("· raw checkpoint, likely won't load")
                                 .foregroundStyle(.orange)
+                        } else if summary.compatibility == .ggufOnly {
+                            Text("· GGUF only, can't load here")
+                                .foregroundStyle(.red)
                         }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
                 Spacer()
-                resultDownloadButton(for: .huggingFace(summary)) {
+                resultDownloadButton(for: .huggingFace(summary), disabled: summary.compatibility == .ggufOnly) {
                     viewModel.download(summary)
                 }
             }

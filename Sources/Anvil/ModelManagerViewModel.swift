@@ -107,7 +107,7 @@ final class ModelManagerViewModel: ObservableObject {
     /// it by.
     var filteredSearchResults: [HFModelSummary] {
         let filtered = searchResults.filter { summary in
-            if hideIncompatibleModels, summary.compatibility == .incompatible { return false }
+            if hideIncompatibleModels, summary.compatibility == .incompatible || summary.compatibility == .ggufOnly { return false }
             guard let sizeFilter else { return true }
             guard let bytes = summary.sizeBytes else { return false }
             return ModelSizeClass.classify(sizeBytes: bytes, ramBytes: ramBytes) == sizeFilter

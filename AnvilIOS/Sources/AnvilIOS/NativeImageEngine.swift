@@ -127,7 +127,14 @@ final class NativeImageEngine: ObservableObject {
                 }
             }
 
-            let loadConfiguration = LoadConfiguration(float16: true, quantize: false)
+            // 8-bit quantized (not just float16) — a real, reported
+            // crash: even fp16 SDXL Turbo (~7GB of weights) got this
+            // process jetsam-killed on a phone (confirmed via the
+            // device's own JetsamEvent report: reason "per-process-
+            // limit"). Quantizing roughly halves that again, the same
+            // kind of tradeoff Draw Things and other on-device diffusion
+            // apps make by default on a phone rather than a Mac.
+            let loadConfiguration = LoadConfiguration(float16: true, quantize: true)
             let newContainer = try ModelContainer<TextToImageGenerator>.createTextToImageGenerator(
                 hub: resolvedHub.hubApi, configuration: resolvedConfiguration, loadConfiguration: loadConfiguration)
             try await newContainer.perform { model in model.ensureLoaded() }

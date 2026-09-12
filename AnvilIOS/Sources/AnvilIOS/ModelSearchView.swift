@@ -141,6 +141,8 @@ struct ModelSearchView: View {
                         Text("· compatible").foregroundStyle(.green)
                     case .incompatible:
                         Text("· raw checkpoint, likely won't load").foregroundStyle(.orange)
+                    case .ggufOnly:
+                        Text("· GGUF only, can't load on-device").foregroundStyle(.red)
                     case .unknown:
                         EmptyView()
                     }
@@ -149,7 +151,9 @@ struct ModelSearchView: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            resultDownloadButton(for: .huggingFace(summary)) { viewModel.download(summary) }
+            resultDownloadButton(for: .huggingFace(summary), disabled: summary.compatibility == .ggufOnly) {
+                viewModel.download(summary)
+            }
         }
     }
 

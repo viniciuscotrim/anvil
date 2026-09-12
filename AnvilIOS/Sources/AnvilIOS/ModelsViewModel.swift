@@ -129,7 +129,7 @@ final class ModelsViewModel {
     /// with far less RAM than a Mac.
     var filteredSearchResults: [HFModelSummary] {
         let filtered = searchResults.filter { summary in
-            if compatibleOnlyHF, summary.compatibility == .incompatible { return false }
+            if compatibleOnlyHF, summary.compatibility == .incompatible || summary.compatibility == .ggufOnly { return false }
             return Self.fitsSizeFilter(summary.sizeBytes, maxSizeClass)
         }
         return ModelSizeClass.sortedByRunnability(filtered) { $0.sizeBytes }

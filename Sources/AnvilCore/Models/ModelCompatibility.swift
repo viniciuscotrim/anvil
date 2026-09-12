@@ -24,10 +24,20 @@ public enum ModelCompatibility: String, Sendable, Equatable {
     /// (ComfyUI, a CivitAI-style single-file loader, …), not something
     /// `mflux` can open as-is.
     case incompatible
+    /// Every real weight file in the repo is `.gguf` (llama.cpp's own
+    /// format) with no `.safetensors`/`config.json` alongside — a real,
+    /// reported case: a repo shaped exactly like this "downloaded" in a
+    /// few kilobytes (just its `.gitattributes`/`README.md`) because the
+    /// actual weight files aren't something either loader here can open
+    /// at all, not something either `mflux` (image) or `mlx_lm`/
+    /// `mlx-swift-lm` (text — both MLX-based, expecting Hugging Face's
+    /// own safetensors+config.json layout) reads directly; GGUF needs
+    /// converting to that shape first, a step this app doesn't do.
+    case ggufOnly
     /// Neither pattern matched clearly enough to say — a plain causal
     /// LM shape (`config.json` + flat safetensors, mlx_lm's own
-    /// territory), a GGUF-only repo, or something unusual. Not flagged
-    /// either way rather than guessed at.
+    /// territory) or something unusual. Not flagged either way rather
+    /// than guessed at.
     case unknown
 
     /// `paths` is a repo's file list — `HFModelSummary.siblings`, or a
@@ -46,6 +56,12 @@ public enum ModelCompatibility: String, Sendable, Equatable {
         }
 
         let hasConfigJSON = lowerPaths.contains("config.json")
+        let hasSafetensors = lowerPaths.contains { $0.hasSuffix(".safetensors") }
+        let hasGGUF = lowerPaths.contains { $0.hasSuffix(".gguf") }
+        if hasGGUF, !hasSafetensors, !hasConfigJSON {
+            return .ggufOnly
+        }
+
         let safetensorsCount = lowerPaths.filter { $0.hasSuffix(".safetensors") && !$0.contains("/") }.count
         // A handful of flat safetensors files with no config.json and
         // no pipeline subfolders at all — the exact shape that broke
