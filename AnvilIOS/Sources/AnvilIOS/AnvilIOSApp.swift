@@ -1,3 +1,4 @@
+import MLX
 import SwiftUI
 
 /// The iOS app's entry point. `AnvilCore`'s shared, cross-platform
@@ -29,6 +30,20 @@ struct AnvilIOSApp: App {
     @StateObject private var imageEngine: NativeImageEngine
 
     init() {
+        // Real, documented MLX guidance for iOS (mlx-swift's own
+        // "Running on iOS" article): left at its defaults, MLX's
+        // buffer-reuse cache and allocator can both grow well past what
+        // jetsam allows one process — confirmed directly against this
+        // device's own JetsamEvent reports (reason: "per-process-limit"),
+        // during image *generation* specifically, not just loading the
+        // weights. A small cache limit makes MLX release scratch buffers
+        // instead of hoarding them for reuse; a lower, explicit memory
+        // limit makes further allocation *wait* on in-flight work instead
+        // of piling up until the OS kills the whole process. Set once,
+        // globally, before either engine ever loads a model.
+        MLX.Memory.cacheLimit = 16 * 1024 * 1024
+        MLX.Memory.memoryLimit = 4_500_000_000
+
         let imageEngine = NativeImageEngine()
         _imageEngine = StateObject(wrappedValue: imageEngine)
         _chatEngine = StateObject(wrappedValue: NativeChatEngine(imageEngine: imageEngine))

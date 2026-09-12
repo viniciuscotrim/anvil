@@ -88,12 +88,18 @@ enum StableDiffusionModelLoader {
                     .tokenizerMerges2: "tokenizer_2/merges.txt",
                 ],
                 // A standard (non-"turbo") SDXL checkpoint's own usual
-                // defaults — real classifier-free guidance and enough
-                // steps to actually use it, at SDXL's native 1024².
-                // `sdxl-turbo` itself is still reached through the
+                // guidance/step count, but at 768² rather than SDXL's
+                // native 1024² — a real, confirmed crash: generating at
+                // 1024² OOM-killed this process on a phone (same
+                // JetsamEvent "per-process-limit" reason the load-time
+                // crash gave, this time during the UNet/VAE forward pass
+                // itself, not just holding the weights resident). 768² is
+                // roughly half the pixel count of 1024², which is
+                // roughly half the activation/decode memory at generation
+                // time. `sdxl-turbo` itself is still reached through the
                 // built-in preset, which keeps its own tuned (0 cfg, 2
-                // step, 512²) defaults.
-                defaultParameters: { EvaluateParameters(cfgWeight: 6.0, steps: 25, latentSize: [128, 128]) },
+                // step, 512²) defaults untouched.
+                defaultParameters: { EvaluateParameters(cfgWeight: 6.0, steps: 25, latentSize: [96, 96]) },
                 factory: { hub, sdConfiguration, loadConfiguration in
                     let sd = try StableDiffusionXL(
                         hub: hub, configuration: sdConfiguration, dType: loadConfiguration.dType)
