@@ -43,6 +43,7 @@ public struct HFRepoDownloader: Sendable {
         repoID: String,
         revision: String = "main",
         filePaths: [String],
+        destinationDir: URL? = nil,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> ModelEntry {
         let ignored = Set(ModelCompatibility.redundantRootLevelWeightFiles(in: filePaths))
@@ -51,7 +52,7 @@ public struct HFRepoDownloader: Sendable {
             throw ModelError.downloadFailed("This repo has no downloadable files.")
         }
 
-        let destination = Self.destinationDirectory(forRepoID: repoID)
+        let destination = destinationDir ?? Self.destinationDirectory(forRepoID: repoID)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
 
         let token = HFTokenStore.load()

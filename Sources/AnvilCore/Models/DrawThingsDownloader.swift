@@ -13,10 +13,19 @@ public struct DrawThingsDownloader: Sendable {
         self.hfDownloader = HFRepoDownloader(registry: registry)
     }
 
-    /// Destination folder for a Draw Things model download.
+    /// Destination folder for a Draw Things model download (separated per quantization variant).
     public static func destinationDirectory(for summary: DrawThingsModelSummary) -> URL {
-        AppSettings.load().effectiveModelsRoot
-            .appendingPathComponent("drawthings--\(summary.repoID.replacingOccurrences(of: "/", with: "--"))", isDirectory: true)
+        let sanitizedRepo = summary.repoID.replacingOccurrences(of: "/", with: "--")
+        let variantTag: String
+        if let fn = summary.filename, !fn.isEmpty {
+            variantTag = "-" + (fn as NSString).deletingPathExtension
+        } else if let quant = summary.quantization, !quant.isEmpty {
+            variantTag = "-" + quant.replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: "/", with: "-")
+        } else {
+            variantTag = ""
+        }
+        return AppSettings.load().effectiveModelsRoot
+            .appendingPathComponent("drawthings--\(sanitizedRepo)\(variantTag)", isDirectory: true)
     }
 
     @discardableResult
@@ -24,10 +33,13 @@ public struct DrawThingsDownloader: Sendable {
         _ summary: DrawThingsModelSummary,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> ModelEntry {
-        let files = summary.filePaths ?? ["model.ckpt", "model_index.json"]
+        let destinationDir = Self.destinationDirectory(for: summary)
+        let files = summary.filePaths ?? (summary.filename.map { [$0] } ?? ["model.ckpt"])
+
         let entry = try await hfDownloader.download(
             repoID: summary.repoID,
             filePaths: files,
+            destinationDir: destinationDir,
             onProgress: onProgress
         )
 

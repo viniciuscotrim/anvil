@@ -9,10 +9,11 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.6.4 (Draw Things Integration & Complete Model Hub)
+## Current release: 0.6.5 (Draw Things Granular Quantization & Extended Search)
 
-This release delivers the unified architecture allowing full replacement of Draw Things and OffGrid AI:
-- **Draw Things Official Catalog Search**: Dedicated 3rd search tab in Model Manager to discover and download official Draw Things community models (Flux.1 Schnell 8-bit/4-bit/3-bit, Flux.1 Dev, Generic SDXL, Realistic Vision SD 1.5).
+This release delivers granular quantization variants and broad repository discovery for Draw Things:
+- **Draw Things Quantization Variant Separation**: Each quantization variant (e.g. 8-bit, 4-bit, 3-bit, 2-bit, Q8_0, Q4_K_M) now appears as a distinct model with its specific file size (e.g. 4-bit at ~6.4 GB vs 8-bit at ~12.8 GB for Flux.1 Schnell), popularity metrics, and targeted single-file downloading.
+- **Broad Community Discovery**: Dynamic multi-keyword and author search across Hugging Face for all official `drawthingsai` and community models, expanding multi-file repos into per-variant selectable downloads.
 - **Draw Things Engine Integration (`InferenceEngine.drawThings`)**: Native support for `.ckpt` and `.nnc` quantized image models alongside `mflux`.
 - **Multi-Engine Support (MLX + llama.cpp + mflux + Draw Things)**: Native GGUF loading and execution via Metal-accelerated `llama.cpp` alongside Apple Silicon native `MLX`. Automatic engine selection with manual override per model.
 - **Search Compatibility Badges**: Real-time compatibility classification in Hugging Face / CivitAI / Draw Things search showing green tags for compatible engines (`MLX`, `llama.cpp`, `mflux`, `Draw Things`) and red tags for incompatible formats.
@@ -32,7 +33,7 @@ This release delivers the unified architecture allowing full replacement of Draw
   - Explicit generation phases (*Preparing*, *Thinking*, *Generating*, *Generating image*, *Stopped*).
   - Persona/Profile identity attribution on assistant messages and exportable Markdown logs.
 
-The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.6.4`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.6.5`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 

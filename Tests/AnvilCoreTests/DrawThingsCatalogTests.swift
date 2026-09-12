@@ -13,6 +13,22 @@ struct DrawThingsCatalogTests {
     }
 
     @Test
+    func fluxSchnellHasDistinctQuantizationVariantsWithIndividualSizes() {
+        let curated = DrawThingsCatalog.curatedModels
+        let fluxVariants = curated.filter { $0.repoID == "drawthingsai/FLUX.1-schnell" }
+        #expect(fluxVariants.count >= 4)
+        
+        let fourBit = fluxVariants.first { $0.quantization == "4-bit" }
+        let eightBit = fluxVariants.first { $0.quantization == "8-bit" }
+        #expect(fourBit != nil)
+        #expect(eightBit != nil)
+        #expect(fourBit?.sizeBytes == 6_400_000_000)
+        #expect(eightBit?.sizeBytes == 12_800_000_000)
+        #expect(fourBit?.filename == "flux_1_schnell_4bit.ckpt")
+        #expect(eightBit?.filename == "flux_1_schnell_8bit.ckpt")
+    }
+
+    @Test
     func emptySearchReturnsCuratedModels() async throws {
         let catalog = DrawThingsCatalog()
         let results = try await catalog.search(query: "")

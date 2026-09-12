@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.5] - 2026-09-12
+
+### Added
+- **Per-Quantization Model Variants in Draw Things**: FLUX.1 Schnell, FLUX.1 Dev, SDXL, and community repos now list each quantization (8-bit, 4-bit, 3-bit, 2-bit) separately with its exact file size and popularity.
+- **Single-File Targeted Downloading**: Downloading a Draw Things model now fetches only the chosen quantization file instead of entire repositories.
+- **Broad Multi-Query Search**: Searches official `drawthingsai` models and community checkpoints across Hugging Face matching user queries.
+
 ## [0.6.4] - 2026-09-12
 
 ### Added
