@@ -571,7 +571,20 @@ final class ChatViewModel: ObservableObject {
                 responderName: responderName
             ))
             let replyIndex = currentThread.messages.count - 1
-            let historyForRequest = Array(contextMessages.dropLast())
+            // `contextMessages` already ends with the user's own current
+            // message (`ChatContextBuilder.build` above ran before this
+            // assistant placeholder existed) — no `dropLast()` here.
+            // Confirmed for real against a running mlx_lm.server:
+            // dropping it produces an empty `messages` array on a
+            // thread's first turn, which the server rejects outright
+            // ("Cannot apply chat template to an empty conversation").
+            // A real, reproduced regression — this used to be correct
+            // back when `contextMessages` was read fresh from
+            // `currentThread.messages` *after* the placeholder append
+            // (dropping the empty placeholder itself), before
+            // `ChatContextBuilder` was introduced and this call site
+            // started receiving a pre-built snapshot instead.
+            let historyForRequest = contextMessages
             let stream = client.streamSend(
                 messages: historyForRequest,
                 baseURL: endpoint,

@@ -147,7 +147,14 @@ final class RemoteChatEngine: ObservableObject {
             threads.currentThread.messages.append(ChatMessage(
                 role: .assistant, content: "", modelDisplayName: modelDisplayName, responderName: responderName))
             let replyIndex = threads.currentThread.messages.count - 1
-            let historyForRequest = Array(contextMessages.dropLast())
+            // `contextMessages` already ends with the user's own current
+            // message (`ChatContextBuilder.build` was called before the
+            // assistant placeholder above existed) — no `dropLast()`
+            // here. Confirmed for real against a running mlx_lm.server:
+            // dropping it produces an empty `messages` array on a
+            // thread's first turn, which the server rejects outright
+            // ("Cannot apply chat template to an empty conversation").
+            let historyForRequest = contextMessages
             let stream = client.streamSend(
                 messages: historyForRequest, baseURL: baseURL, modelDisplayName: modelDisplayName,
                 settings: settings, tools: tools, systemPrompt: systemPrompt,
