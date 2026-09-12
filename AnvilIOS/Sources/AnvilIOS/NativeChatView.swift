@@ -20,11 +20,22 @@ struct NativeChatView: View {
     /// mid-conversation would mix its instructions with history that
     /// never saw them. Unload (starting fresh) to pick a different one.
     @State private var activeProfileName: String?
+    /// The user's own explicit pick, made before hitting Load — takes
+    /// priority over the model's bound default. `nil` means "haven't
+    /// touched the picker", which falls back to that model's default
+    /// profile (if any) the same way it always did; `.some(nil)` isn't
+    /// representable here, so an explicit "no profile" pick is tracked
+    /// separately via `manualProfileChoiceMade`.
+    @State private var selectedProfile: ChatProfile?
+    @State private var manualProfileChoiceMade = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 modelBar
+                if !engine.isLoaded && !engine.isLoading {
+                    profileBar
+                }
                 Divider()
 
                 if let errorMessage = engine.errorMessage {
@@ -60,7 +71,56 @@ struct NativeChatView: View {
                 inputBar
             }
             .navigationTitle("Chat (on-device)")
+            .task { await profilesViewModel.load() }
         }
+    }
+
+    /// Lets the user explicitly pick which profile shapes the
+    /// conversation before starting it, instead of only ever getting
+    /// whichever one is bound to the model as its default.
+    private var profileBar: some View {
+        HStack {
+            Text("Profile").font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Menu {
+                Button {
+                    manualProfileChoiceMade = false
+                    selectedProfile = nil
+                } label: {
+                    Label("Automatic (model default)", systemImage: "wand.and.stars")
+                }
+                Button {
+                    manualProfileChoiceMade = true
+                    selectedProfile = nil
+                } label: {
+                    Label("None", systemImage: "slash.circle")
+                }
+                if !profilesViewModel.profiles.isEmpty {
+                    Divider()
+                    ForEach(profilesViewModel.profiles) { profile in
+                        Button(profile.name) {
+                            manualProfileChoiceMade = true
+                            selectedProfile = profile
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(profileBarLabel)
+                    Image(systemName: "chevron.up.chevron.down")
+                }
+                .font(.caption)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
+    }
+
+    private var profileBarLabel: String {
+        if manualProfileChoiceMade {
+            return selectedProfile?.name ?? "None"
+        }
+        return "Automatic"
     }
 
     private var modelBar: some View {
@@ -128,12 +188,18 @@ struct NativeChatView: View {
         .padding(8)
     }
 
-    /// Looks up this model's bound default profile (if any) — the same
-    /// "loading this model applies its profile automatically" behavior
-    /// the Mac app's Chat gives — and loads with its prompt as the
-    /// session's system instructions.
+    /// Uses whichever profile the user explicitly picked in
+    /// `profileBar`; if they never touched it, falls back to this
+    /// model's bound default (if any) — the same "loading this model
+    /// applies its profile automatically" behavior the Mac app's Chat
+    /// gives.
     private func load() async {
-        let profile = await profilesViewModel.defaultProfile(forModelID: modelID)
+        let profile: ChatProfile?
+        if manualProfileChoiceMade {
+            profile = selectedProfile
+        } else {
+            profile = await profilesViewModel.defaultProfile(forModelID: modelID)
+        }
         activeProfileName = profile?.name
         await engine.load(modelID: modelID, instructions: profile?.prompt)
     }
