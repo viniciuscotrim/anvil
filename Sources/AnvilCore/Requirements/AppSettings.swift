@@ -2,11 +2,12 @@ import Foundation
 
 /// A tiny persisted key-value store for app-level preferences that
 /// don't belong on any one model/thread/profile — today just the
-/// optional custom folder for downloaded/imported models. One JSON
-/// file, same pattern as the other stores, but a plain struct (not an
-/// actor) since it's only ever touched from the main actor UI and
-/// writes are small and infrequent — callers just re-`load()`/`save()`
-/// around each change instead of holding a long-lived instance.
+/// optional custom folder for downloaded/imported models, plus the Code
+/// agent's own settings. One JSON file, same pattern as the other
+/// stores, but a plain struct (not an actor) since it's only ever
+/// touched from the main actor UI and writes are small and infrequent —
+/// callers just re-`load()`/`save()` around each change instead of
+/// holding a long-lived instance.
 public struct AppSettings: Codable, Sendable, Equatable {
     /// Where new downloads land and where "scan for existing models"
     /// looks — nil means the default, `RuntimePaths.modelsDirectory`.
@@ -20,9 +21,59 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// model, so at most one is ever the default.
     public var defaultChatImageModelID: String?
 
-    public init(modelsRootPath: String? = nil, defaultChatImageModelID: String? = nil) {
+    /// The Code tab's own working folder — nil until the user picks
+    /// one. `read_file`/`list_directory`/`write_file`/
+    /// `run_terminal_command` all confine themselves to this folder
+    /// unless `codeAgentAllowFullDiskAccess` is on.
+    public var codeAgentWorkingDirectoryPath: String?
+    /// Off by default — an explicit opt-in the user has to reach into
+    /// Settings for, not something a working-folder pick alone implies.
+    public var codeAgentAllowFullDiskAccess: Bool
+    public var codeAgentPermissionLevel: CodeAgentPermissionLevel
+    /// Off (empty) by default — the whole point of "a menu of features
+    /// you can turn on and off" is that nothing is granted until the
+    /// user opts in.
+    public var codeAgentEnabledFeatures: Set<CodeAgentFeature>
+
+    public init(
+        modelsRootPath: String? = nil,
+        defaultChatImageModelID: String? = nil,
+        codeAgentWorkingDirectoryPath: String? = nil,
+        codeAgentAllowFullDiskAccess: Bool = false,
+        codeAgentPermissionLevel: CodeAgentPermissionLevel = .manual,
+        codeAgentEnabledFeatures: Set<CodeAgentFeature> = []
+    ) {
         self.modelsRootPath = modelsRootPath
         self.defaultChatImageModelID = defaultChatImageModelID
+        self.codeAgentWorkingDirectoryPath = codeAgentWorkingDirectoryPath
+        self.codeAgentAllowFullDiskAccess = codeAgentAllowFullDiskAccess
+        self.codeAgentPermissionLevel = codeAgentPermissionLevel
+        self.codeAgentEnabledFeatures = codeAgentEnabledFeatures
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case modelsRootPath, defaultChatImageModelID
+        case codeAgentWorkingDirectoryPath, codeAgentAllowFullDiskAccess
+        case codeAgentPermissionLevel, codeAgentEnabledFeatures
+    }
+
+    // A settings file saved before a field existed just defaults it on
+    // next load — plain `Codable` synthesis would instead fail to
+    // decode the whole file the moment a *non-Optional* field like
+    // `codeAgentAllowFullDiskAccess` was added, and `load()`'s `try?`
+    // would silently fall back to a brand-new `AppSettings()`, wiping
+    // every setting that already existed (including `modelsRootPath`).
+    // Real risk the moment this type grows past its original two
+    // Optional-only fields, so it gets the same tolerant decoder every
+    // other persisted type here already has.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        modelsRootPath = try container.decodeIfPresent(String.self, forKey: .modelsRootPath)
+        defaultChatImageModelID = try container.decodeIfPresent(String.self, forKey: .defaultChatImageModelID)
+        codeAgentWorkingDirectoryPath = try container.decodeIfPresent(String.self, forKey: .codeAgentWorkingDirectoryPath)
+        codeAgentAllowFullDiskAccess = try container.decodeIfPresent(Bool.self, forKey: .codeAgentAllowFullDiskAccess) ?? false
+        codeAgentPermissionLevel = try container.decodeIfPresent(CodeAgentPermissionLevel.self, forKey: .codeAgentPermissionLevel) ?? .manual
+        codeAgentEnabledFeatures = try container.decodeIfPresent(Set<CodeAgentFeature>.self, forKey: .codeAgentEnabledFeatures) ?? []
     }
 
     private static var fileURL: URL {
@@ -55,5 +106,15 @@ public struct AppSettings: Codable, Sendable, Equatable {
             return URL(fileURLWithPath: modelsRootPath, isDirectory: true)
         }
         return RuntimePaths.modelsDirectory
+    }
+
+    /// The Code agent's working folder, resolved — nil if none is set or
+    /// it no longer exists on disk (e.g. moved/deleted outside the app).
+    public var codeAgentWorkingDirectory: URL? {
+        guard let codeAgentWorkingDirectoryPath else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: codeAgentWorkingDirectoryPath, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return URL(fileURLWithPath: codeAgentWorkingDirectoryPath, isDirectory: true)
     }
 }

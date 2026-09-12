@@ -26,12 +26,21 @@ final class AppState: ObservableObject {
     let profiles: ProfilesViewModel
     let promptToModel: PromptToModelViewModel
     let modelManager: ModelManagerViewModel
+    let codeAgent: CodeAgentViewModel
 
     init() {
         let requirements = RequirementsManager()
         let sessions = ModelSessionManager()
         let imageSessions = ImageSessionManager()
         let threadStore = ChatThreadStore()
+        // Its own file, separate from Chat's threads.json — a Code
+        // conversation (tool-call/result messages included) has no
+        // business showing up in Chat's own history list or vice versa.
+        let codeThreadStore = ChatThreadStore(
+            fileURL: RuntimePaths.applicationSupportDirectory
+                .appendingPathComponent("code", isDirectory: true)
+                .appendingPathComponent("threads.json")
+        )
         let generatedImageStore = GeneratedImageStore()
         let profileStore = ChatProfileStore()
         let modelRegistry = ModelRegistry()
@@ -61,5 +70,6 @@ final class AppState: ObservableObject {
             generatedImageStore: generatedImageStore
         )
         self.modelManager = ModelManagerViewModel(requirements: requirements)
+        self.codeAgent = CodeAgentViewModel(sessions: sessions, threadStore: codeThreadStore, requirements: requirements)
     }
 }

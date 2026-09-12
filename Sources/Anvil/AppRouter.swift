@@ -12,6 +12,7 @@ final class AppRouter: ObservableObject {
         case images
         case profiles
         case promptToModel
+        case code
     }
 
     @Published var screen: Screen = .bootstrap

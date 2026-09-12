@@ -20,6 +20,7 @@ struct AnvilApp: App {
                 .environmentObject(appState.profiles)
                 .environmentObject(appState.promptToModel)
                 .environmentObject(appState.modelManager)
+                .environmentObject(appState.codeAgent)
                 .onAppear {
                     appDelegate.sessions = appState.sessions
                     appDelegate.imageSessions = appState.imageSessions

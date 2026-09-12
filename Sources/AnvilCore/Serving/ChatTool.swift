@@ -58,6 +58,62 @@ public struct ChatTool: Sendable, Equatable {
         + "conversation). Never call it for an ordinary question or statement, even one about visual "
         + "or descriptive topics — just answer in text."
 
+    // MARK: - Code agent tools
+
+    /// Reading and listing never ask for confirmation, whatever the
+    /// user's permission level — only `writeFile`/`runTerminalCommand`
+    /// are gated (see `CodeAgentPermissionLevel`).
+    public static let readFile = ChatTool(
+        name: "read_file",
+        description: "Reads the contents of a text file as a string.",
+        parameters: [
+            Parameter(name: "path", description: "Path to the file, relative to the working folder (or absolute if full-disk access is on).")
+        ]
+    )
+
+    public static let listDirectory = ChatTool(
+        name: "list_directory",
+        description: "Lists the immediate contents (files and subdirectories, not recursive) of a directory.",
+        parameters: [
+            Parameter(name: "path", description: "Directory to list, relative to the working folder. Use \".\" for the working folder itself.")
+        ]
+    )
+
+    /// Depending on the user's permission level, a call to this may not
+    /// take effect immediately — see `CodeAgentPermissionLevel`. The
+    /// tool result always says plainly whether it actually ran.
+    public static let writeFile = ChatTool(
+        name: "write_file",
+        description: "Creates a file or overwrites it completely with new content. There is no partial/patch mode — always write the file's full intended contents.",
+        parameters: [
+            Parameter(name: "path", description: "Path to the file, relative to the working folder."),
+            Parameter(name: "content", description: "The complete text content the file should contain after this call.")
+        ]
+    )
+
+    /// Same permission-gating caveat as `writeFile`.
+    public static let runTerminalCommand = ChatTool(
+        name: "run_terminal_command",
+        description: "Runs one shell command in the working folder and returns its combined stdout/stderr output and exit code.",
+        parameters: [
+            Parameter(name: "command", description: "The exact shell command to run.")
+        ]
+    )
+
+    /// Prepended to the system prompt whenever any code-agent tool is
+    /// offered. `workingDirectoryDescription` names the actual folder
+    /// (or says none is set) so the model reasons about real paths
+    /// instead of a placeholder.
+    public static func codeAgentUsageDiscipline(workingDirectoryDescription: String) -> String {
+        "You are acting as a coding agent with real access to \(workingDirectoryDescription). "
+            + "Only call read_file/list_directory/write_file/run_terminal_command when actually useful "
+            + "for the task — don't explore files or run commands aimlessly. Prefer paths relative to "
+            + "the working folder. A write_file or run_terminal_command call may require the user's "
+            + "manual confirmation before it actually happens — its tool result always says plainly "
+            + "whether it ran or is only proposed; never assume a proposed-but-unconfirmed change has "
+            + "taken effect, and wait for the user before building further on it."
+    }
+
     /// JSON-Schema-shaped dictionary, ready for `JSONSerialization`.
     var wireRepresentation: [String: Any] {
         var properties: [String: Any] = [:]
