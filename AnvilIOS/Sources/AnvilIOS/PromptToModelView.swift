@@ -43,7 +43,7 @@ struct PromptToModelView: View {
                 }
 
                 if !viewModel.interpretedPrompt.isEmpty {
-                    Section("Tailored prompt (SDXL Turbo)") {
+                    Section("Tailored prompt (\(imageEngine.loadedModelDisplayName ?? "SDXL Turbo"))") {
                         TextEditor(text: $viewModel.interpretedPrompt)
                             .frame(minHeight: 100)
 

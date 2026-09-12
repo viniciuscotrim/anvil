@@ -1,20 +1,27 @@
 import SwiftUI
 import AnvilCore
 
-/// A real on-device image generation screen — SDXL Turbo via
-/// `NativeImageEngine`, no server, no network round trip once loaded.
+/// A real on-device image generation screen — the built-in `sdxl-turbo`
+/// preset, or any registered image model whose folder looks like a real
+/// diffusers pipeline (see `StableDiffusionModelLoader`), via
+/// `NativeImageEngine`. No server, no network round trip once loaded.
 /// Draw-Things-style like the Mac app's Images tab: a gallery grid of
 /// past lineages, and a detail canvas with a version-history strip once
 /// one is selected.
 struct NativeImageView: View {
     @EnvironmentObject private var engine: NativeImageEngine
+    @Environment(ModelsViewModel.self) private var modelsViewModel
     @State private var prompt = "a photo of an astronaut riding a horse on the moon"
+    @State private var isSettingsPresented = false
 
     private let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
+                modelBar
+                Divider()
+
                 canvas
 
                 if !engine.selectedLineageVersions.isEmpty {
@@ -38,16 +45,10 @@ struct NativeImageView: View {
                     .padding(.horizontal)
 
                 HStack {
-                    if engine.isLoaded {
-                        Button("Unload") { engine.unload() }
-                    } else {
-                        Button("Load SDXL Turbo") { Task { await engine.load() } }
-                            .disabled(engine.isLoading)
-                    }
-                    Spacer()
                     if engine.selectedImage != nil {
                         Button("New") { engine.deselectImage() }
                     }
+                    Spacer()
                     Button("Generate") { Task { await engine.generate(prompt: prompt) } }
                         .disabled(!engine.isLoaded || engine.isGenerating || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -61,7 +62,96 @@ struct NativeImageView: View {
             .padding(.bottom, 8)
             .dismissKeyboardOnTap()
             .navigationTitle("Images (on-device)")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { isSettingsPresented = true } label: { Image(systemName: "slider.horizontal.3") }
+                        .disabled(!engine.isLoaded)
+                }
+            }
+            .sheet(isPresented: $isSettingsPresented) { settingsSheet }
             .task { await engine.loadGallery() }
+        }
+    }
+
+    /// Which model is loaded (or a menu to load one) — the built-in
+    /// preset needs no download-first step, any registered image model
+    /// loads straight from its own already-downloaded files.
+    private var modelBar: some View {
+        HStack {
+            if let name = engine.loadedModelDisplayName {
+                Label(name, systemImage: "checkmark.circle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else if engine.isLoading {
+                if let progress = engine.loadProgress {
+                    ProgressView(value: progress).frame(width: 100)
+                    Text("\(Int(progress * 100))%").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ProgressView().controlSize(.small)
+                    Text("Loading…").font(.subheadline).foregroundStyle(.secondary)
+                }
+            } else {
+                Text("No model loaded").font(.subheadline).foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if engine.isLoaded {
+                Button("Unload") { engine.unload() }
+            } else if !engine.isLoading {
+                Menu {
+                    Button("SDXL Turbo (built-in)") { Task { await engine.load() } }
+                    let imageModels = modelsViewModel.registeredModels.filter { $0.kind == .image }
+                    if !imageModels.isEmpty {
+                        Divider()
+                        ForEach(imageModels) { entry in
+                            Button(entry.displayName) { Task { await engine.load(entry: entry) } }
+                        }
+                    }
+                } label: {
+                    Label("Load", systemImage: "chevron.down.circle")
+                }
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    private var settingsSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Size") {
+                    LabeledContent("Width") {
+                        TextField("", value: $engine.settings.width, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("Height") {
+                        TextField("", value: $engine.settings.height, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+                Section("Generation") {
+                    LabeledContent("Steps") {
+                        TextField("", value: $engine.settings.steps, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("Guidance") {
+                        TextField("", value: $engine.settings.guidance, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+            .navigationTitle("Generation Settings")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { isSettingsPresented = false }
+                }
+            }
+            .dismissKeyboardOnTap()
         }
     }
 

@@ -139,10 +139,18 @@ public actor ModelContainer<M> {
     }
 
     /// create a ``ModelContainer`` that supports ``TextToImageGenerator``
+    ///
+    /// `hub` defaults to a plain `HubApi()` (files fetched from Hugging
+    /// Face into its own default location), but can be pointed
+    /// elsewhere — Anvil's own `LocalImageModelHub` passes one whose
+    /// `localRepoLocation` resolves straight to an already-registered
+    /// model's real files instead, so loading one never re-downloads
+    /// anything.
     static public func createTextToImageGenerator(
+        hub: HubApi = HubApi(),
         configuration: StableDiffusionConfiguration, loadConfiguration: LoadConfiguration = .init()
     ) throws -> ModelContainer<TextToImageGenerator> {
-        if let model = try configuration.textToImageGenerator(configuration: loadConfiguration) {
+        if let model = try configuration.textToImageGenerator(hub: hub, configuration: loadConfiguration) {
             return .init(model: model)
         } else {
             throw ModelContainerError.unableToCreate(configuration.id, "TextToImageGenerator")

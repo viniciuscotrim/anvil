@@ -10,6 +10,7 @@ import AnvilCore
 struct ModelLibraryView: View {
     @Environment(ModelsViewModel.self) private var viewModel
     @EnvironmentObject private var chatEngine: NativeChatEngine
+    @EnvironmentObject private var imageEngine: NativeImageEngine
 
     var body: some View {
         NavigationStack {
@@ -62,26 +63,25 @@ struct ModelLibraryView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            if entry.kind == .text {
-                loadControl(for: entry)
-            } else {
-                Text("Only the built-in SDXL Turbo can be used for generation today.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            switch entry.kind {
+            case .text:
+                textLoadControl(for: entry)
+            case .image:
+                imageLoadControl(for: entry)
             }
         }
         .swipeActions {
-            if chatEngine.loadedModelID != entry.id {
+            if chatEngine.loadedModelID != entry.id, imageEngine.loadedModelID != entry.id {
                 Button("Delete", role: .destructive) { Task { await viewModel.delete(entry) } }
             }
         }
     }
 
     /// Load/Unload straight from the Library — the actual management
-    /// the source list/downloads alone didn't give: a downloaded text
-    /// model previously had no way to be loaded, freed, or even shown as
-    /// "in use" anywhere outside Chat's own picker.
-    private func loadControl(for entry: ModelEntry) -> some View {
+    /// the source list/downloads alone didn't give: a downloaded model
+    /// previously had no way to be loaded, freed, or even shown as
+    /// "in use" anywhere outside Chat's/Images' own pickers.
+    private func textLoadControl(for entry: ModelEntry) -> some View {
         HStack(spacing: 8) {
             if chatEngine.loadedModelID == entry.id {
                 Label("Loaded", systemImage: "checkmark.circle.fill")
@@ -105,6 +105,38 @@ struct ModelLibraryView: View {
                     .font(.caption)
                     .buttonStyle(.bordered)
                     .disabled(chatEngine.isLoading)
+            }
+        }
+    }
+
+    /// Same idea for image models — real now that `NativeImageEngine`
+    /// can load an arbitrary registered checkpoint (see
+    /// `StableDiffusionModelLoader`), not just its one built-in preset.
+    private func imageLoadControl(for entry: ModelEntry) -> some View {
+        HStack(spacing: 8) {
+            if imageEngine.loadedModelID == entry.id {
+                Label("Loaded", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                Spacer()
+                Button("Unload") { imageEngine.unload() }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+            } else if imageEngine.isLoading {
+                if let progress = imageEngine.loadProgress {
+                    ProgressView(value: progress).frame(width: 80)
+                    Text("\(Int(progress * 100))%").font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+                Spacer()
+            } else {
+                Spacer()
+                Button("Load") { Task { await imageEngine.load(entry: entry) } }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+                    .disabled(imageEngine.isLoading || imageEngine.isLoaded)
+                    .help(imageEngine.isLoaded ? "Unload the current image model first." : "")
             }
         }
     }

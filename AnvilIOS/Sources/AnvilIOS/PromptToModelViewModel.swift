@@ -7,13 +7,16 @@ import Foundation
 /// the on-device image engine.
 ///
 /// The Mac app's version fans one idea out into a row per *registered*
-/// image model (mflux, potentially several different weight sets, each
-/// its own local server). `NativeImageEngine` doesn't have an
-/// equivalent yet — it drives a single, fixed on-device preset (SDXL
-/// Turbo; see its own header comment) rather than loading arbitrary
-/// registered image models — so there's only one row to tailor a
-/// prompt for here. Multi-model fan-out can come back once
-/// `NativeImageEngine` supports switching between presets/models.
+/// image model — mflux runs each as its own separate process, so
+/// holding several loaded at once costs it nothing extra. `NativeImageEngine`
+/// can now load any registered image model too (see
+/// `StableDiffusionModelLoader`), not just its built-in SDXL Turbo
+/// preset, but still only one at a time in-process — several
+/// multi-gigabyte diffusion models resident simultaneously is a real
+/// way to get OOM-killed on a phone that a Mac's per-model subprocess
+/// isolation doesn't have to worry about. So there's still only one row
+/// here: whichever image model is currently loaded (in Images or via
+/// this screen's own Generate), not a fan-out across the whole registry.
 @Observable @MainActor
 final class PromptToModelViewModel {
     var intention: String = ""
