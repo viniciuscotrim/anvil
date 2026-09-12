@@ -106,6 +106,9 @@ public actor OpenAIGateway {
         var data = Data()
         var headerEnd: Range<Data.Index>?
         var contentLength = 0
+        var method = ""
+        var path = ""
+        var parsedHeaders: [String: String] = [:]
         while headerEnd == nil || data.count < (headerEnd!.upperBound + contentLength) {
             let chunk = try await receive(connection, maximumLength: 65_536)
             guard !chunk.isEmpty else { throw ServingError.requestFailed("empty gateway request") }
@@ -117,18 +120,23 @@ public actor OpenAIGateway {
                 guard let first = lines.first else { throw ServingError.requestFailed("invalid HTTP request") }
                 let parts = first.split(separator: " ")
                 guard parts.count >= 2 else { throw ServingError.requestFailed("invalid request line") }
-                let parsedHeaders = Dictionary(uniqueKeysWithValues: lines.dropFirst().compactMap { line -> (String, String)? in
+                parsedHeaders = Dictionary(uniqueKeysWithValues: lines.dropFirst().compactMap { line -> (String, String)? in
                     let pieces = line.split(separator: ":", maxSplits: 1).map(String.init)
                     guard pieces.count == 2 else { return nil }
                     return (pieces[0].lowercased(), pieces[1].trimmingCharacters(in: .whitespaces))
                 })
                 contentLength = Int(parsedHeaders["content-length"] ?? "0") ?? 0
-                let path = String(parts[1])
-                let bodyStart = range.upperBound
-                if data.count >= bodyStart + contentLength {
-                    return makeRequest(method: String(parts[0]), path: path, headers: parsedHeaders, body: data[bodyStart..<bodyStart + contentLength])
-                }
-                continue
+                method = String(parts[0])
+                path = String(parts[1])
+            }
+            if let headerEnd, data.count >= headerEnd.upperBound + contentLength {
+                let bodyStart = headerEnd.upperBound
+                return makeRequest(
+                    method: method,
+                    path: path,
+                    headers: parsedHeaders,
+                    body: data[bodyStart..<bodyStart + contentLength]
+                )
             }
             if data.count > 8 * 1024 * 1024 { throw ServingError.requestFailed("gateway request is too large") }
         }

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.5] - 2026-09-12
+
+### Fixed
+
+- Fixed `incomplete http request` when the gateway receives an HTTP header and body in separate TCP reads.
+
 ## [0.5.4] - 2026-09-12
 
 ### Fixed
