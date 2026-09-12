@@ -9,7 +9,7 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.6.0 (Draw Things Integration & Complete Model Hub)
+## Current release: 0.6.4 (Draw Things Integration & Complete Model Hub)
 
 This release delivers the unified architecture allowing full replacement of Draw Things and OffGrid AI:
 - **Draw Things Official Catalog Search**: Dedicated 3rd search tab in Model Manager to discover and download official Draw Things community models (Flux.1 Schnell 8-bit/4-bit/3-bit, Flux.1 Dev, Generic SDXL, Realistic Vision SD 1.5).
@@ -32,7 +32,7 @@ This release delivers the unified architecture allowing full replacement of Draw
   - Explicit generation phases (*Preparing*, *Thinking*, *Generating*, *Generating image*, *Stopped*).
   - Persona/Profile identity attribution on assistant messages and exportable Markdown logs.
 
-The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.6.0`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.6.4`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.6.0] - 2026-09-12
+## [0.6.4] - 2026-09-12
 
 ### Added
 - **Draw Things Official Catalog Search**: Integrated a dedicated 3rd search source in Model Manager to search and download official Draw Things community models (Flux 8-bit/4-bit/3-bit, SDXL, SD 1.5).
