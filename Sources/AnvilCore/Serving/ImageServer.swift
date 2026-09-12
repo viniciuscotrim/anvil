@@ -102,7 +102,11 @@ public actor ImageServer {
 
         process = proc
         launcherURL = launcher
-        baseURL = URL(string: "http://\(host):\(port)")!
+        // Always loopback — see `LLMServer.start`'s matching comment:
+        // `host` is the subprocess's own bind argument ("0.0.0.0" for
+        // Network access), which isn't a valid address for a client
+        // (this readiness probe included) to connect *to*.
+        baseURL = URL(string: "http://127.0.0.1:\(port)")!
 
         do {
             // Flux weights are large and slow to load (dequantizing on

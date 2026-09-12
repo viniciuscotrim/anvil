@@ -110,7 +110,13 @@ public final class ModelSessionManager: ObservableObject {
         }
 
         let resolvedPort = port ?? portForNewSession(access: access)
-        guard PortProbe.isFree(resolvedPort, host: access.host) else {
+        // A short bounded retry, not a single check — `updateServerSettings`
+        // (the Restart/Apply switch, e.g. Local-only → Network) unloads
+        // the old server then reloads immediately on the same port, and
+        // the OS can take a brief moment to actually release it after
+        // the old process exits. `waitUntilFree` resolves this in well
+        // under a second in the common case instead of failing outright.
+        guard await PortProbe.waitUntilFree(resolvedPort, host: access.host) else {
             residency.release(modelID: model.id)
             upsert(Session(
                 model: model, port: resolvedPort, access: access,

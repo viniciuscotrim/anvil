@@ -121,7 +121,20 @@ public actor LLMServer {
 
         process = proc
         launcherURL = launcher
-        baseURL = URL(string: "http://\(host):\(port)")!
+        // Always loopback here, regardless of `host` — `host` is the
+        // subprocess's own `--host` *bind* argument ("0.0.0.0" for
+        // Network access is correct there), but `0.0.0.0` is a wildcard
+        // bind address, not something a client can actually connect
+        // *to*. A server bound to 0.0.0.0 always answers on 127.0.0.1
+        // too, so this is the address every local caller (this
+        // readiness probe, the gateway's own registration below in
+        // `ModelSessionManager`) should use regardless of `access` —
+        // confirmed as the real, reproduced cause of "timed out waiting
+        // for the server to become ready" even when the server's own
+        // log clearly showed it listening: the readiness probe itself
+        // was trying to connect to `http://0.0.0.0:<port>`, which
+        // never answers.
+        baseURL = URL(string: "http://127.0.0.1:\(port)")!
 
         do {
             try await waitUntilReady(process: proc)

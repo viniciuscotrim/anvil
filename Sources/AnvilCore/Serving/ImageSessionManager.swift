@@ -96,7 +96,10 @@ public final class ImageSessionManager: ObservableObject {
         }
 
         let resolvedPort = port ?? portForNewSession(access: access, startingAt: 8200)
-        guard PortProbe.isFree(resolvedPort, host: access.host) else {
+        // Bounded retry, not a single check — see the matching comment
+        // in `ModelSessionManager.load` for why (the Local→Network
+        // restart race).
+        guard await PortProbe.waitUntilFree(resolvedPort, host: access.host) else {
             residency.release(modelID: model.id)
             upsert(Session(
                 model: model, port: resolvedPort, access: access,
