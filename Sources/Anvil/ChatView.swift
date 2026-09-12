@@ -258,6 +258,36 @@ struct ChatView: View {
             .padding(10)
             .background(message.role == .user ? Color.accentColor.opacity(0.15) : Color.gray.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 10))
+            .contextMenu {
+                Button {
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.setString(message.content, forType: .string)
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+                if message.role == .user {
+                    Button {
+                        guard !chat.isSending else { return }
+                        Task {
+                            guard let content = await chat.beginEditingMessage(message) else { return }
+                            chat.inputText = content
+                        }
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    .disabled(chat.isSending)
+                }
+                Button(role: .destructive) {
+                    guard !chat.isSending else { return }
+                    Task { await chat.deleteMessage(message) }
+                } label: {
+                    Label(
+                        message.id == chat.currentThread.messages.last?.id ? "Delete" : "Delete (and everything after)",
+                        systemImage: "trash")
+                }
+                .disabled(chat.isSending)
+            }
             if message.role != .user { Spacer(minLength: 40) }
         }
     }

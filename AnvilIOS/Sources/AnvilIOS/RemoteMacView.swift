@@ -20,9 +20,17 @@ struct RemoteMacView: View {
     @StateObject private var imagesModel = RemoteMacViewModel()
     @StateObject private var connectionsModel = RemoteConnectionsViewModel()
     @State private var isManagingConnections = false
+    @State private var isManagingModels = false
 
     private var selectedConnection: RemoteMacConnection? {
         connectionsModel.imageConnections.first { $0.id == imagesModel.selectedImageConnectionID }
+    }
+
+    /// Any known Mac's IP — model management talks to `AnvilSyncServer`
+    /// on its own fixed port, independent of which per-model port a
+    /// saved/discovered connection happens to use.
+    private var anyKnownMacHost: String? {
+        connectionsModel.connections.first?.host ?? connectionsModel.discoveredModels.first?.host
     }
 
     var body: some View {
@@ -37,6 +45,12 @@ struct RemoteMacView: View {
             .navigationTitle("Mac")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
+                    Button { isManagingModels = true } label: {
+                        Image(systemName: "cpu")
+                    }
+                    .disabled(anyKnownMacHost == nil)
+                }
+                ToolbarItem(placement: .primaryAction) {
                     Button { isManagingConnections = true } label: {
                         ZStack(alignment: .topTrailing) {
                             Image(systemName: "network")
@@ -48,6 +62,11 @@ struct RemoteMacView: View {
                 }
             }
             .sheet(isPresented: $isManagingConnections) { connectionsSheet }
+            .sheet(isPresented: $isManagingModels) {
+                if let host = anyKnownMacHost {
+                    RemoteModelsView(host: host)
+                }
+            }
             .task {
                 connectionsModel.load()
                 if imagesModel.selectedImageConnectionID == nil {

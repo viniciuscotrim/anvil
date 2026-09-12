@@ -46,6 +46,14 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
     /// `ChatThread.originDeviceName`'s doc comment for the same purpose
     /// and contract.
     public var originDeviceName: String?
+    /// Which `ChatMessage` this memory was created from, when it was
+    /// created via "Suggest from thread" (tied to the last message in
+    /// the thread at accept-time) — nil for a memory added directly via
+    /// the "Remember" field, which isn't tied to any one message. Lets
+    /// deleting/editing a message cascade to memories that only exist
+    /// because of it and whatever came after, instead of leaving orphaned
+    /// "facts" behind that trace back to a question that no longer exists.
+    public var createdFromMessageID: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -56,7 +64,8 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         profileID: UUID? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        originDeviceName: String? = nil
+        originDeviceName: String? = nil,
+        createdFromMessageID: UUID? = nil
     ) {
         self.id = id
         self.content = content
@@ -67,10 +76,11 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.originDeviceName = originDeviceName
+        self.createdFromMessageID = createdFromMessageID
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, content, kind, source, confidence, profileID, createdAt, updatedAt, originDeviceName
+        case id, content, kind, source, confidence, profileID, createdAt, updatedAt, originDeviceName, createdFromMessageID
     }
 
     public init(from decoder: Decoder) throws {
@@ -84,6 +94,7 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         originDeviceName = try container.decodeIfPresent(String.self, forKey: .originDeviceName)
+        createdFromMessageID = try container.decodeIfPresent(UUID.self, forKey: .createdFromMessageID)
     }
 }
 

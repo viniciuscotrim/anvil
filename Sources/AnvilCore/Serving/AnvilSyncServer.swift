@@ -21,6 +21,17 @@ import Network
 /// thread/profile/memory read or written here is the exact same one the
 /// Mac app's own Chat/Profiles/Memory tabs already show.
 ///
+/// Also the control surface for remote model management: which models
+/// are registered, which are loaded, and loading/unloading/reconfiguring
+/// one — all through the exact same shared `ModelSessionManager`/
+/// `ImageSessionManager` instances the Mac app's own Models tab already
+/// uses, never a separate/parallel set of sessions the Mac's own UI
+/// wouldn't see. Changing a loaded model's access from Network to Local
+/// here does exactly what doing it from the Mac's own gear-icon sheet
+/// does — the server actually rebinds to loopback-only — so a phone
+/// connected to it over the network genuinely loses that connection,
+/// not just a UI label change.
+///
 /// Routes (JSON in/out, the same `JSONEncoder.anvil`/`JSONDecoder.anvil`
 /// the stores already use for persistence):
 /// ```
@@ -33,6 +44,11 @@ import Network
 /// GET    /v1/anvil/memories         -> [ChatMemory]
 /// PUT    /v1/anvil/memories         <- ChatMemory   (upsert one)
 /// DELETE /v1/anvil/memories/{id}
+/// GET    /v1/anvil/models           -> [ModelEntry]           (every registered model)
+/// GET    /v1/anvil/sessions         -> [ModelSessionWire]      (every currently loaded one)
+/// POST   /v1/anvil/sessions/load    <- {modelID, access, port?}
+/// POST   /v1/anvil/sessions/unload  <- {modelID}
+/// PUT    /v1/anvil/sessions/settings <- {modelID, access, port} (reload under new access/port)
 /// ```
 /// Last-write-wins on conflicting edits, matching the stores' own
 /// `upsert` semantics already — no new merge/CRDT logic, an
@@ -44,17 +60,33 @@ public actor AnvilSyncServer {
     private let threadStore: ChatThreadStore
     private let profileStore: ChatProfileStore
     private let memoryStore: ChatMemoryStore
+    private let modelRegistry: ModelRegistry?
+    private let sessions: ModelSessionManager?
+    private let imageSessions: ImageSessionManager?
+    private let requirements: RequirementsManager?
     private var listener: NWListener?
     private var connections: [NWConnection] = []
 
+    /// `modelRegistry`/`sessions`/`imageSessions`/`requirements` are the
+    /// app's own shared instances (from `AppState`) — nil only makes the
+    /// model-management routes answer 404 instead of crashing; the
+    /// thread/profile/memory routes above work regardless, unaffected.
     public init(
         threadStore: ChatThreadStore = ChatThreadStore(),
         profileStore: ChatProfileStore = ChatProfileStore(),
-        memoryStore: ChatMemoryStore = ChatMemoryStore()
+        memoryStore: ChatMemoryStore = ChatMemoryStore(),
+        modelRegistry: ModelRegistry? = nil,
+        sessions: ModelSessionManager? = nil,
+        imageSessions: ImageSessionManager? = nil,
+        requirements: RequirementsManager? = nil
     ) {
         self.threadStore = threadStore
         self.profileStore = profileStore
         self.memoryStore = memoryStore
+        self.modelRegistry = modelRegistry
+        self.sessions = sessions
+        self.imageSessions = imageSessions
+        self.requirements = requirements
     }
 
     /// `access` genuinely restricts the bind address (unlike a bare
@@ -165,9 +197,102 @@ public actor AnvilSyncServer {
             try await memoryStore.delete(id: id)
             return RouteResponse(status: 204, body: nil)
 
+        case ("GET", "models", nil):
+            guard let modelRegistry else { return RouteResponse(status: 404, body: nil) }
+            return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await modelRegistry.all()))
+
+        case ("GET", "sessions", nil):
+            return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await allSessionWires()))
+
+        case ("POST", "sessions", .some("load")):
+            return try await handleLoad(request.body)
+
+        case ("POST", "sessions", .some("unload")):
+            return try await handleUnload(request.body)
+
+        case ("PUT", "sessions", .some("settings")):
+            return try await handleUpdateSettings(request.body)
+
         default:
             return RouteResponse(status: 404, body: try JSONEncoder.anvil.encode(["error": "not found"]))
         }
+    }
+
+    // MARK: - Model management
+
+    private struct LoadRequest: Decodable { let modelID: String; let access: ServerAccess; let port: Int? }
+    private struct UnloadRequest: Decodable { let modelID: String }
+    private struct SettingsRequest: Decodable { let modelID: String; let access: ServerAccess; let port: Int }
+
+    private func allSessionWires() async -> [ModelSessionWire] {
+        var wires: [ModelSessionWire] = []
+        if let sessions {
+            for session in await sessions.sessions {
+                wires.append(Self.wire(id: session.id, name: session.model.displayName, kind: .text, port: session.port, access: session.access, status: session.status))
+            }
+        }
+        if let imageSessions {
+            for session in await imageSessions.sessions {
+                wires.append(Self.wire(id: session.id, name: session.model.displayName, kind: .image, port: session.port, access: session.access, status: session.status))
+            }
+        }
+        return wires
+    }
+
+    private static func wire(id: String, name: String, kind: ModelKind, port: Int, access: ServerAccess, status: ModelSessionManager.Status) -> ModelSessionWire {
+        switch status {
+        case .loading: return ModelSessionWire(modelID: id, displayName: name, kind: kind, port: port, access: access, statusLabel: "loading", statusDetail: nil)
+        case .ready: return ModelSessionWire(modelID: id, displayName: name, kind: kind, port: port, access: access, statusLabel: "ready", statusDetail: nil)
+        case .failed(let reason): return ModelSessionWire(modelID: id, displayName: name, kind: kind, port: port, access: access, statusLabel: "failed", statusDetail: reason)
+        }
+    }
+
+    private static func wire(id: String, name: String, kind: ModelKind, port: Int, access: ServerAccess, status: ImageSessionManager.Status) -> ModelSessionWire {
+        switch status {
+        case .loading: return ModelSessionWire(modelID: id, displayName: name, kind: kind, port: port, access: access, statusLabel: "loading", statusDetail: nil)
+        case .ready: return ModelSessionWire(modelID: id, displayName: name, kind: kind, port: port, access: access, statusLabel: "ready", statusDetail: nil)
+        case .failed(let reason): return ModelSessionWire(modelID: id, displayName: name, kind: kind, port: port, access: access, statusLabel: "failed", statusDetail: reason)
+        }
+    }
+
+    private func handleLoad(_ body: Data) async throws -> RouteResponse {
+        guard let modelRegistry, let sessions, let imageSessions, let requirements else {
+            return RouteResponse(status: 404, body: nil)
+        }
+        let payload = try JSONDecoder().decode(LoadRequest.self, from: body)
+        guard let entry = await modelRegistry.all().first(where: { $0.id == payload.modelID }) else {
+            return RouteResponse(status: 404, body: try JSONEncoder.anvil.encode(["error": "no such registered model"]))
+        }
+        let ok: Bool
+        switch entry.kind {
+        case .text:
+            ok = await sessions.load(entry, requirements: requirements, access: payload.access, port: payload.port)
+        case .image:
+            ok = await imageSessions.load(entry, requirements: requirements, access: payload.access, port: payload.port)
+        }
+        return RouteResponse(status: ok ? 200 : 502, body: try JSONEncoder.anvil.encode(await allSessionWires()))
+    }
+
+    private func handleUnload(_ body: Data) async throws -> RouteResponse {
+        guard let sessions, let imageSessions else { return RouteResponse(status: 404, body: nil) }
+        let payload = try JSONDecoder().decode(UnloadRequest.self, from: body)
+        await sessions.unload(modelID: payload.modelID)
+        await imageSessions.unload(modelID: payload.modelID)
+        return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await allSessionWires()))
+    }
+
+    private func handleUpdateSettings(_ body: Data) async throws -> RouteResponse {
+        guard let sessions, let imageSessions, let requirements else { return RouteResponse(status: 404, body: nil) }
+        let payload = try JSONDecoder().decode(SettingsRequest.self, from: body)
+        let ok: Bool
+        if await sessions.session(for: payload.modelID) != nil {
+            ok = await sessions.updateServerSettings(modelID: payload.modelID, requirements: requirements, access: payload.access, port: payload.port)
+        } else if await imageSessions.session(for: payload.modelID) != nil {
+            ok = await imageSessions.updateServerSettings(modelID: payload.modelID, requirements: requirements, access: payload.access, port: payload.port)
+        } else {
+            return RouteResponse(status: 404, body: try JSONEncoder.anvil.encode(["error": "that model isn't loaded"]))
+        }
+        return RouteResponse(status: ok ? 200 : 502, body: try JSONEncoder.anvil.encode(await allSessionWires()))
     }
 
     // MARK: - Minimal HTTP over NWConnection

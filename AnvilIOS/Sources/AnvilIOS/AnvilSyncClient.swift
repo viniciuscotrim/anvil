@@ -67,6 +67,49 @@ struct AnvilSyncClient {
         try await delete(host: host, path: "memories/\(id.uuidString)")
     }
 
+    // MARK: - Model management
+
+    /// Every model registered on the Mac (`ModelRegistry`) — downloaded
+    /// or imported there, whether currently loaded or not.
+    func models(host: String) async throws -> [ModelEntry] {
+        try await get([ModelEntry].self, host: host, path: "models")
+    }
+
+    /// Every model actually loaded on the Mac right now, text and image
+    /// together — the same live state the Mac's own Models tab shows.
+    func sessions(host: String) async throws -> [ModelSessionWire] {
+        try await get([ModelSessionWire].self, host: host, path: "sessions")
+    }
+
+    private struct LoadBody: Encodable { let modelID: String; let access: ServerAccess; let port: Int? }
+    private struct UnloadBody: Encodable { let modelID: String }
+    private struct SettingsBody: Encodable { let modelID: String; let access: ServerAccess; let port: Int }
+
+    /// Loads a registered model on the Mac — returns the Mac's full,
+    /// current session list afterward (not just this one), so a caller
+    /// can refresh its whole view from one response.
+    @discardableResult
+    func loadModel(modelID: String, access: ServerAccess, port: Int? = nil, host: String) async throws -> [ModelSessionWire] {
+        try await post(LoadBody(modelID: modelID, access: access, port: port), path: "sessions/load", host: host)
+    }
+
+    @discardableResult
+    func unloadModel(modelID: String, host: String) async throws -> [ModelSessionWire] {
+        try await post(UnloadBody(modelID: modelID), path: "sessions/unload", host: host)
+    }
+
+    /// Reloads an already-loaded model under new Server Settings
+    /// (access/port) on the Mac — the same "stop, then start again with
+    /// the new settings" the Mac's own gear-icon sheet does. Switching a
+    /// Network model to Local-only here means this exact request is the
+    /// last one that will ever reach it at that address: the response
+    /// itself still arrives (the old connection was already open), but
+    /// nothing new will connect afterward.
+    @discardableResult
+    func updateSessionSettings(modelID: String, access: ServerAccess, port: Int, host: String) async throws -> [ModelSessionWire] {
+        try await put(SettingsBody(modelID: modelID, access: access, port: port), returning: [ModelSessionWire].self, host: host, path: "sessions/settings")
+    }
+
     // MARK: - Plumbing
 
     private func get<Response: Decodable>(_ type: Response.Type, host: String, path: String) async throws -> Response {
@@ -88,6 +131,21 @@ struct AnvilSyncClient {
         request.httpMethod = "PUT"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder.anvil.encode(body)
+        let (data, response) = try await session.data(for: request)
+        try Self.checkStatus(response)
+        return try JSONDecoder.anvil.decode(Response.self, from: data)
+    }
+
+    private func post<Body: Encodable, Response: Decodable>(
+        _ body: Body, path: String, host: String
+    ) async throws -> Response {
+        guard let url = Self.baseURL(host: host)?.appendingPathComponent("v1/anvil/\(path)") else {
+            throw AnvilSyncClientError.invalidHost
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await session.data(for: request)
         try Self.checkStatus(response)
         return try JSONDecoder.anvil.decode(Response.self, from: data)

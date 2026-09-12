@@ -74,7 +74,7 @@ final class ChatViewModel: ObservableObject {
     private let requirements: RequirementsManager
     private let client = ChatClient()
     private let imageClient = ImageClient()
-    private let syncServer = AnvilSyncServer()
+    private let syncServer: AnvilSyncServer
     private var threadBeforeTemporaryMode: ChatThread?
     private var temporaryThreads: [UUID: ChatThread] = [:]
     /// `.task { loadInitialState() }` on `ChatView` reruns every time the
@@ -121,6 +121,8 @@ final class ChatViewModel: ObservableObject {
         self.recentMessageCount = max(2, appSettings.chatRecentMessageCount)
         self.isMacSyncEnabled = appSettings.isMacSyncEnabled
         self.macSyncAccess = appSettings.macSyncAccess
+        self.syncServer = AnvilSyncServer(
+            modelRegistry: modelRegistry, sessions: sessions, imageSessions: imageSessions, requirements: requirements)
     }
 
     // MARK: - iPhone sync
@@ -248,7 +250,8 @@ final class ChatViewModel: ObservableObject {
         kind: ChatMemoryKind = .fact,
         source: ChatMemorySource = .explicit,
         confidence: Double? = nil,
-        profileID: UUID? = nil
+        profileID: UUID? = nil,
+        createdFromMessageID: UUID? = nil
     ) async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -258,7 +261,8 @@ final class ChatViewModel: ObservableObject {
             source: source,
             confidence: confidence,
             profileID: profileID,
-            originDeviceName: DeviceIdentity.currentName
+            originDeviceName: DeviceIdentity.currentName,
+            createdFromMessageID: createdFromMessageID
         ))
         memories = await memoryStore.all()
     }
@@ -327,9 +331,47 @@ final class ChatViewModel: ObservableObject {
             kind: suggestion.kind,
             source: .inferred,
             confidence: suggestion.confidence,
-            profileID: currentThread.profileID
+            profileID: currentThread.profileID,
+            createdFromMessageID: currentThread.messages.last?.id
         )
         memorySuggestions.removeAll { $0.id == suggestion.id }
+    }
+
+    // MARK: - Editing/deleting a sent message
+
+    /// Deletes `message` and every message that came after it — see
+    /// iOS's `ChatThreadsViewModel.deleteMessage`'s matching doc comment
+    /// for why (a conversation only makes sense as a straight line).
+    /// Also deletes any memory that traces back (`createdFromMessageID`)
+    /// to one of the removed messages.
+    func deleteMessage(_ message: ChatMessage) async {
+        guard let index = currentThread.messages.firstIndex(where: { $0.id == message.id }) else { return }
+        await truncateThread(from: index)
+    }
+
+    /// Same truncation as `deleteMessage`, returning the removed
+    /// message's content so the caller can drop it back into the
+    /// composer — "editing" here means resending it in its place.
+    func beginEditingMessage(_ message: ChatMessage) async -> String? {
+        guard let index = currentThread.messages.firstIndex(where: { $0.id == message.id }) else { return nil }
+        let content = message.content
+        await truncateThread(from: index)
+        return content
+    }
+
+    private func truncateThread(from index: Int) async {
+        let removedIDs = Set(currentThread.messages[index...].map(\.id))
+        currentThread.messages.removeSubrange(index...)
+        let orphaned = memories.filter { memory in
+            guard let sourceID = memory.createdFromMessageID else { return false }
+            return removedIDs.contains(sourceID)
+        }
+        for memory in orphaned {
+            await deleteMemory(memory)
+        }
+        if !isTemporaryModeActive {
+            persistCurrentThread()
+        }
     }
 
     func dismissMemorySuggestion(_ suggestion: ChatMemorySuggestion) {

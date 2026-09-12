@@ -184,13 +184,14 @@ final class ChatThreadsViewModel {
         kind: ChatMemoryKind = .fact,
         source: ChatMemorySource = .explicit,
         confidence: Double? = nil,
-        profileID: UUID? = nil
+        profileID: UUID? = nil,
+        createdFromMessageID: UUID? = nil
     ) async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let memory = ChatMemory(
             content: trimmed, kind: kind, source: source, confidence: confidence, profileID: profileID,
-            originDeviceName: DeviceIdentity.currentName)
+            originDeviceName: DeviceIdentity.currentName, createdFromMessageID: createdFromMessageID)
         _ = try? await memoryStore.upsert(memory)
         memories = await memoryStore.all()
         await pushMemoryIfMacActive(memory)
@@ -261,8 +262,50 @@ final class ChatThreadsViewModel {
     func acceptMemorySuggestion(_ suggestion: ChatMemorySuggestion) async {
         await addMemory(
             suggestion.content, kind: suggestion.kind, source: .inferred,
-            confidence: suggestion.confidence, profileID: currentThread.profileID)
+            confidence: suggestion.confidence, profileID: currentThread.profileID,
+            createdFromMessageID: currentThread.messages.last?.id)
         memorySuggestions.removeAll { $0.id == suggestion.id }
+    }
+
+    // MARK: - Editing/deleting a sent message
+
+    /// Deletes `message` and every message that came after it in
+    /// `currentThread` — an in-progress conversation only makes sense
+    /// as a straight line, so removing something from the middle can't
+    /// leave a dangling reply that was actually about the thing just
+    /// removed. Also deletes any memory that traces back
+    /// (`createdFromMessageID`) to one of the removed messages, so
+    /// deleting the question that led to a "remembered" fact doesn't
+    /// leave that fact behind with nothing to justify it.
+    func deleteMessage(_ message: ChatMessage) async {
+        guard let index = currentThread.messages.firstIndex(where: { $0.id == message.id }) else { return }
+        await truncate(from: index)
+    }
+
+    /// Same truncation as `deleteMessage`, but returns the removed
+    /// message's own content first so the caller can drop it back into
+    /// the composer — "editing" a sent message here means resending it
+    /// in its place, reusing the exact same send path a brand-new
+    /// message already goes through rather than a separate in-place
+    /// regenerate mechanism.
+    func beginEditingMessage(_ message: ChatMessage) async -> String? {
+        guard let index = currentThread.messages.firstIndex(where: { $0.id == message.id }) else { return nil }
+        let content = message.content
+        await truncate(from: index)
+        return content
+    }
+
+    private func truncate(from index: Int) async {
+        let removedIDs = Set(currentThread.messages[index...].map(\.id))
+        currentThread.messages.removeSubrange(index...)
+        let orphaned = memories.filter { memory in
+            guard let sourceID = memory.createdFromMessageID else { return false }
+            return removedIDs.contains(sourceID)
+        }
+        for memory in orphaned {
+            await deleteMemory(memory)
+        }
+        await persistCurrentThread()
     }
 
     func dismissMemorySuggestion(_ suggestion: ChatMemorySuggestion) {

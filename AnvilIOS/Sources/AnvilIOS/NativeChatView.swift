@@ -550,6 +550,13 @@ struct NativeChatView: View {
             }
             .navigationTitle("Mac Connections")
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if case .mac(let connection) = source {
+                        NavigationLink("Models") {
+                            RemoteModelsView(host: connection.host)
+                        }
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { isConnectionsSheetPresented = false }
                 }
@@ -584,11 +591,41 @@ struct NativeChatView: View {
                 }
                 if !message.content.isEmpty {
                     Text(message.content)
+                        .textSelection(.enabled)
                 }
             }
             .padding(10)
             .background(isUser ? Color.accentColor.opacity(0.15) : Color.gray.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 10))
+            .contextMenu {
+                Button {
+                    UIPasteboard.general.string = message.content
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+                if isUser {
+                    Button {
+                        Task {
+                            guard !isGenerating, let content = await threads.beginEditingMessage(message) else { return }
+                            inputText = content
+                        }
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    .disabled(isGenerating)
+                }
+                Button(role: .destructive) {
+                    Task {
+                        guard !isGenerating else { return }
+                        await threads.deleteMessage(message)
+                    }
+                } label: {
+                    Label(
+                        message.id == threads.currentThread.messages.last?.id ? "Delete" : "Delete (and everything after)",
+                        systemImage: "trash")
+                }
+                .disabled(isGenerating)
+            }
             if !isUser { Spacer(minLength: 40) }
         }
     }
