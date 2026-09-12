@@ -20,6 +20,18 @@ final class RemoteMacViewModel: ObservableObject {
     @Published private(set) var connections: [RemoteMacConnection] = []
     @Published var selectedTextConnectionID: UUID?
     @Published var selectedImageConnectionID: UUID?
+    /// Which saved connections answered when last checked — `nil` means
+    /// "not checked yet this launch", not "offline". Checked first, fast
+    /// (a handful of exact host:port pings), before the broader subnet
+    /// scan even starts.
+    @Published private(set) var reachableConnectionIDs: Set<UUID> = []
+    @Published private(set) var isVerifyingSaved = false
+    @Published private(set) var isScanning = false
+    @Published private(set) var scanProgress: Double = 0
+    /// Live servers found on the network that aren't already saved —
+    /// each just needs one tap ("Remote") to start using, never typing
+    /// an IP or port.
+    @Published private(set) var discoveredModels: [DiscoveredMacModel] = []
 
     // Chat
     @Published var currentThread = ChatThread(title: "Mac Chat")
@@ -63,6 +75,69 @@ final class RemoteMacViewModel: ObservableObject {
         if !hasLoadedInitialState {
             currentThread = allThreads.first ?? ChatThread(title: "Mac Chat")
             hasLoadedInitialState = true
+        }
+    }
+
+    // MARK: - Frictionless discovery
+
+    /// The whole point: no IP, no port, ever typed for this to work.
+    /// Called the moment the tab appears — first re-checks whatever's
+    /// already saved (fast: a handful of exact addresses, in parallel),
+    /// then scans the subnet for anything live and not already saved.
+    /// Safe to call again (pull-to-refresh, reopening the tab): reuses
+    /// whatever's already there rather than duplicating saved entries.
+    func refreshConnections() async {
+        await verifySavedConnections()
+        await scanForNewConnections()
+    }
+
+    private func verifySavedConnections() async {
+        guard !connections.isEmpty else { return }
+        isVerifyingSaved = true
+        defer { isVerifyingSaved = false }
+
+        await withTaskGroup(of: (UUID, Bool).self) { group in
+            for connection in connections {
+                group.addTask {
+                    guard case .success = await self.testConnection(connection) else {
+                        return (connection.id, false)
+                    }
+                    return (connection.id, true)
+                }
+            }
+            var reachable: Set<UUID> = []
+            for await (id, isReachable) in group {
+                if isReachable { reachable.insert(id) }
+            }
+            reachableConnectionIDs = reachable
+        }
+    }
+
+    private func scanForNewConnections() async {
+        isScanning = true
+        scanProgress = 0
+        defer { isScanning = false }
+
+        let found = await LocalNetworkScanner.scan { [weak self] fraction in
+            Task { @MainActor in self?.scanProgress = fraction }
+        }
+        let alreadySaved = Set(connections.map { "\($0.host):\($0.port)" })
+        discoveredModels = found.filter { !alreadySaved.contains("\($0.host):\($0.port)") }
+    }
+
+    /// One tap, from a discovered model straight to "in use" — saves it
+    /// (so next time it shows up under "Saved", verified, not scanned
+    /// for again) and selects it immediately for its kind.
+    func connect(to discovered: DiscoveredMacModel) {
+        let connection = RemoteMacConnection(
+            displayName: discovered.displayName, host: discovered.host, port: discovered.port, kind: discovered.kind)
+        connections.append(connection)
+        store.save(connections)
+        reachableConnectionIDs.insert(connection.id)
+        discoveredModels.removeAll { $0.id == discovered.id }
+        switch discovered.kind {
+        case .text: selectedTextConnectionID = connection.id
+        case .image: selectedImageConnectionID = connection.id
         }
     }
 

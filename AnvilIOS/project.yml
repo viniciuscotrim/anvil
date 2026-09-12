@@ -54,6 +54,7 @@ targets:
           - UIInterfaceOrientationPortrait
         UIRequiredDeviceCapabilities:
           - arm64
+        NSLocalNetworkUsageDescription: "Anvil looks for models you've loaded and exposed on your Mac on the same Wi-Fi network, so you can use them from your iPhone without typing an IP address."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.viniciuscotrim.anvil.ios
