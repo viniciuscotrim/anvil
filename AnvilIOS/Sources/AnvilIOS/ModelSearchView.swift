@@ -137,12 +137,14 @@ struct ModelSearchView: View {
                         Text("· \(ModelSizeClass.classify(sizeBytes: bytes).label)")
                     }
                     switch summary.compatibility {
-                    case .compatible:
+                    case .supported(.mlx), .supported(.mflux):
                         Text("· compatible").foregroundStyle(.green)
-                    case .incompatible:
-                        Text("· raw checkpoint, likely won't load").foregroundStyle(.orange)
-                    case .ggufOnly:
-                        Text("· GGUF only, can't load on-device").foregroundStyle(.red)
+                    case .supported(.llamaCpp):
+                        Text("· GGUF (llama.cpp), can't load on-device here").foregroundStyle(.red)
+                    case .supported(.drawThings):
+                        Text("· Draw Things format, can't load on-device here").foregroundStyle(.red)
+                    case .incompatible(let reason):
+                        Text("· \(reason)").foregroundStyle(.orange)
                     case .unknown:
                         EmptyView()
                     }
@@ -151,7 +153,7 @@ struct ModelSearchView: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            resultDownloadButton(for: .huggingFace(summary), disabled: summary.compatibility == .ggufOnly) {
+            resultDownloadButton(for: .huggingFace(summary), disabled: !summary.isLoadableOnIOS) {
                 viewModel.download(summary)
             }
         }

@@ -2,6 +2,25 @@ import Foundation
 import AnvilCore
 import Observation
 
+/// Whether iOS's own on-device engines (`NativeChatEngine` — MLX-format
+/// only; `NativeImageEngine`/`StableDiffusionModelLoader` — diffusers-
+/// pipeline `mflux`-shaped only) can actually load a result at all, as
+/// opposed to `ModelCompatibility`'s own broader "does this look like a
+/// pipeline some engine could run" read — `llamaCpp`/`drawThings` are
+/// real, useful engines the *Mac* app is gaining, but iOS has no
+/// runtime for either yet, so a result needing one of those is
+/// downloadable-but-inert here today, worth flagging before the
+/// download, not after. iOS-only extension — doesn't change
+/// `ModelCompatibility`'s own cross-platform meaning.
+extension HFModelSummary {
+    var isLoadableOnIOS: Bool {
+        switch compatibility {
+        case .supported(.llamaCpp), .supported(.drawThings): return false
+        default: return true
+        }
+    }
+}
+
 /// One thing that can be downloaded — a Hugging Face repo or a CivitAI
 /// checkpoint — unified so a single queue/progress/pause-stop mechanism
 /// covers both sources: never simultaneous, whichever source it's from.
@@ -129,7 +148,7 @@ final class ModelsViewModel {
     /// with far less RAM than a Mac.
     var filteredSearchResults: [HFModelSummary] {
         let filtered = searchResults.filter { summary in
-            if compatibleOnlyHF, summary.compatibility == .incompatible || summary.compatibility == .ggufOnly { return false }
+            if compatibleOnlyHF, !summary.isLoadableOnIOS { return false }
             return Self.fitsSizeFilter(summary.sizeBytes, maxSizeClass)
         }
         return ModelSizeClass.sortedByRunnability(filtered) { $0.sizeBytes }

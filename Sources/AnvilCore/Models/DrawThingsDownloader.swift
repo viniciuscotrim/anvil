@@ -2,14 +2,20 @@ import Foundation
 
 /// Downloads official Draw Things community models and registers them
 /// in `ModelRegistry` under `kind: .image` and `engineOverride: .drawThings`.
+///
+/// Cross-platform on purpose: the actual download is `HFRepoDownloader`
+/// (plain `URLSessionDownloadTask`, no subprocess) fetching the file(s)
+/// as-is — nothing here converts or touches the Python/mflux runtime,
+/// so there was never a real reason for this to depend on
+/// `PythonEnvironment` (macOS-only, `Process`-based; the previous
+/// stored `python` property was unused dead weight that broke the iOS
+/// build for no functional benefit — removed rather than gated).
 public struct DrawThingsDownloader: Sendable {
     private let registry: ModelRegistry
-    private let python: PythonEnvironment
     private let hfDownloader: HFRepoDownloader
 
-    public init(registry: ModelRegistry, python: PythonEnvironment = PythonEnvironment()) {
+    public init(registry: ModelRegistry) {
         self.registry = registry
-        self.python = python
         self.hfDownloader = HFRepoDownloader(registry: registry)
     }
 
