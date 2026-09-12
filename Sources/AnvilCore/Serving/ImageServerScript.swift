@@ -62,21 +62,32 @@ enum ImageServerScript {
         model_path = Path(args.model)
         base_model = args.base_model
 
-        # Handle local single-file checkpoint or directory lacking diffusers subfolders
         if model_path.is_dir():
             has_pipeline = (model_path / "vae").is_dir() or (model_path / "model_index.json").is_file()
             if not has_pipeline:
-                # Find single checkpoint files
-                files = list(model_path.glob("*.safetensors")) + list(model_path.glob("*.ckpt"))
-                target_model = str(files[0]) if files else args.model
-                if not base_model:
-                    # Provide default base model for VAE / text encoders
-                    base_model = "black-forest-labs/FLUX.1-schnell" if "schnell" in args.model.lower() else "black-forest-labs/FLUX.1-dev"
-                try:
-                    model_config = ModelConfig.from_name(model_name=target_model, base_model=base_model)
-                    return Flux1(model_config=model_config, quantize=args.quantize)
-                except Exception as exc:
-                    print(f"Failed to load standalone checkpoint with base model {base_model}: {exc}", file=sys.stderr)
+                # Check for single checkpoint
+                safetensors = list(model_path.glob("*.safetensors")) + list(model_path.glob("*.ckpt"))
+                if safetensors:
+                    print(
+                        f"Notice: '{model_path.name}' is a standalone weights file without local VAE/text-encoder subfolders. "
+                        f"Attempting base model resolution with '{base_model or 'black-forest-labs/FLUX.1-schnell'}'...",
+                        file=sys.stderr,
+                        flush=True
+                    )
+                    if not base_model:
+                        base_model = "black-forest-labs/FLUX.1-schnell" if "schnell" in args.model.lower() else "black-forest-labs/FLUX.1-dev"
+                    try:
+                        model_config = ModelConfig.from_name(model_name=str(safetensors[0]), base_model=base_model)
+                        return Flux1(model_config=model_config, quantize=args.quantize)
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"Cannot load standalone weights '{safetensors[0].name}' because the required base model components could not be resolved: {exc}. "
+                            f"Please download a complete pipeline package (e.g. mflux-community/flux-1-schnell-mflux-q4 or mflux-community/flux2-klein-4b-mflux-q4)."
+                        ) from exc
+                else:
+                    raise FileNotFoundError(
+                        f"Directory '{model_path}' has no recognized model files (safetensors or ckpt)."
+                    )
 
         model_config = ModelConfig.from_name(model_name=args.model, base_model=base_model)
         return Flux1(model_config=model_config, quantize=args.quantize)

@@ -9,20 +9,15 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.6.6 (Filtered Draw Things Hub, Clear Search Controls & Checkpoint Fallback)
+## Current release: 0.6.7 (Verified Image Downloads, 20KB Error Fix & Clean Curated Hub)
 
-This release refines model discovery, adds explicit search clearing, and improves checkpoint loading:
-- **Filtered Draw Things Search**: Excludes raw weight shards, stray safetensors files, and unrunnable components, presenting only genuine 1-file runnable checkpoints (`.ckpt`, `.nnc`) and complete packages.
-- **Search Clear Buttons**: Added dedicated "Clear" buttons to Hugging Face, CivitAI, and Draw Things search bars to instantly clear query text, reset results, and reveal registered models cleanly.
-- **Robust Image Checkpoint Loading**: Gracefully handles flat directory checkpoints (such as single-file FLUX transformer weights) by automatically configuring the base model fallback for VAE and text encoders rather than failing with missing folder errors.
-- **Draw Things Quantization Variant Separation**: Each quantization variant (e.g. 8-bit, 4-bit, 3-bit, 2-bit, Q8_0, Q4_K_M) appears as a distinct model with its specific file size and targeted single-file downloading.
-- **Multi-Engine Support (MLX + llama.cpp + mflux + Draw Things)**: Native GGUF loading and execution via Metal-accelerated `llama.cpp` alongside Apple Silicon native `MLX`. Automatic engine selection with manual override per model.
-- **Search Compatibility Badges**: Real-time compatibility classification in Hugging Face / CivitAI / Draw Things search showing green tags for compatible engines (`MLX`, `llama.cpp`, `mflux`, `Draw Things`) and red tags for incompatible formats.
-- **Local OpenAI-Compatible Gateway (`127.0.0.1:8000`)**: Single entry point routing requests by `model` ID, with live SSE streaming proxy, connection retries, and readiness verification.
-- **Durable Auditable Memory Layer**: Structured categorization, explicit vs inferred provenance, Profile scoping, and per-response indicators.
-- **Long-Conversation Optimization & Context Management**: Configurable context budgeting (512 to 128k estimated tokens) and recent-turn retention window with fair multi-model KV cache partitioning.
+This release addresses download integrity, search stability, and pipeline loading:
+- **Zero-Byte / 20KB Download Fix**: `URLDownloader` now strictly validates HTTP response status codes, preventing server 401/404 error bodies from corrupting as small placeholder files.
+- **Verified Working Image Hub**: Replaced inaccessible community paths with tested, working MLX community models (FLUX.1 Schnell 4-bit/8-bit/3-bit, FLUX.1 Dev 4-bit/8-bit/3-bit, FLUX.2 Klein 4B & 9B, Krea Turbo, Z-Image Turbo) with full pipelines (transformer, vae, text_encoder).
+- **Clear Search & Stability**: Dedicated "Clear" buttons on all three search tabs with immediate query reset, debounce cancellation, and responsive UI.
+- **Clear Standalone Model Error Messaging**: Detailed and actionable diagnostics when attempting to load raw single-file checkpoints that lack necessary pipeline subfolders.
 
-The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.6.6`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.6.7`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 

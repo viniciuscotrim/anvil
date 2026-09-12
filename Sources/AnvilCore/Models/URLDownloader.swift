@@ -68,6 +68,11 @@ public enum URLDownloader {
         }
 
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+            if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                resume(.failure(ModelError.downloadFailed("Server returned HTTP \(http.statusCode) — authentication or file not found.")))
+                return
+            }
+
             let temporaryDestination = FileManager.default.temporaryDirectory
                 .appendingPathComponent("anvil-download-\(UUID().uuidString)")
             do {

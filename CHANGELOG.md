@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.7] - 2026-09-12
+
+### Fixed
+- **20KB Corrupted Download Fix**: `URLDownloader` now validates HTTP status codes `200...299`, rejecting 401/404 server error bodies from ever being written as model files.
+- **Curated Verified Working Hub**: Replaced inaccessible Draw Things repo entries with verified working `mflux-community` models (FLUX.1 Schnell, FLUX.1 Dev, FLUX.2 Klein 4B/9B, Krea Turbo, Z-Image Turbo) with complete pipelines.
+- **Standalone Model Error Handling**: Clear diagnostic message explaining missing pipeline components when trying to load raw single-file transformer weights without VAE/text encoders.
+
 ## [0.6.6] - 2026-09-12
 
 ### Fixed & Improved

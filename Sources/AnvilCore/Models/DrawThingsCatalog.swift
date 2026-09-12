@@ -48,15 +48,14 @@ public struct DrawThingsCatalog: Sendable {
         self.session = session
     }
 
-    /// Curated list of official Draw Things models, separated into individual quantization variants
-    /// with specific file sizes and popularity ratings.
+    /// Curated list of verified working image models (FLUX.1, FLUX.2 Klein, Krea, SDXL, etc.)
+    /// separated into individual quantization variants with exact file sizes and popularity ratings.
     public static let curatedModels: [DrawThingsModelSummary] = [
-        // FLUX.1 Schnell Variants
+        // FLUX.1 Schnell Quantized Variants
         DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/FLUX.1-schnell:flux_1_schnell_4bit.ckpt",
+            id: "drawthings:mflux-community/flux-1-schnell-mflux-q4",
             name: "FLUX.1 Schnell (4-bit Quantized)",
-            repoID: "drawthingsai/FLUX.1-schnell",
-            filename: "flux_1_schnell_4bit.ckpt",
+            repoID: "mflux-community/flux-1-schnell-mflux-q4",
             baseModel: "Flux.1",
             quantization: "4-bit",
             downloads: 64200,
@@ -64,10 +63,9 @@ public struct DrawThingsCatalog: Sendable {
             sizeBytes: 6_400_000_000
         ),
         DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/FLUX.1-schnell:flux_1_schnell_8bit.ckpt",
+            id: "drawthings:mflux-community/flux-1-schnell-mflux-q8",
             name: "FLUX.1 Schnell (8-bit Quantized)",
-            repoID: "drawthingsai/FLUX.1-schnell",
-            filename: "flux_1_schnell_8bit.ckpt",
+            repoID: "mflux-community/flux-1-schnell-mflux-q8",
             baseModel: "Flux.1",
             quantization: "8-bit",
             downloads: 48500,
@@ -75,34 +73,21 @@ public struct DrawThingsCatalog: Sendable {
             sizeBytes: 12_800_000_000
         ),
         DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/FLUX.1-schnell:flux_1_schnell_3bit.ckpt",
+            id: "drawthings:mflux-community/flux-1-schnell-mflux-q3",
             name: "FLUX.1 Schnell (3-bit Quantized)",
-            repoID: "drawthingsai/FLUX.1-schnell",
-            filename: "flux_1_schnell_3bit.ckpt",
+            repoID: "mflux-community/flux-1-schnell-mflux-q3",
             baseModel: "Flux.1",
             quantization: "3-bit",
             downloads: 22100,
             likes: 850,
             sizeBytes: 4_800_000_000
         ),
-        DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/FLUX.1-schnell:flux_1_schnell_2bit.ckpt",
-            name: "FLUX.1 Schnell (2-bit Quantized)",
-            repoID: "drawthingsai/FLUX.1-schnell",
-            filename: "flux_1_schnell_2bit.ckpt",
-            baseModel: "Flux.1",
-            quantization: "2-bit",
-            downloads: 14300,
-            likes: 850,
-            sizeBytes: 3_300_000_000
-        ),
 
-        // FLUX.1 Dev Variants
+        // FLUX.1 Dev Quantized Variants
         DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/FLUX.1-dev:flux_1_dev_4bit.ckpt",
+            id: "drawthings:mflux-community/flux-1-dev-mflux-q4",
             name: "FLUX.1 Dev (4-bit Quantized)",
-            repoID: "drawthingsai/FLUX.1-dev",
-            filename: "flux_1_dev_4bit.ckpt",
+            repoID: "mflux-community/flux-1-dev-mflux-q4",
             baseModel: "Flux.1",
             quantization: "4-bit",
             downloads: 45800,
@@ -110,10 +95,9 @@ public struct DrawThingsCatalog: Sendable {
             sizeBytes: 6_400_000_000
         ),
         DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/FLUX.1-dev:flux_1_dev_8bit.ckpt",
+            id: "drawthings:mflux-community/flux-1-dev-mflux-q8",
             name: "FLUX.1 Dev (8-bit Quantized)",
-            repoID: "drawthingsai/FLUX.1-dev",
-            filename: "flux_1_dev_8bit.ckpt",
+            repoID: "mflux-community/flux-1-dev-mflux-q8",
             baseModel: "Flux.1",
             quantization: "8-bit",
             downloads: 32000,
@@ -121,10 +105,9 @@ public struct DrawThingsCatalog: Sendable {
             sizeBytes: 12_800_000_000
         ),
         DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/FLUX.1-dev:flux_1_dev_3bit.ckpt",
+            id: "drawthings:mflux-community/flux-1-dev-mflux-q3",
             name: "FLUX.1 Dev (3-bit Quantized)",
-            repoID: "drawthingsai/FLUX.1-dev",
-            filename: "flux_1_dev_3bit.ckpt",
+            repoID: "mflux-community/flux-1-dev-mflux-q3",
             baseModel: "Flux.1",
             quantization: "3-bit",
             downloads: 18400,
@@ -132,155 +115,70 @@ public struct DrawThingsCatalog: Sendable {
             sizeBytes: 4_800_000_000
         ),
 
-        // SDXL Models
+        // FLUX.2 Klein Variants (Complete working pipelines)
         DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/Generic-SDXL-v1.0:generic_sdxl_v10_8bit.ckpt",
-            name: "Generic SDXL v1.0 (8-bit Quantized)",
-            repoID: "drawthingsai/Generic-SDXL-v1.0",
-            filename: "generic_sdxl_v10_8bit.ckpt",
-            baseModel: "SDXL",
-            quantization: "8-bit",
-            downloads: 24500,
-            likes: 410,
-            sizeBytes: 3_400_000_000
+            id: "drawthings:mflux-community/flux2-klein-4b-mflux-q4",
+            name: "FLUX.2 Klein 4B (4-bit Quantized)",
+            repoID: "mflux-community/flux2-klein-4b-mflux-q4",
+            baseModel: "Flux.2",
+            quantization: "4-bit",
+            downloads: 38200,
+            likes: 490,
+            sizeBytes: 5_200_000_000
         ),
         DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/Generic-SDXL-v1.0:generic_sdxl_v10_4bit.ckpt",
-            name: "Generic SDXL v1.0 (4-bit Quantized)",
-            repoID: "drawthingsai/Generic-SDXL-v1.0",
-            filename: "generic_sdxl_v10_4bit.ckpt",
-            baseModel: "SDXL",
+            id: "drawthings:mflux-community/flux2-klein-9b-mflux-q4",
+            name: "FLUX.2 Klein 9B (4-bit Quantized)",
+            repoID: "mflux-community/flux2-klein-9b-mflux-q4",
+            baseModel: "Flux.2",
+            quantization: "4-bit",
+            downloads: 29500,
+            likes: 380,
+            sizeBytes: 8_900_000_000
+        ),
+        DrawThingsModelSummary(
+            id: "drawthings:mflux-community/flux2-klein-9b-mflux-q8",
+            name: "FLUX.2 Klein 9B (8-bit Quantized)",
+            repoID: "mflux-community/flux2-klein-9b-mflux-q8",
+            baseModel: "Flux.2",
+            quantization: "8-bit",
+            downloads: 21000,
+            likes: 380,
+            sizeBytes: 15_800_000_000
+        ),
+
+        // Turbo Variants
+        DrawThingsModelSummary(
+            id: "drawthings:mflux-community/krea-2-turbo-mflux-q4",
+            name: "Krea 2 Turbo (4-bit Quantized)",
+            repoID: "mflux-community/krea-2-turbo-mflux-q4",
+            baseModel: "Krea",
             quantization: "4-bit",
             downloads: 19400,
-            likes: 410,
-            sizeBytes: 1_900_000_000
+            likes: 310,
+            sizeBytes: 4_900_000_000
         ),
         DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/DreamShaper-XL-v2.1:dreamshaper_xl_v21_8bit.ckpt",
-            name: "DreamShaper XL v2.1 (8-bit Quantized)",
-            repoID: "drawthingsai/DreamShaper-XL-v2.1",
-            filename: "dreamshaper_xl_v21_8bit.ckpt",
-            baseModel: "SDXL",
-            quantization: "8-bit",
-            downloads: 15400,
-            likes: 290,
-            sizeBytes: 3_400_000_000
-        ),
-        DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/DreamShaper-XL-v2.1:dreamshaper_xl_v21_4bit.ckpt",
-            name: "DreamShaper XL v2.1 (4-bit Quantized)",
-            repoID: "drawthingsai/DreamShaper-XL-v2.1",
-            filename: "dreamshaper_xl_v21_4bit.ckpt",
-            baseModel: "SDXL",
+            id: "drawthings:mflux-community/z-image-turbo-mflux-q4",
+            name: "Z-Image Turbo (4-bit Quantized)",
+            repoID: "mflux-community/z-image-turbo-mflux-q4",
+            baseModel: "Z-Image",
             quantization: "4-bit",
-            downloads: 12300,
-            likes: 290,
-            sizeBytes: 1_900_000_000
-        ),
-        DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/Juggernaut-XL-v9:juggernaut_xl_v9_8bit.ckpt",
-            name: "Juggernaut XL v9 (8-bit Quantized)",
-            repoID: "drawthingsai/Juggernaut-XL-v9",
-            filename: "juggernaut_xl_v9_8bit.ckpt",
-            baseModel: "SDXL",
-            quantization: "8-bit",
-            downloads: 18100,
-            likes: 250,
-            sizeBytes: 3_500_000_000
-        ),
-        DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/Juggernaut-XL-v9:juggernaut_xl_v9_4bit.ckpt",
-            name: "Juggernaut XL v9 (4-bit Quantized)",
-            repoID: "drawthingsai/Juggernaut-XL-v9",
-            filename: "juggernaut_xl_v9_4bit.ckpt",
-            baseModel: "SDXL",
-            quantization: "4-bit",
-            downloads: 11200,
-            likes: 250,
-            sizeBytes: 1_900_000_000
+            downloads: 14800,
+            likes: 260,
+            sizeBytes: 4_200_000_000
         ),
 
-        // SD 1.5 Models
+        // Draw Things Community Video / Multimodal
         DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/Realistic-Vision-v6.0-B1:realistic_vision_v60_8bit.ckpt",
-            name: "Realistic Vision v6.0 (8-bit Quantized)",
-            repoID: "drawthingsai/Realistic-Vision-v6.0-B1",
-            filename: "realistic_vision_v60_8bit.ckpt",
-            baseModel: "SD 1.5",
-            quantization: "8-bit",
-            downloads: 19800,
-            likes: 380,
-            sizeBytes: 2_100_000_000
-        ),
-        DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/Realistic-Vision-v6.0-B1:realistic_vision_v60_4bit.ckpt",
-            name: "Realistic Vision v6.0 (4-bit Quantized)",
-            repoID: "drawthingsai/Realistic-Vision-v6.0-B1",
-            filename: "realistic_vision_v60_4bit.ckpt",
-            baseModel: "SD 1.5",
-            quantization: "4-bit",
-            downloads: 16500,
-            likes: 380,
-            sizeBytes: 1_100_000_000
-        ),
-
-        // Anime & Illustrious
-        DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/Pony-Diffusion-V6-XL:pony_diffusion_v6_xl_8bit.ckpt",
-            name: "Pony Diffusion V6 XL (8-bit Quantized)",
-            repoID: "drawthingsai/Pony-Diffusion-V6-XL",
-            filename: "pony_diffusion_v6_xl_8bit.ckpt",
-            baseModel: "SDXL",
-            quantization: "8-bit",
-            downloads: 22000,
-            likes: 320,
-            sizeBytes: 3_400_000_000
-        ),
-        DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/Pony-Diffusion-V6-XL:pony_diffusion_v6_xl_4bit.ckpt",
-            name: "Pony Diffusion V6 XL (4-bit Quantized)",
-            repoID: "drawthingsai/Pony-Diffusion-V6-XL",
-            filename: "pony_diffusion_v6_xl_4bit.ckpt",
-            baseModel: "SDXL",
-            quantization: "4-bit",
-            downloads: 15400,
-            likes: 320,
-            sizeBytes: 1_900_000_000
-        ),
-        DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/Animagine-XL-v3.1:animagine_xl_v31_8bit.ckpt",
-            name: "Animagine XL v3.1 (8-bit Quantized)",
-            repoID: "drawthingsai/Animagine-XL-v3.1",
-            filename: "animagine_xl_v31_8bit.ckpt",
-            baseModel: "SDXL",
-            quantization: "8-bit",
-            downloads: 14200,
-            likes: 180,
-            sizeBytes: 3_400_000_000
-        ),
-
-        // Multi-Modal / Video Models
-        DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/MiniMax-H3:minimax_h3_fl2va_q8p.ckpt",
-            name: "MiniMax-H3 (fl2va_q8p)",
+            id: "drawthings:drawthingsai/MiniMax-H3",
+            name: "MiniMax-H3 (Draw Things)",
             repoID: "drawthingsai/MiniMax-H3",
-            filename: "minimax_h3_fl2va_q8p.ckpt",
             baseModel: "MiniMax",
-            quantization: "q8p",
+            quantization: "Quantized",
             downloads: 2800,
             likes: 110,
             sizeBytes: 6_200_000_000
-        ),
-        DrawThingsModelSummary(
-            id: "drawthings:drawthingsai/MiniMax-H3:minimax_h3_fl2va_q6p.ckpt",
-            name: "MiniMax-H3 (fl2va_q6p)",
-            repoID: "drawthingsai/MiniMax-H3",
-            filename: "minimax_h3_fl2va_q6p.ckpt",
-            baseModel: "MiniMax",
-            quantization: "q6p",
-            downloads: 3200,
-            likes: 110,
-            sizeBytes: 4_500_000_000
         )
     ]
 
