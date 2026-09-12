@@ -147,6 +147,27 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Notices a thread this Mac's own UI is showing getting updated
+    /// from somewhere else — the iPhone, over `AnvilSyncServer`, writing
+    /// to the exact same `ChatThreadStore` file this actor also reads.
+    /// Nothing here watches the filesystem for changes on its own, so
+    /// without this, a message sent from the iPhone would only ever
+    /// show up on the Mac after the user manually left and reopened the
+    /// thread. Runs for the lifetime of `ChatView` (its own `.task`),
+    /// skips a poll while this Mac is itself mid-send (never clobber an
+    /// in-flight local generation) or in temporary mode (never touches
+    /// disk at all).
+    func pollForExternalThreadUpdates() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled, !isSending, !isTemporaryModeActive else { continue }
+            let id = currentThread.id
+            guard let updated = await threadStore.get(id: id), updated.updatedAt > currentThread.updatedAt else { continue }
+            currentThread = updated
+            allThreads = await threadStore.all()
+        }
+    }
+
     func setMacSyncAccess(_ access: ServerAccess) {
         macSyncAccess = access
         var settings = AppSettings.load()
@@ -484,6 +505,17 @@ final class ChatViewModel: ObservableObject {
         }
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending else { return }
+        // A real, reproduced failure mode (confirmed against a raw
+        // persisted thread — two messages, distinct IDs, each with its
+        // own reply): a dropped/flaky connection (e.g. an iPhone on the
+        // same thread over Mac Sync) makes a send look like it silently
+        // went nowhere, so the same question gets resent verbatim as a
+        // second, separate turn. Block an exact repeat of the last
+        // thing the user just asked instead of quietly duplicating it.
+        if currentThread.messages.last(where: { $0.role == .user })?.content == text {
+            errorMessage = "You just sent this — give it a moment before sending it again."
+            return
+        }
         inputText = ""
         errorMessage = nil
 

@@ -150,7 +150,7 @@ struct NativeChatView: View {
                         Button { threads.toggleTemporaryMode() } label: {
                             Image(systemName: threads.isTemporaryModeActive ? "eyeglasses" : "eyeglasses.slash")
                         }
-                        .disabled(isGenerating || source != .local)
+                        .disabled(isGenerating)
                         exportMenu
                         Button { isSettingsPresented = true } label: { Image(systemName: "slider.horizontal.3") }
                         Button { newChat() } label: { Image(systemName: "square.and.pencil") }
@@ -637,6 +637,12 @@ struct NativeChatView: View {
     private func sendLocal() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, engine.isLoaded, !isLocalGenerating else { return }
+        // Same guard as the remote path — see its own comment for why:
+        // block an exact repeat of the last thing the user just asked.
+        if threads.currentThread.messages.last(where: { $0.role == .user })?.content == text {
+            engine.errorMessage = "You just sent this — give it a moment before sending it again."
+            return
+        }
         inputText = ""
         isLocalGenerating = true
 

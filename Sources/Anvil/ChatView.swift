@@ -73,6 +73,9 @@ struct ChatView: View {
             await chat.loadInitialState()
             await chat.applyMacSyncSettingsIfNeeded()
         }
+        .task {
+            await chat.pollForExternalThreadUpdates()
+        }
         .onChange(of: sessions.sessions) { _, _ in chat.syncSelectedModel() }
         .fileExporter(
             isPresented: Binding(

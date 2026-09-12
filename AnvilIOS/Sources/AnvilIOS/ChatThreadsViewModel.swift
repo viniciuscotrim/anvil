@@ -1,13 +1,17 @@
 import AnvilCore
 import Foundation
 
-/// Which data Chat/Profiles/Memory currently read and write — "This
-/// iPhone" (this device's own local files) or a specific Mac with
-/// `AnvilSyncServer` turned on, in which case the Mac's own threads,
-/// profiles, and memories become the ones shown here, updated on the
-/// Mac even though the iPhone is doing the typing. Switching this is the
-/// one action (Chat's source menu) that puts every one of those three
-/// tabs into "Mac mode" together, and back, symmetrically.
+/// Which Mac (if any) this phone is actively merge-syncing with and
+/// sending chat requests to. Unlike Phase 2's first cut, picking a Mac
+/// does **not** switch Chat/Profiles/Memory to "look at the Mac's data
+/// instead" — every screen always reads this phone's own local stores;
+/// picking a Mac just starts a background merge that keeps this
+/// phone's local copy and that Mac's copy as the same union, each side
+/// pushing what the other's missing and pulling what it's missing,
+/// last-write-wins on genuine same-ID conflicts. A profile created on
+/// the Mac and a different one created on the phone both end up on
+/// both, exactly like the user asked for a "handover" to mean — no
+/// manual curating required.
 enum ChatSourceSelection: Equatable {
     case local
     case mac(RemoteMacConnection)
@@ -39,15 +43,15 @@ final class ChatThreadsViewModel {
     private(set) var isSuggestingMemories = false
     /// "This iPhone" or a specific Mac — see `ChatSourceSelection`.
     /// Change it via `selectSource(_:)`, not directly, so the switch
-    /// actually reloads threads/memories from the newly active side.
+    /// actually kicks off (and keeps running) the background merge.
     private(set) var activeSource: ChatSourceSelection = .local
-    /// False whenever the active Mac doesn't answer `AnvilSyncServer` —
+    /// False whenever the active Mac's last merge attempt failed —
     /// overwhelmingly just because Mac Sync is an opt-in feature the
     /// user hasn't turned on for that Mac yet, not a real error. Chat
     /// still works fine without it (send/receive don't need sync at
-    /// all); this only means threads/profiles/memories stay this
-    /// phone's own local ones instead of that Mac's, so the UI shows a
-    /// quiet note here rather than a scary connection-failure banner.
+    /// all, and every read here is always this phone's own local data
+    /// regardless); this only means that Mac's own threads/profiles/
+    /// memories aren't being merged in right now.
     private(set) var isMacSyncAvailable = true
     /// Memory-suggestion errors only — a real failure worth surfacing
     /// loudly, unlike a Mac simply not having sync turned on.
@@ -55,15 +59,14 @@ final class ChatThreadsViewModel {
     /// While on, the active conversation is never saved to disk — same
     /// restriction and behavior as the Mac app's own temporary mode:
     /// blocks `newThread`/`selectThread` (turn it off first) and every
-    /// persist call becomes a no-op until it's off again. Only
-    /// meaningful for `.local` — a Mac source is never temporary, since
-    /// the whole point of picking one is durable continuity with the Mac.
+    /// persist call becomes a no-op until it's off again.
     private(set) var isTemporaryModeActive = false
     private var threadBeforeTemporaryMode: ChatThread?
 
     private let store = ChatThreadStore()
     private let memoryStore = ChatMemoryStore()
     private let syncClient = AnvilSyncClient()
+    private var syncLoopTask: Task<Void, Never>?
     /// `.task` on the view reruns every time it re-enters the hierarchy
     /// (switching tabs and back) — only the first call should pick the
     /// initial thread; later calls just refresh `allThreads`, the same
@@ -72,44 +75,104 @@ final class ChatThreadsViewModel {
     private var hasLoadedInitialState = false
 
     func loadInitialState() async {
-        await reloadThreadsAndMemories()
+        allThreads = await store.all()
+        memories = await memoryStore.all()
         if !hasLoadedInitialState {
             currentThread = allThreads.first ?? ChatThread()
             hasLoadedInitialState = true
         }
     }
 
-    /// The one place `activeSource` changes — reloads threads and
-    /// memories from the newly active side and points `currentThread`
-    /// at its most-recent thread (or a blank one), same as a fresh
-    /// launch would. `profilesViewModel` is updated in lock-step so all
-    /// three tabs agree on which side they're showing.
+    /// The one place `activeSource` changes — starts (or stops) a
+    /// background merge loop with the newly-picked Mac. `profilesViewModel`
+    /// merges in lock-step so a profile picked up from the Mac (or
+    /// pushed to it) shows up the same moment threads/memories do.
     func selectSource(_ source: ChatSourceSelection, profilesViewModel: ProfilesViewModel) async {
         activeSource = source
         errorMessage = nil
-        await profilesViewModel.setActiveHost(source.host)
-        await reloadThreadsAndMemories()
-        currentThread = allThreads.first ?? ChatThread()
+        syncLoopTask?.cancel()
+        syncLoopTask = nil
+        guard case .mac(let connection) = source else { return }
+
+        await mergeSyncNow(with: connection, profilesViewModel: profilesViewModel)
+        syncLoopTask = Task { [weak self, weak profilesViewModel] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard !Task.isCancelled, let self, let profilesViewModel else { return }
+                guard case .mac(let current) = self.activeSource, current.id == connection.id else { return }
+                await self.mergeSyncNow(with: current, profilesViewModel: profilesViewModel)
+            }
+        }
     }
 
-    private func reloadThreadsAndMemories() async {
-        switch activeSource {
-        case .local:
+    /// One full merge pass with `connection`: threads, memories, and
+    /// (via `profilesViewModel`) profiles — each a two-way union by ID,
+    /// last-write-wins on a genuine same-ID conflict (by `updatedAt`).
+    /// After this, this phone's own local stores hold the same set the
+    /// Mac does, and vice versa — reads never need to reach across the
+    /// network at all; this is what keeps them that way.
+    private func mergeSyncNow(with connection: RemoteMacConnection, profilesViewModel: ProfilesViewModel) async {
+        do {
+            try await Self.mergeThreads(local: store, remote: syncClient, host: connection.host)
+            try await Self.mergeMemories(local: memoryStore, remote: syncClient, host: connection.host)
+            await profilesViewModel.mergeSync(host: connection.host)
             isMacSyncAvailable = true
-            allThreads = await store.all()
-            memories = await memoryStore.all()
-        case .mac(let connection):
-            do {
-                allThreads = try await syncClient.threads(host: connection.host)
-                memories = try await syncClient.memories(host: connection.host)
-                isMacSyncAvailable = true
-            } catch {
-                // Not surfaced as `errorMessage` — see `isMacSyncAvailable`'s
-                // own doc comment for why this is an expected, common
-                // state, not a real failure worth a red banner.
-                isMacSyncAvailable = false
-                allThreads = []
-                memories = []
+        } catch {
+            isMacSyncAvailable = false
+        }
+        allThreads = await store.all()
+        memories = await memoryStore.all()
+        // If the thread being actively viewed just got a same-ID update
+        // from the other side (e.g. the Mac itself answered a message
+        // sent from here, or vice versa), pick that up immediately
+        // rather than waiting for the user to leave and reopen it.
+        if let refreshed = allThreads.first(where: { $0.id == currentThread.id }), refreshed.updatedAt > currentThread.updatedAt {
+            currentThread = refreshed
+        }
+    }
+
+    private static func mergeThreads(local: ChatThreadStore, remote: AnvilSyncClient, host: String) async throws {
+        let localAll = await local.all()
+        let remoteAll = try await remote.threads(host: host)
+        let localByID = Dictionary(uniqueKeysWithValues: localAll.map { ($0.id, $0) })
+        let remoteByID = Dictionary(uniqueKeysWithValues: remoteAll.map { ($0.id, $0) })
+        for id in Set(localByID.keys).union(remoteByID.keys) {
+            switch (localByID[id], remoteByID[id]) {
+            case let (l?, r?) where l.updatedAt > r.updatedAt:
+                _ = try? await remote.upsertThread(l, host: host)
+            case let (l?, r?) where r.updatedAt > l.updatedAt:
+                _ = try? await local.upsert(r)
+            case (.some, .some):
+                break // identical timestamps — already in sync
+            case let (l?, nil):
+                _ = try? await remote.upsertThread(l, host: host)
+            case let (nil, r?):
+                _ = try? await local.upsert(r)
+            case (nil, nil):
+                break
+            }
+        }
+    }
+
+    private static func mergeMemories(local: ChatMemoryStore, remote: AnvilSyncClient, host: String) async throws {
+        let localAll = await local.all()
+        let remoteAll = try await remote.memories(host: host)
+        let localByID = Dictionary(uniqueKeysWithValues: localAll.map { ($0.id, $0) })
+        let remoteByID = Dictionary(uniqueKeysWithValues: remoteAll.map { ($0.id, $0) })
+        for id in Set(localByID.keys).union(remoteByID.keys) {
+            switch (localByID[id], remoteByID[id]) {
+            case let (l?, r?) where l.updatedAt > r.updatedAt:
+                _ = try? await remote.upsertMemory(l, host: host)
+            case let (l?, r?) where r.updatedAt > l.updatedAt:
+                _ = try? await local.upsert(r)
+            case (.some, .some):
+                break
+            case let (l?, nil):
+                _ = try? await remote.upsertMemory(l, host: host)
+            case let (nil, r?):
+                _ = try? await local.upsert(r)
+            case (nil, nil):
+                break
             }
         }
     }
@@ -126,31 +189,32 @@ final class ChatThreadsViewModel {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let memory = ChatMemory(content: trimmed, kind: kind, source: source, confidence: confidence, profileID: profileID)
-        await upsertMemory(memory)
+        _ = try? await memoryStore.upsert(memory)
+        memories = await memoryStore.all()
+        await pushMemoryIfMacActive(memory)
     }
 
     func updateMemory(_ memory: ChatMemory) async {
-        await upsertMemory(memory)
-    }
-
-    private func upsertMemory(_ memory: ChatMemory) async {
-        switch activeSource {
-        case .local:
-            _ = try? await memoryStore.upsert(memory)
-        case .mac(let connection):
-            _ = try? await syncClient.upsertMemory(memory, host: connection.host)
-        }
-        await reloadThreadsAndMemories()
+        _ = try? await memoryStore.upsert(memory)
+        memories = await memoryStore.all()
+        await pushMemoryIfMacActive(memory)
     }
 
     func deleteMemory(_ memory: ChatMemory) async {
-        switch activeSource {
-        case .local:
-            try? await memoryStore.delete(id: memory.id)
-        case .mac(let connection):
+        try? await memoryStore.delete(id: memory.id)
+        memories = await memoryStore.all()
+        if case .mac(let connection) = activeSource {
             try? await syncClient.deleteMemory(id: memory.id, host: connection.host)
         }
-        await reloadThreadsAndMemories()
+    }
+
+    /// Best-effort, immediate push so a new/edited memory reaches the
+    /// Mac right away instead of waiting for the next periodic merge
+    /// tick — the periodic merge is the safety net, this is what makes
+    /// it feel instant.
+    private func pushMemoryIfMacActive(_ memory: ChatMemory) async {
+        guard case .mac(let connection) = activeSource else { return }
+        _ = try? await syncClient.upsertMemory(memory, host: connection.host)
     }
 
     /// Analyzes the current thread for durable memory — source-agnostic:
@@ -221,10 +285,8 @@ final class ChatThreadsViewModel {
     }
 
     func deleteThread(_ thread: ChatThread) async {
-        switch activeSource {
-        case .local:
-            try? await store.delete(id: thread.id)
-        case .mac(let connection):
+        try? await store.delete(id: thread.id)
+        if case .mac(let connection) = activeSource {
             try? await syncClient.deleteThread(id: thread.id, host: connection.host)
         }
         allThreads.removeAll { $0.id == thread.id }
@@ -235,11 +297,8 @@ final class ChatThreadsViewModel {
 
     /// Only the caller flips this — nothing else enters or exits
     /// temporary mode on its own. Turning it back off restores whatever
-    /// thread was active before, exactly where it was left. A no-op
-    /// while a Mac source is active (see `isTemporaryModeActive`'s own
-    /// doc comment).
+    /// thread was active before, exactly where it was left.
     func toggleTemporaryMode() {
-        guard activeSource == .local else { return }
         if isTemporaryModeActive {
             isTemporaryModeActive = false
             currentThread = threadBeforeTemporaryMode ?? allThreads.first ?? ChatThread()
@@ -252,23 +311,22 @@ final class ChatThreadsViewModel {
     }
 
     /// Saves and reassigns `currentThread` to the persisted copy (its
-    /// `updatedAt` included) — use once a turn is fully done. A no-op
-    /// while temporary mode is active.
+    /// `updatedAt` included) — use once a turn is fully done. Always
+    /// writes this phone's own local store first (the single source of
+    /// truth this app reads from); when a Mac is active, also pushes
+    /// the same save there right away so the Mac doesn't have to wait
+    /// for the next periodic merge tick to see it. A no-op while
+    /// temporary mode is active.
     func persistCurrentThread() async {
         guard !isTemporaryModeActive else { return }
-        let threadToSave = currentThread
-        let saved: ChatThread?
-        switch activeSource {
-        case .local:
-            saved = try? await store.upsert(threadToSave)
-        case .mac(let connection):
-            saved = try? await syncClient.upsertThread(threadToSave, host: connection.host)
-        }
-        guard let saved else { return }
+        guard let saved = try? await store.upsert(currentThread) else { return }
         if currentThread.id == saved.id {
             currentThread = saved
         }
-        await reloadThreadsAndMemories()
+        allThreads = await store.all()
+        if case .mac(let connection) = activeSource {
+            _ = try? await syncClient.upsertThread(saved, host: connection.host)
+        }
     }
 
     /// Write-only: saves to disk without reassigning `currentThread`, so
@@ -282,11 +340,9 @@ final class ChatThreadsViewModel {
         let threadToSave = currentThread
         let source = activeSource
         Task {
-            switch source {
-            case .local:
-                _ = try? await store.upsert(threadToSave)
-            case .mac(let connection):
-                _ = try? await syncClient.upsertThread(threadToSave, host: connection.host)
+            guard let saved = try? await store.upsert(threadToSave) else { return }
+            if case .mac(let connection) = source {
+                _ = try? await syncClient.upsertThread(saved, host: connection.host)
             }
         }
     }

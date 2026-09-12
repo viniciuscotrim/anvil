@@ -79,6 +79,18 @@ final class RemoteChatEngine: ObservableObject {
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, generationTask == nil else { return }
+        // A real, reproduced failure mode (confirmed against a raw
+        // persisted thread, distinct message IDs each with their own
+        // reply — a genuine duplicate send, not a memory/context bug):
+        // a flaky phone-to-Mac connection makes a send look like it
+        // silently went nowhere, so the user retypes/resends the exact
+        // same question, and nothing here caught that it was already
+        // just asked. Block an exact repeat of the last thing the user
+        // actually said instead of quietly creating a second turn.
+        if threads.currentThread.messages.last(where: { $0.role == .user })?.content == trimmed {
+            errorMessage = "You just sent this — give it a moment (or Stop and edit your message to send it again)."
+            return
+        }
         errorMessage = nil
 
         threads.currentThread.messages.append(ChatMessage(role: .user, content: trimmed))

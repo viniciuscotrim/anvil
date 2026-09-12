@@ -3,13 +3,14 @@ import AnvilCore
 import Observation
 
 /// Reusable system prompts ("personas"), optionally bound as the
-/// default for one registered text model — the same `ChatProfileStore`
-/// the Mac app's Profiles tab uses when the source is "This iPhone".
-/// When Chat's source menu picks a Mac with sync enabled instead,
-/// `setActiveHost(_:)` (called by `ChatThreadsViewModel.selectSource`)
-/// switches this to read/write that Mac's own profiles via
-/// `AnvilSyncClient` — same profiles the Mac app's own Profiles tab
-/// shows, updated there even when the edit came from the phone.
+/// default for one registered text model — always backed by this
+/// phone's own local `ChatProfileStore`. When Chat's source picker has
+/// an active Mac, `ChatThreadsViewModel` calls `mergeSync(host:)`
+/// periodically: any profile that exists on only one side gets pushed
+/// to the other, so a profile made on the Mac and a different one made
+/// on the phone both end up on both devices — no manual exporting or
+/// picking "whose version wins" needed for the common case of two
+/// different profiles.
 @Observable
 @MainActor
 final class ProfilesViewModel {
@@ -18,39 +19,15 @@ final class ProfilesViewModel {
 
     private let store = ChatProfileStore()
     private let syncClient = AnvilSyncClient()
-    private var activeHost: String?
-
-    func setActiveHost(_ host: String?) async {
-        activeHost = host
-        await load()
-    }
 
     func load() async {
-        if let activeHost {
-            do {
-                profiles = try await syncClient.profiles(host: activeHost)
-            } catch {
-                // Not surfaced as `errorMessage` — overwhelmingly just
-                // means this Mac doesn't have Mac Sync turned on, an
-                // expected, common state (see
-                // `ChatThreadsViewModel.isMacSyncAvailable`'s doc
-                // comment), not a real failure.
-                profiles = []
-            }
-        } else {
-            profiles = await store.all()
-        }
+        profiles = await store.all()
     }
 
     @discardableResult
     func save(_ profile: ChatProfile) async -> ChatProfile? {
         do {
-            let saved: ChatProfile
-            if let activeHost {
-                saved = try await syncClient.upsertProfile(profile, host: activeHost)
-            } else {
-                saved = try await store.upsert(profile)
-            }
+            let saved = try await store.upsert(profile)
             await load()
             return saved
         } catch {
@@ -60,23 +37,32 @@ final class ProfilesViewModel {
     }
 
     func delete(_ profile: ChatProfile) async {
-        do {
-            if let activeHost {
-                try await syncClient.deleteProfile(id: profile.id, host: activeHost)
-            } else {
-                try await store.delete(id: profile.id)
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        try? await store.delete(id: profile.id)
         await load()
     }
 
-    /// Only meaningful for the local store — a remote Mac's own default-
-    /// per-model binding isn't something the phone's local model IDs
-    /// have any relationship to.
     func defaultProfile(forModelID modelID: String) async -> ChatProfile? {
-        guard activeHost == nil else { return nil }
-        return await store.defaultProfile(forModelID: modelID)
+        await store.defaultProfile(forModelID: modelID)
+    }
+
+    /// A profile with the same `id` on both sides is treated as
+    /// identical (profiles don't carry an `updatedAt` to arbitrate a
+    /// same-ID edit conflict — a genuinely rare case for something
+    /// that's usually created once, not repeatedly edited from two
+    /// devices at once); everything else is a plain union: whichever
+    /// side is missing a profile gets it pushed to it.
+    func mergeSync(host: String) async {
+        guard let remoteProfiles = try? await syncClient.profiles(host: host) else { return }
+        let localAll = await store.all()
+        let localIDs = Set(localAll.map(\.id))
+        let remoteIDs = Set(remoteProfiles.map(\.id))
+
+        for profile in remoteProfiles where !localIDs.contains(profile.id) {
+            _ = try? await store.upsert(profile)
+        }
+        for profile in localAll where !remoteIDs.contains(profile.id) {
+            _ = try? await syncClient.upsertProfile(profile, host: host)
+        }
+        await load()
     }
 }
