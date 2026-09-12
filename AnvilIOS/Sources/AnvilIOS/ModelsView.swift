@@ -2,9 +2,9 @@ import SwiftUI
 import AnvilCore
 
 /// Search, download, and manage models — real feature parity with the
-/// Mac app's Model Manager (minus CivitAI and the folder-mapping UI,
-/// not yet ported), sharing the exact same `AnvilCore` catalog/registry
-/// code.
+/// Mac app's Model Manager (a source picker between Hugging Face and
+/// CivitAI, same as the Mac's, minus the folder-mapping UI, not yet
+/// ported), sharing the exact same `AnvilCore` catalog/registry code.
 struct ModelsView: View {
     @Environment(ModelsViewModel.self) private var viewModel
 
@@ -12,14 +12,37 @@ struct ModelsView: View {
         @Bindable var viewModel = viewModel
         NavigationStack {
             List {
+                Picker("Source", selection: $viewModel.source) {
+                    ForEach(ModelsViewModel.Source.allCases) { source in
+                        Text(source.rawValue).tag(source)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .listRowSeparator(.hidden)
+
                 if let errorMessage = viewModel.errorMessage {
                     Text(errorMessage).foregroundStyle(.red)
                 }
 
-                if !viewModel.searchResults.isEmpty {
-                    Section("Search Results") {
-                        ForEach(viewModel.searchResults) { summary in
-                            searchResultRow(summary)
+                if viewModel.source == .huggingFace {
+                    if !viewModel.searchResults.isEmpty {
+                        Section("Search Results") {
+                            ForEach(viewModel.searchResults) { summary in
+                                searchResultRow(summary)
+                            }
+                        }
+                    }
+                } else {
+                    HStack {
+                        TextField("Search CivitAI checkpoints…", text: $viewModel.civitaiQuery)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Search") { Task { await viewModel.searchCivitAI() } }
+                    }
+                    if !viewModel.civitaiResults.isEmpty {
+                        Section("Search Results") {
+                            ForEach(viewModel.civitaiResults) { summary in
+                                civitaiResultRow(summary)
+                            }
                         }
                     }
                 }
@@ -35,13 +58,14 @@ struct ModelsView: View {
                     }
                 }
             }
-            .searchable(text: $viewModel.query, prompt: "Search Hugging Face models…")
+            .conditionallySearchable(isEnabled: viewModel.source == .huggingFace, text: $viewModel.query)
             .onSubmit(of: .search) { Task { await viewModel.search() } }
             .navigationTitle("Models")
             .overlay {
                 if viewModel.isSearching { ProgressView() }
             }
             .task { await viewModel.loadRegistry() }
+            .dismissKeyboardOnTap()
         }
     }
 
@@ -67,17 +91,45 @@ struct ModelsView: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            if viewModel.activeDownloadRepoID == summary.modelID {
-                if let progress = viewModel.downloadProgress {
-                    ProgressView(value: progress).frame(width: 60)
-                } else {
-                    ProgressView().controlSize(.small)
+            downloadControl(id: "hf:\(summary.modelID)") { Task { await viewModel.download(summary) } }
+        }
+    }
+
+    private func civitaiResultRow(_ summary: CivitAIModelSummary) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(summary.name).font(.headline)
+                HStack(spacing: 6) {
+                    Text(summary.type)
+                    if let baseModel = summary.baseModel {
+                        Text("· \(baseModel)")
+                    }
+                    if let bytes = summary.primaryFile?.sizeBytes {
+                        Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+                    }
                 }
-            } else {
-                Button("Download") { Task { await viewModel.download(summary) } }
-                    .disabled(viewModel.isDownloading)
-                    .buttonStyle(.bordered)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
+            Spacer()
+            downloadControl(id: "civitai:\(summary.id)", disabled: summary.primaryFile == nil) {
+                Task { await viewModel.download(summary) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func downloadControl(id: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
+        if viewModel.activeDownloadID == id {
+            if let progress = viewModel.downloadProgress {
+                ProgressView(value: progress).frame(width: 60)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        } else {
+            Button("Download", action: action)
+                .disabled(viewModel.isDownloading || disabled)
+                .buttonStyle(.bordered)
         }
     }
 
@@ -98,6 +150,22 @@ struct ModelsView: View {
         }
         .swipeActions {
             Button("Delete", role: .destructive) { Task { await viewModel.delete(entry) } }
+        }
+    }
+}
+
+private extension View {
+    /// `.searchable` always shows a search field even when it's meant
+    /// for a different source (CivitAI has its own inline field
+    /// instead, since binding `.searchable` conditionally isn't
+    /// directly supported) — toggling it off avoids two search fields
+    /// showing at once.
+    @ViewBuilder
+    func conditionallySearchable(isEnabled: Bool, text: Binding<String>) -> some View {
+        if isEnabled {
+            self.searchable(text: text, prompt: "Search Hugging Face models…")
+        } else {
+            self
         }
     }
 }

@@ -16,22 +16,34 @@ import Observation
 @Observable
 @MainActor
 final class ModelsViewModel {
+    enum Source: String, CaseIterable, Identifiable {
+        case huggingFace = "Hugging Face"
+        case civitai = "CivitAI"
+        var id: String { rawValue }
+    }
+
+    var source: Source = .huggingFace
     var query = ""
     var searchResults: [HFModelSummary] = []
+    var civitaiQuery = ""
+    var civitaiResults: [CivitAIModelSummary] = []
     var registeredModels: [ModelEntry] = []
     var isSearching = false
     var errorMessage: String?
 
-    var activeDownloadRepoID: String?
+    var activeDownloadID: String?
     var downloadProgress: Double?
-    var isDownloading: Bool { activeDownloadRepoID != nil }
+    var isDownloading: Bool { activeDownloadID != nil }
 
     private let catalog = HuggingFaceCatalog()
+    private let civitaiCatalog = CivitAICatalog()
     private let registry = ModelRegistry()
     private let downloader: HFRepoDownloader
+    private let civitaiDownloader: CivitAIDownloader
 
     init() {
         downloader = HFRepoDownloader(registry: registry)
+        civitaiDownloader = CivitAIDownloader(registry: registry)
     }
 
     func loadRegistry() async {
@@ -56,6 +68,19 @@ final class ModelsViewModel {
         }
     }
 
+    func searchCivitAI() async {
+        let trimmed = civitaiQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        errorMessage = nil
+        isSearching = true
+        defer { isSearching = false }
+        do {
+            civitaiResults = try await civitaiCatalog.search(query: trimmed)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func download(_ summary: HFModelSummary) async {
         guard !isDownloading else { return }
         guard let filePaths = summary.filePaths, !filePaths.isEmpty else {
@@ -63,12 +88,29 @@ final class ModelsViewModel {
             return
         }
         errorMessage = nil
-        activeDownloadRepoID = summary.modelID
+        activeDownloadID = "hf:\(summary.modelID)"
         downloadProgress = 0
-        defer { activeDownloadRepoID = nil; downloadProgress = nil }
+        defer { activeDownloadID = nil; downloadProgress = nil }
 
         do {
             _ = try await downloader.download(repoID: summary.modelID, filePaths: filePaths) { [weak self] progress in
+                Task { @MainActor in self?.downloadProgress = progress }
+            }
+            await loadRegistry()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func download(_ summary: CivitAIModelSummary) async {
+        guard !isDownloading else { return }
+        errorMessage = nil
+        activeDownloadID = "civitai:\(summary.id)"
+        downloadProgress = 0
+        defer { activeDownloadID = nil; downloadProgress = nil }
+
+        do {
+            _ = try await civitaiDownloader.download(summary) { [weak self] progress in
                 Task { @MainActor in self?.downloadProgress = progress }
             }
             await loadRegistry()
