@@ -96,6 +96,7 @@ struct NativeChatView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                        exportMenu
                         Button { isSettingsPresented = true } label: { Image(systemName: "slider.horizontal.3") }
                         Button { newChat() } label: { Image(systemName: "square.and.pencil") }
                             .disabled(isGenerating)
@@ -144,6 +145,27 @@ struct NativeChatView: View {
                 }
             }
         }
+    }
+
+    /// Copy or share the current conversation as Markdown — same
+    /// `TranscriptFormatter` (cross-platform) the Mac app's "Copy All"/
+    /// "Export…" buttons use.
+    private var exportMenu: some View {
+        let markdown = TranscriptFormatter.markdown(
+            modelName: threads.currentThread.title, messages: threads.currentThread.messages)
+        return Menu {
+            Button {
+                UIPasteboard.general.string = markdown
+            } label: {
+                Label("Copy Transcript", systemImage: "doc.on.doc")
+            }
+            ShareLink(item: markdown, preview: SharePreview(threads.currentThread.title)) {
+                Label("Share…", systemImage: "square.and.arrow.up")
+            }
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+        }
+        .disabled(threads.currentThread.messages.isEmpty)
     }
 
     /// Generation parameters — same fields the Mac app's Chat sidebar
