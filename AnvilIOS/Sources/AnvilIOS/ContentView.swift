@@ -15,6 +15,8 @@ struct ContentView: View {
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
             NativeImageView()
                 .tabItem { Label("Images", systemImage: "photo") }
+            ProfilesView()
+                .tabItem { Label("Profiles", systemImage: "person.text.rectangle") }
         }
     }
 }

@@ -16,11 +16,13 @@ import SwiftUI
 @main
 struct AnvilIOSApp: App {
     @State private var modelsViewModel = ModelsViewModel()
+    @State private var profilesViewModel = ProfilesViewModel()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(modelsViewModel)
+                .environment(profilesViewModel)
         }
     }
 }

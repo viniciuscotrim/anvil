@@ -33,7 +33,11 @@ final class NativeChatEngine: ObservableObject {
 
     var isLoaded: Bool { session != nil }
 
-    func load(modelID: String) async {
+    /// `instructions`, when given, becomes the session's system prompt —
+    /// a registered model's default `ChatProfile`, the same "loading
+    /// this model applies its bound profile automatically" behavior the
+    /// Mac app's `ChatViewModel` gives.
+    func load(modelID: String, instructions: String? = nil) async {
         guard !isLoading else { return }
         errorMessage = nil
         isLoading = true
@@ -45,7 +49,7 @@ final class NativeChatEngine: ObservableObject {
             let container = try await #huggingFaceLoadModelContainer(configuration: configuration) { [weak self] progress in
                 Task { @MainActor in self?.loadProgress = progress.fractionCompleted }
             }
-            session = ChatSession(container)
+            session = ChatSession(container, instructions: instructions)
             loadedModelID = modelID
         } catch {
             errorMessage = error.localizedDescription

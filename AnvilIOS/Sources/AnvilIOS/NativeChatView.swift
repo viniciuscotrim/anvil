@@ -9,11 +9,17 @@ import AnvilCore
 /// downloaded in the Models tab from the menu next to it.
 struct NativeChatView: View {
     @Environment(ModelsViewModel.self) private var modelsViewModel
+    @Environment(ProfilesViewModel.self) private var profilesViewModel
     @StateObject private var engine = NativeChatEngine()
     @State private var modelID = "mlx-community/Qwen3-0.6B-4bit"
     @State private var messages: [(isUser: Bool, text: String)] = []
     @State private var inputText = ""
     @State private var isGenerating = false
+    /// Which profile is actually shaping the current, already-loaded
+    /// session — shown, not editable, once loaded: changing profiles
+    /// mid-conversation would mix its instructions with history that
+    /// never saw them. Unload (starting fresh) to pick a different one.
+    @State private var activeProfileName: String?
 
     var body: some View {
         NavigationStack {
@@ -23,6 +29,12 @@ struct NativeChatView: View {
 
                 if let errorMessage = engine.errorMessage {
                     Text(errorMessage).foregroundStyle(.red).font(.caption).padding(8)
+                }
+                if let activeProfileName {
+                    Text("Profile: \(activeProfileName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
                 }
 
                 ScrollViewReader { proxy in
@@ -75,7 +87,11 @@ struct NativeChatView: View {
             }
 
             if engine.isLoaded {
-                Button("Unload") { engine.unload() }
+                Button("Unload") {
+                    engine.unload()
+                    activeProfileName = nil
+                    messages.removeAll()
+                }
             } else if engine.isLoading {
                 if let progress = engine.loadProgress {
                     ProgressView(value: progress).frame(width: 80)
@@ -83,7 +99,7 @@ struct NativeChatView: View {
                     ProgressView().controlSize(.small)
                 }
             } else {
-                Button("Load") { Task { await engine.load(modelID: modelID) } }
+                Button("Load") { Task { await load() } }
             }
         }
         .padding(8)
@@ -110,6 +126,16 @@ struct NativeChatView: View {
                 .disabled(!engine.isLoaded || isGenerating || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(8)
+    }
+
+    /// Looks up this model's bound default profile (if any) — the same
+    /// "loading this model applies its profile automatically" behavior
+    /// the Mac app's Chat gives — and loads with its prompt as the
+    /// session's system instructions.
+    private func load() async {
+        let profile = await profilesViewModel.defaultProfile(forModelID: modelID)
+        activeProfileName = profile?.name
+        await engine.load(modelID: modelID, instructions: profile?.prompt)
     }
 
     private func send() {
