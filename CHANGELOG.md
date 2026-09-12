@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.15] - 2026-09-12
+
+### Changed
+
+- Added the current app version/build number to the top-right global navigation bar.
+- Added `Created by Vinicius Cotrim` attribution to the main app header.
+
 ## [0.5.14] - 2026-09-12
 
 ### Fixed

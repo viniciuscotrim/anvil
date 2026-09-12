@@ -57,10 +57,27 @@ struct RootView: View {
             tabButton("Prompt to Model", screen: .promptToModel)
             tabButton("Code", screen: .code)
             Spacer()
+            VStack(alignment: .trailing, spacing: 1) {
+                Text("v\(appVersion) (build \(buildNumber))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("Created by Vinicius Cotrim")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .multilineTextAlignment(.trailing)
         }
         .padding(.horizontal)
         .padding(.top, 10)
         .padding(.bottom, 6)
+    }
+
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
+
+    private var buildNumber: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "local"
     }
 
     private func tabButton(_ title: String, screen: AppRouter.Screen) -> some View {
