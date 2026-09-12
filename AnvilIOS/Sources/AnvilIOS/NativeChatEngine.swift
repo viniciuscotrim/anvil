@@ -122,6 +122,18 @@ final class NativeChatEngine: ObservableObject {
         return session.streamResponse(to: text)
     }
 
+    /// A one-off, stateless completion using whichever model is already
+    /// loaded — a fresh, throwaway `ChatSession` built from the same
+    /// container, not the ongoing conversation, so it neither pollutes
+    /// nor is affected by chat history. Mirrors the Mac app's Prompt to
+    /// Model feature reusing a loaded text model's `ChatClient.send`
+    /// for a single isolated request instead of going through the
+    /// active thread.
+    func respondOnce(to prompt: String) async throws -> String {
+        guard let container else { throw NativeChatEngineError.notLoaded }
+        return try await ChatSession(container).respond(to: prompt)
+    }
+
     /// Converts a persisted thread's messages into the wire format
     /// `ChatSession`'s history initializer expects. The system prompt
     /// is carried separately via `instructions` rather than as a stored

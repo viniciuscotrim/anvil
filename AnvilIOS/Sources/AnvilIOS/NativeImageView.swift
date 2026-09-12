@@ -7,7 +7,7 @@ import AnvilCore
 /// past lineages, and a detail canvas with a version-history strip once
 /// one is selected.
 struct NativeImageView: View {
-    @StateObject private var engine = NativeImageEngine()
+    @EnvironmentObject private var engine: NativeImageEngine
     @State private var prompt = "a photo of an astronaut riding a horse on the moon"
 
     private let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]

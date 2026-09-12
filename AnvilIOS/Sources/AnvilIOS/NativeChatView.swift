@@ -12,7 +12,7 @@ import AnvilCore
 struct NativeChatView: View {
     @Environment(ModelsViewModel.self) private var modelsViewModel
     @Environment(ProfilesViewModel.self) private var profilesViewModel
-    @StateObject private var engine = NativeChatEngine()
+    @EnvironmentObject private var engine: NativeChatEngine
     @State private var threads = ChatThreadsViewModel()
     @State private var modelID = "mlx-community/Qwen3-0.6B-4bit"
     @State private var inputText = ""

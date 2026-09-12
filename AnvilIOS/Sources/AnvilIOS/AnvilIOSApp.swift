@@ -17,12 +17,21 @@ import SwiftUI
 struct AnvilIOSApp: App {
     @State private var modelsViewModel = ModelsViewModel()
     @State private var profilesViewModel = ProfilesViewModel()
+    /// Owned here (not by `NativeChatView`/`NativeImageView` themselves)
+    /// so Prompt to Model can drive the very same loaded text/image
+    /// models Chat and Images already hold — one resident model per
+    /// kind, shared across tabs, matching `AppState`'s
+    /// `ModelSessionManager`/`ImageSessionManager` singletons on macOS.
+    @StateObject private var chatEngine = NativeChatEngine()
+    @StateObject private var imageEngine = NativeImageEngine()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(modelsViewModel)
                 .environment(profilesViewModel)
+                .environmentObject(chatEngine)
+                .environmentObject(imageEngine)
         }
     }
 }
