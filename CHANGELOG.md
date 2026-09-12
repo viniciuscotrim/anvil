@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.14] - 2026-09-12
+
+### Fixed
+
+- Fixed model switching in Chat and Code through the gateway for local/imported models.
+- Registry IDs remain route selectors but are no longer forwarded to `mlx-lm` as Hugging Face repo IDs.
+
 ## [0.5.13] - 2026-09-12
 
 ### Added

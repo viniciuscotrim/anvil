@@ -166,7 +166,7 @@ public actor OpenAIGateway {
     private func forward(_ request: IncomingRequest, to endpoint: URL, over connection: NWConnection) async throws {
         var urlRequest = URLRequest(url: endpoint.appendingPathComponent(request.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))))
         urlRequest.httpMethod = request.method
-        urlRequest.httpBody = request.body
+        urlRequest.httpBody = upstreamBody(for: request)
         urlRequest.timeoutInterval = 1800
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let accept = request.headers["accept"] { urlRequest.setValue(accept, forHTTPHeaderField: "Accept") }
@@ -189,6 +189,19 @@ public actor OpenAIGateway {
         var header = "HTTP/1.1 \(http.statusCode) \(HTTPURLResponse.localizedString(forStatusCode: http.statusCode))\r\nContent-Type: \(http.value(forHTTPHeaderField: "Content-Type") ?? "application/json")\r\nContent-Length: \(data.count)\r\nConnection: close\r\n\r\n"
         if header.isEmpty { header = "HTTP/1.1 502 Bad Gateway\r\n\r\n" }
         try await send(connection, data: Data(header.utf8) + data)
+    }
+
+    /// The gateway uses the caller's model ID to select a resident route.
+    /// The per-model mlx-lm process, however, only knows its own model as
+    /// `default_model`; forwarding a local/imported registry ID makes it
+    /// parse that ID as a Hugging Face repo and fail with a repo-format error.
+    private func upstreamBody(for request: IncomingRequest) -> Data {
+        guard let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
+            return request.body
+        }
+        var rewritten = object
+        rewritten["model"] = "default_model"
+        return (try? JSONSerialization.data(withJSONObject: rewritten)) ?? request.body
     }
 
     private func bytesWithRetry(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
