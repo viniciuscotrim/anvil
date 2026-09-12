@@ -32,13 +32,14 @@ struct ModelSearchView: View {
 
                 downloadsInProgressSection
 
-                if viewModel.source == .huggingFace {
+                switch viewModel.source {
+                case .huggingFace:
                     resultsSection(
                         results: viewModel.filteredSearchResults,
                         rawCount: viewModel.searchResults.count,
                         row: searchResultRow
                     )
-                } else {
+                case .civitai:
                     resultsSection(
                         results: viewModel.filteredCivitAIResults,
                         rawCount: viewModel.civitaiResults.count,
@@ -46,6 +47,16 @@ struct ModelSearchView: View {
                     )
                     Text("CivitAI checkpoints download and register, but only the built-in "
                         + "SDXL Turbo can be used for generation today — see the Images tab.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .drawThings:
+                    resultsSection(
+                        results: viewModel.filteredDrawThingsResults,
+                        rawCount: viewModel.drawThingsResults.count,
+                        row: drawThingsResultRow
+                    )
+                    Text("Draw Things checkpoints download and register, but iOS has no libnnc "
+                        + "runtime — nothing here can be loaded on-device yet.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -75,7 +86,11 @@ struct ModelSearchView: View {
     }
 
     private var searchPrompt: String {
-        viewModel.source == .huggingFace ? "Search Hugging Face models…" : "Search CivitAI checkpoints…"
+        switch viewModel.source {
+        case .huggingFace: return "Search Hugging Face models…"
+        case .civitai: return "Search CivitAI checkpoints…"
+        case .drawThings: return "Search Draw Things models…"
+        }
     }
 
     /// `viewModel` is a class, so every mutation here writes straight
@@ -181,6 +196,35 @@ struct ModelSearchView: View {
             }
             Spacer()
             resultDownloadButton(for: .civitai(summary), disabled: summary.primaryFile == nil) {
+                viewModel.download(summary)
+            }
+        }
+    }
+
+    private func drawThingsResultRow(_ summary: DrawThingsModelSummary) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(summary.name).font(.headline)
+                HStack(spacing: 6) {
+                    if let baseModel = summary.baseModel {
+                        Text(baseModel)
+                    }
+                    if let quantization = summary.quantization {
+                        Text("· \(quantization)")
+                    }
+                    if let downloads = summary.downloads {
+                        Text("· \(downloads) downloads")
+                    }
+                    if let bytes = summary.sizeBytes {
+                        Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+                        Text("· \(ModelSizeClass.classify(sizeBytes: bytes).label)")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+            resultDownloadButton(for: .drawThings(summary), disabled: false) {
                 viewModel.download(summary)
             }
         }

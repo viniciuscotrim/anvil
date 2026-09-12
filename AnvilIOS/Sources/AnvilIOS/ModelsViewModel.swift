@@ -28,11 +28,13 @@ extension HFModelSummary {
 enum DownloadJob: Identifiable, Equatable {
     case huggingFace(HFModelSummary)
     case civitai(CivitAIModelSummary)
+    case drawThings(DrawThingsModelSummary)
 
     var id: String {
         switch self {
         case .huggingFace(let summary): return "hf:\(summary.modelID)"
         case .civitai(let summary): return "civitai:\(summary.id)"
+        case .drawThings(let summary): return "drawthings:\(summary.id)"
         }
     }
 
@@ -40,6 +42,7 @@ enum DownloadJob: Identifiable, Equatable {
         switch self {
         case .huggingFace(let summary): return summary.modelID
         case .civitai(let summary): return summary.name
+        case .drawThings(let summary): return summary.name
         }
     }
 }
@@ -70,19 +73,21 @@ final class ModelsViewModel {
     enum Source: String, CaseIterable, Identifiable {
         case huggingFace = "Hugging Face"
         case civitai = "CivitAI"
+        case drawThings = "Draw Things"
         var id: String { rawValue }
     }
 
-    /// A single search field shared by both sources — switching sources
+    /// A single search field shared by all sources — switching sources
     /// clears it along with whatever results were showing, rather than
-    /// leaving a CivitAI query sitting behind an HF-labeled field or
-    /// vice versa.
+    /// leaving a previous source's query sitting behind a differently-
+    /// labeled field.
     var source: Source = .huggingFace {
         didSet {
             guard source != oldValue else { return }
             query = ""
             searchResults = []
             civitaiResults = []
+            drawThingsResults = []
             errorMessage = nil
         }
     }
@@ -98,6 +103,7 @@ final class ModelsViewModel {
     private var liveSearchTask: Task<Void, Never>?
     var searchResults: [HFModelSummary] = []
     var civitaiResults: [CivitAIModelSummary] = []
+    var drawThingsResults: [DrawThingsModelSummary] = []
     var registeredModels: [ModelEntry] = []
     var isSearching = false
     var errorMessage: String?
@@ -126,9 +132,11 @@ final class ModelsViewModel {
 
     private let catalog = HuggingFaceCatalog()
     private let civitaiCatalog = CivitAICatalog()
+    private let drawThingsCatalog = DrawThingsCatalog()
     private let registry = ModelRegistry()
     private let downloader: HFRepoDownloader
     private let civitaiDownloader: CivitAIDownloader
+    private let drawThingsDownloader: DrawThingsDownloader
     /// Fire-and-forget by design (`download` isn't `async`) so the
     /// caller — a button — doesn't hold the download's `Task` itself;
     /// `pauseDownload()`/`stopDownload()` cancel the one stored here.
@@ -138,6 +146,7 @@ final class ModelsViewModel {
     init() {
         downloader = HFRepoDownloader(registry: registry)
         civitaiDownloader = CivitAIDownloader(registry: registry)
+        drawThingsDownloader = DrawThingsDownloader(registry: registry)
     }
 
     /// What the HF results section actually shows once
@@ -164,6 +173,20 @@ final class ModelsViewModel {
     var filteredCivitAIResults: [CivitAIModelSummary] {
         let filtered = civitaiResults.filter { Self.fitsSizeFilter($0.primaryFile?.sizeBytes, maxSizeClass) }
         return ModelSizeClass.sortedByRunnability(filtered) { $0.primaryFile?.sizeBytes }
+    }
+
+    /// What the Draw Things results section shows, reordered the same
+    /// way. No compatibility toggle here either — `NativeImageEngine`
+    /// only loads diffusers-pipeline (`mflux`-shaped) folders, never
+    /// Draw Things' own `libnnc` checkpoint format, so nothing in this
+    /// source is more "compatible" than another on iOS today (same
+    /// "downloads and registers, can't load yet" honesty the Mac's own
+    /// Draw Things source note gives, just true here for a different
+    /// reason — no runtime for that format at all, not a missing
+    /// single-file loading path).
+    var filteredDrawThingsResults: [DrawThingsModelSummary] {
+        let filtered = drawThingsResults.filter { Self.fitsSizeFilter($0.sizeBytes, maxSizeClass) }
+        return ModelSizeClass.sortedByRunnability(filtered) { $0.sizeBytes }
     }
 
     private static func fitsSizeFilter(_ sizeBytes: Int64?, _ maxSizeClass: ModelSizeClass?) -> Bool {
@@ -207,6 +230,7 @@ final class ModelsViewModel {
         switch source {
         case .huggingFace: await search()
         case .civitai: await searchCivitAI()
+        case .drawThings: await searchDrawThings()
         }
     }
 
@@ -251,6 +275,19 @@ final class ModelsViewModel {
         }
     }
 
+    func searchDrawThings() async {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        errorMessage = nil
+        isSearching = true
+        defer { isSearching = false }
+        do {
+            drawThingsResults = try await drawThingsCatalog.search(query: trimmed)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     /// Not `async` — never simultaneous, from either source; a second
     /// pick while one is already running enqueues instead of starting
     /// it, and the queue drains one at a time as each download finishes
@@ -261,6 +298,10 @@ final class ModelsViewModel {
 
     func download(_ summary: CivitAIModelSummary) {
         enqueueOrStart(.civitai(summary))
+    }
+
+    func download(_ summary: DrawThingsModelSummary) {
+        enqueueOrStart(.drawThings(summary))
     }
 
     private func enqueueOrStart(_ job: DownloadJob) {
@@ -300,6 +341,10 @@ final class ModelsViewModel {
                     _ = try await self.civitaiDownloader.download(summary) { progress in
                         Task { @MainActor in self.downloadProgress = progress }
                     }
+                case .drawThings(let summary):
+                    _ = try await self.drawThingsDownloader.download(summary) { progress in
+                        Task { @MainActor in self.downloadProgress = progress }
+                    }
                 }
                 await self.loadRegistry()
             } catch is CancellationError {
@@ -309,6 +354,8 @@ final class ModelsViewModel {
                         try? FileManager.default.removeItem(at: HFRepoDownloader.destinationDirectory(forRepoID: summary.modelID))
                     case .civitai(let summary):
                         try? FileManager.default.removeItem(at: CivitAIDownloader.destinationDirectory(for: summary))
+                    case .drawThings(let summary):
+                        try? FileManager.default.removeItem(at: DrawThingsDownloader.destinationDirectory(for: summary))
                     }
                 }
                 // Paused (not deleted): nothing else to do — the partial
