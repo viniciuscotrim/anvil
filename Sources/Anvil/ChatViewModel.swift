@@ -33,6 +33,7 @@ final class ChatViewModel: ObservableObject {
     @Published var currentThread: ChatThread
     @Published private(set) var allThreads: [ChatThread] = []
     @Published private(set) var availableProfiles: [ChatProfile] = []
+    @Published private(set) var memories: [ChatMemory] = []
     @Published private(set) var isTemporaryModeActive = false
     @Published var selectedModelID: String?
     @Published var inputText: String = ""
@@ -57,8 +58,10 @@ final class ChatViewModel: ObservableObject {
     private let imageSessions: ImageSessionManager
     private let generatedImageStore: GeneratedImageStore
     private let profileStore: ChatProfileStore
+    private let memoryStore: ChatMemoryStore
     private let modelRegistry: ModelRegistry
     private let requirements: RequirementsManager
+    private let contextBuilder = ChatContextBuilder()
     private let client = ChatClient()
     private let imageClient = ImageClient()
     private var threadBeforeTemporaryMode: ChatThread?
@@ -88,6 +91,7 @@ final class ChatViewModel: ObservableObject {
         imageSessions: ImageSessionManager,
         generatedImageStore: GeneratedImageStore,
         profileStore: ChatProfileStore,
+        memoryStore: ChatMemoryStore,
         modelRegistry: ModelRegistry,
         requirements: RequirementsManager
     ) {
@@ -96,6 +100,7 @@ final class ChatViewModel: ObservableObject {
         self.imageSessions = imageSessions
         self.generatedImageStore = generatedImageStore
         self.profileStore = profileStore
+        self.memoryStore = memoryStore
         self.modelRegistry = modelRegistry
         self.requirements = requirements
         self.currentThread = ChatThread()
@@ -121,6 +126,7 @@ final class ChatViewModel: ObservableObject {
         let temporary = temporaryThreads.values.sorted { $0.updatedAt > $1.updatedAt }
         allThreads = temporary + savedThreads.filter { temporaryThreads[$0.id] == nil }
         availableProfiles = await profileStore.all()
+        memories = await memoryStore.all()
         if !hasLoadedInitialState {
             currentThread = allThreads.first ?? ChatThread()
             hasLoadedInitialState = true
@@ -162,6 +168,18 @@ final class ChatViewModel: ObservableObject {
     func setProfile(_ profile: ChatProfile?) {
         guard canChangeProfile else { return }
         currentThread.profileID = profile?.id
+    }
+
+    func addMemory(_ content: String) async {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        _ = try? await memoryStore.upsert(ChatMemory(content: trimmed))
+        memories = await memoryStore.all()
+    }
+
+    func deleteMemory(_ memory: ChatMemory) async {
+        try? await memoryStore.delete(id: memory.id)
+        memories = await memoryStore.all()
     }
 
     /// Applies `modelID`'s default profile to the current thread only
@@ -353,7 +371,8 @@ final class ChatViewModel: ObservableObject {
             hasAnyImageModel = !registeredImageModels.isEmpty
         }
         let tools: [ChatTool] = hasAnyImageModel ? [.generateImage] : []
-        let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty)
+        let context = contextBuilder.build(messages: currentThread.messages, memories: memories)
+        let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty, memoryPrompt: context.memoryPrompt)
         let responderName = activeProfile?.name
 
         isSending = true
@@ -364,7 +383,8 @@ final class ChatViewModel: ObservableObject {
                 modelDisplayName: modelDisplayName,
             responderName: responderName,
                 tools: tools,
-                systemPrompt: systemPrompt
+                systemPrompt: systemPrompt,
+                contextMessages: context.messages
             )
             guard let self else { return }
             self.isSending = false
@@ -385,7 +405,8 @@ final class ChatViewModel: ObservableObject {
         modelDisplayName: String,
         responderName: String?,
         tools: [ChatTool],
-        systemPrompt: String?
+        systemPrompt: String?,
+        contextMessages: [ChatMessage]
     ) async {
         do {
             currentThread.messages.append(ChatMessage(
@@ -395,7 +416,7 @@ final class ChatViewModel: ObservableObject {
                 responderName: responderName
             ))
             let replyIndex = currentThread.messages.count - 1
-            let historyForRequest = Array(currentThread.messages.dropLast())
+            let historyForRequest = Array(contextMessages.dropLast())
             let stream = client.streamSend(
                 messages: historyForRequest,
                 baseURL: endpoint,
@@ -431,8 +452,9 @@ final class ChatViewModel: ObservableObject {
                 generationPhase = .generatingImage
                 let (toolResult, generatedPath) = await runGenerateImageTool(toolCall)
                 currentThread.messages.append(toolResult)
+                let followUpContext = contextBuilder.build(messages: currentThread.messages, memories: memories)
                 let followUpStream = client.streamSend(
-                    messages: currentThread.messages,
+                    messages: followUpContext.messages,
                     baseURL: endpoint,
                     model: idForEndpoint(endpoint, modelID: selectedModelID),
                     modelDisplayName: modelDisplayName,
@@ -509,13 +531,16 @@ final class ChatViewModel: ObservableObject {
     /// asked for an image — a real bug found in testing: without this,
     /// some local models called `generate_image` on nearly every
     /// message, tool or not.
-    private func composedSystemPrompt(offeringTools: Bool) -> String? {
+    private func composedSystemPrompt(offeringTools: Bool, memoryPrompt: String? = nil) -> String? {
         var parts: [String] = []
         if let prompt = activeProfile?.prompt.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
             parts.append(prompt)
         }
         if offeringTools {
             parts.append(ChatTool.generateImageUsageDiscipline)
+        }
+        if let memoryPrompt, !memoryPrompt.isEmpty {
+            parts.append(memoryPrompt)
         }
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }

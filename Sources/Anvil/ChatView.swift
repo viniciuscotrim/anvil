@@ -10,6 +10,7 @@ struct ChatView: View {
     @EnvironmentObject private var sessions: ModelSessionManager
     @EnvironmentObject private var chat: ChatViewModel
     @Environment(\.openWindow) private var openWindow
+    @State private var newMemoryText = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -332,6 +333,33 @@ struct ChatView: View {
                     get: { chat.hideReasoning },
                     set: { chat.hideReasoning = $0 }
                 ))
+            }
+
+            Section("Memory") {
+                TextField("Add a durable fact or preference…", text: $newMemoryText, axis: .vertical)
+                    .lineLimit(2...4)
+                Button {
+                    let text = newMemoryText
+                    newMemoryText = ""
+                    Task { await chat.addMemory(text) }
+                } label: {
+                    Label("Remember", systemImage: "plus.circle")
+                }
+                .disabled(newMemoryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                ForEach(chat.memories) { memory in
+                    HStack(alignment: .top, spacing: 6) {
+                        Text(memory.content)
+                            .font(.caption)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button {
+                            Task { await chat.deleteMemory(memory) }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
             }
 
             Section("Composer") {

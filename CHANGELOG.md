@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.10] - 2026-09-12
+
+### Added
+
+- Offline durable memory store at `Application Support/Anvil/chats/memories.json`.
+- Chat sidebar controls to add and delete durable facts/preferences.
+- Bounded context builder preserving the first user turn and recent turns.
+- Durable memories are injected as background facts alongside the Profile prompt.
+- Image-tool follow-up requests use the same bounded context policy.
+
 ## [0.5.9] - 2026-09-12
 
 ### Fixed
