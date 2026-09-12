@@ -164,7 +164,7 @@ public actor OpenAIGateway {
         if let accept = request.headers["accept"] { urlRequest.setValue(accept, forHTTPHeaderField: "Accept") }
 
         if request.headers["accept"]?.contains("text/event-stream") == true {
-            let (bytes, response) = try await URLSession.shared.bytes(for: urlRequest)
+            let (bytes, response) = try await bytesWithRetry(for: urlRequest)
             guard let http = response as? HTTPURLResponse else {
                 throw ServingError.requestFailed("invalid upstream response")
             }
@@ -176,11 +176,35 @@ public actor OpenAIGateway {
             return
         }
 
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
+        let (data, response) = try await dataWithRetry(for: urlRequest)
         guard let http = response as? HTTPURLResponse else { throw ServingError.requestFailed("invalid upstream response") }
         var header = "HTTP/1.1 \(http.statusCode) \(HTTPURLResponse.localizedString(forStatusCode: http.statusCode))\r\nContent-Type: \(http.value(forHTTPHeaderField: "Content-Type") ?? "application/json")\r\nContent-Length: \(data.count)\r\nConnection: close\r\n\r\n"
         if header.isEmpty { header = "HTTP/1.1 502 Bad Gateway\r\n\r\n" }
         try await send(connection, data: Data(header.utf8) + data)
+    }
+
+    private func bytesWithRetry(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do { return try await URLSession.shared.bytes(for: request) }
+            catch {
+                lastError = error
+                if attempt < 2 { try? await Task.sleep(nanoseconds: 200_000_000) }
+            }
+        }
+        throw lastError ?? ServingError.requestFailed("upstream connection failed")
+    }
+
+    private func dataWithRetry(for request: URLRequest) async throws -> (Data, URLResponse) {
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do { return try await URLSession.shared.data(for: request) }
+            catch {
+                lastError = error
+                if attempt < 2 { try? await Task.sleep(nanoseconds: 200_000_000) }
+            }
+        }
+        throw lastError ?? ServingError.requestFailed("upstream connection failed")
     }
 
     private func sendJSON(_ connection: NWConnection, status: Int, payload: [String: String]) async throws {

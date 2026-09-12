@@ -188,7 +188,9 @@ public struct ChatClient: Sendable {
                     }
                     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                        throw ServingError.requestFailed("HTTP \(statusCode)")
+                        var errorBody = ""
+                        for try await line in bytes.lines { errorBody += line }
+                        throw ServingError.requestFailed("HTTP \(statusCode): \(errorBody)")
                     }
 
                     var contentSoFar = ""

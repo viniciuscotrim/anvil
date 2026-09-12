@@ -127,20 +127,21 @@ public actor LLMServer {
     private func waitUntilReady(process: Process, timeout: TimeInterval = 60) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         let modelsURL = baseURL.appendingPathComponent("v1/models")
+        var sawStartupMarker = false
 
         while Date() < deadline {
             if !process.isRunning {
                 throw ServingError.serverFailedToStart(failureDetail("process exited before becoming ready"))
             }
             if outputTail.containsAny(["application startup complete", "uvicorn running on", "listening on"]) {
-                return
+                sawStartupMarker = true
             }
             if let (_, response) = try? await URLSession.shared.data(from: modelsURL),
                let http = response as? HTTPURLResponse,
                (200..<300).contains(http.statusCode) {
                 return
             }
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: sawStartupMarker ? 100_000_000 : 300_000_000)
         }
         throw ServingError.serverFailedToStart(failureDetail("timed out waiting for the server to become ready"))
     }

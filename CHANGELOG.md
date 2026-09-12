@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.4] - 2026-09-12
+
+### Fixed
+
+- Prevented model routes from becoming ready before `/v1/models` responds.
+- Added transient upstream retries in the local gateway.
+- Chat errors now include the upstream response body, making Profile/template failures diagnosable.
+
 ## [0.5.3] - 2026-09-12
 
 ### Fixed
