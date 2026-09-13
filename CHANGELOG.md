@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.15.1-history-without-model] - 2026-09-13
+
+### Fixed
+- **Mac's Chat couldn't show a past conversation at all unless some
+  model was currently loaded**: reported live — "faça o histórico das
+  conversas estar disponível pra ler e navegar mesmo sem um modelo
+  carregado, hoje sou obrigado, mas com o histórico na núvem não faz
+  sentido" (make chat history available to read and navigate even
+  without a model loaded — today I'm forced to, but with history in
+  the cloud it doesn't make sense). `ChatView`'s whole message area
+  swapped to a blanket "No models loaded" placeholder whenever
+  `ModelSessionManager.readySessions` was empty, hiding
+  `chat.visibleMessages` entirely even for a conversation that already
+  had plenty of saved messages to read — the threads column and
+  `selectThread` never needed a model at all, only the placeholder
+  covering the actual transcript did. Now the transcript itself always
+  shows first whenever the current thread has any messages; the "no
+  models loaded" placeholder only appears for a genuinely empty
+  thread. Sending a new message still correctly requires a loaded
+  model (the input bar's own `.disabled` was never part of this bug).
+  iOS's own `NativeChatView` already showed `threads.currentThread
+  .messages` unconditionally, so it needed no change.
+
 ## [0.15.0-memory-model-picker] - 2026-09-13
 
 ### Added

@@ -40,15 +40,26 @@ struct ChatView: View {
                     header
                     Divider()
 
-                    if sessions.readySessions.isEmpty {
+                    if !chat.visibleMessages.isEmpty {
+                        // Reading and navigating a past conversation
+                        // never needed a model loaded on disk — only
+                        // sending a *new* message does (the input bar
+                        // below already gates that on its own). Now
+                        // that history syncs through iCloud too,
+                        // requiring the last-used model to still be
+                        // loaded just to look at it stopped making
+                        // sense: reported live — "hoje sou obrigado,
+                        // mas com o histórico na núvem não faz
+                        // sentido" (today I'm forced to, but with
+                        // history in the cloud it doesn't make sense).
+                        messageList
+                    } else if sessions.readySessions.isEmpty {
                         emptyState
-                    } else if chat.visibleMessages.isEmpty {
+                    } else {
                         Spacer()
                         Text("Say something to \(activeModelName).")
                             .foregroundStyle(.secondary)
                         Spacer()
-                    } else {
-                        messageList
                     }
 
                     if let error = chat.errorMessage {

@@ -9,9 +9,24 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.15.0-memory-model-picker (Choose the Memory Digest's Model)
+## Current release: 0.15.1-history-without-model (Read Chat History Without a Model Loaded)
 
-Requested live: "vamos criar dentro do menu de Memórias a seleção do
+Requested live: "faça o histórico das conversas estar disponível pra
+ler e navegar mesmo sem um modelo carregado, hoje sou obrigado, mas
+com o histórico na núvem não faz sentido" (make chat history readable
+and navigable even without a model loaded — today I'm forced to, but
+with history in the cloud it doesn't make sense). Mac's `ChatView`
+used to hide a conversation's entire transcript behind a "No models
+loaded" placeholder whenever nothing was resident, even for a thread
+already full of saved messages — the threads column itself never
+needed a model, only the placeholder covering the actual messages did.
+Now the transcript always shows first when the current thread has any
+messages; sending a new one still correctly requires a model loaded.
+iOS never had this bug. See "Reading chat history without a model
+loaded" below.
+
+It follows 0.15.0-memory-model-picker's own Memory-screen model
+picker, requested live: "vamos criar dentro do menu de Memórias a seleção do
 modelo que vai ser utilizado pra fazer as sugestões" — a Memory-screen
 picker for which model runs "Suggest from Thread", offering every
 registered text model, not just a loaded one ("não apenas os modelos
@@ -67,7 +82,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.15.0-memory-model-picker`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.15.1-history-without-model`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1152,6 +1167,62 @@ what that means:
 
 Mac (`ChatViewModel`/`MemoryView`) and iOS
 (`ChatThreadsViewModel`/`MemoryView`) both.
+
+## Reading chat history without a model loaded
+
+Requested live: "faça o histórico das conversas estar disponível pra
+ler e navegar mesmo sem um modelo carregado, hoje sou obrigado, mas
+com o histórico na núvem não faz sentido" — make chat history
+available to read and navigate even without a model loaded; today
+that's forced, but with history syncing through iCloud it doesn't make
+sense to require it.
+
+Mac's `ChatView` gated its *entire* message area on
+`ModelSessionManager.readySessions` being non-empty:
+
+```swift
+if sessions.readySessions.isEmpty {
+    emptyState   // "No models loaded — load a model from the Models tab first."
+} else if chat.visibleMessages.isEmpty {
+    …
+} else {
+    messageList
+}
+```
+
+That check made sense for "can this conversation still be replied
+to," but it was also the *only* condition deciding whether
+`messageList` (i.e. `chat.visibleMessages`) rendered at all — so
+opening an old, fully-populated thread while no model happened to be
+loaded (a common state now: the app doesn't auto-load anything at
+launch, and iCloud sync means every synced conversation is browsable
+long before its original model is ever loaded on this Mac) replaced
+the whole transcript with a placeholder, as if the messages didn't
+exist. The threads column and `ChatViewModel.selectThread` never
+touched `readySessions` at all — nothing about navigating between
+conversations ever needed a model resident; only this one placeholder
+did.
+
+Reordered so the transcript takes priority whenever there's anything
+to show:
+
+```swift
+if !chat.visibleMessages.isEmpty {
+    messageList
+} else if sessions.readySessions.isEmpty {
+    emptyState
+} else {
+    …
+}
+```
+
+The "no models loaded" placeholder now only appears for a genuinely
+empty thread — the state it actually describes. Sending a *new*
+message still correctly requires a loaded model: the input bar's own
+`.disabled(sessions.readySessions.isEmpty)` was never part of this bug
+and needed no change. iOS's `NativeChatView` already rendered
+`threads.currentThread.messages` unconditionally, so it never had this
+problem in the first place.
 
 ## Architecture
 
