@@ -1,6 +1,29 @@
 # Changelog
 
-## [0.12.0-ios-gguf] - 2026-09-13
+## [0.12.1] - 2026-09-13
+
+### Fixed
+- **A "20KB instead of 8GB" download**, reported live on iOS: a
+  Hugging Face resolve URL can answer `200 OK` with a small HTML/JSON
+  body instead of the real file (a gated repo without proper access is
+  the common case) — the existing HTTP-status check alone can't catch
+  that, since the status is genuinely a success. `URLDownloader` (used
+  by both the iOS Hugging Face downloader and CivitAI's, Mac included)
+  now also compares the finished download's real size on disk against
+  the server's own declared `Content-Length`, failing clearly instead
+  of silently accepting a mismatched file as the real thing.
+- **A GGUF repo's "Download" button could try to pull every
+  quantization at once**: a repo search result's file list is *every*
+  file in the repo, and `HFRepoDownloader` downloads whatever list it's
+  given in full — for a repo shipping ten-plus multi-gigabyte `.gguf`
+  variants (a common, real shape; the reported repo had 24), one tap
+  meant attempting 100GB+, not the one file actually wanted. iOS's
+  Models tab now shows a picker (file name + real size, fetched from
+  Hugging Face's own repo-tree API) whenever a result has more than one
+  `.gguf` file, and downloads only the one chosen. A repo with zero or
+  one `.gguf` file is unaffected. (The Mac app's Model Manager has the
+  same underlying gap — not fixed in this pass, since the report was
+  iOS-specific; worth doing as its own follow-up.)
 
 ### Added
 - **GGUF/llama.cpp on iOS**: the iPhone can now run GGUF models

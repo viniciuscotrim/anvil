@@ -183,4 +183,60 @@ public struct HuggingFaceCatalog: Sendable {
             throw ModelError.searchFailed("Could not parse Hugging Face response: \(error.localizedDescription)")
         }
     }
+
+    /// Per-file sizes for one repo — `search`/`modelInfo`'s `expand=
+    /// siblings` only ever returns each file's *name*
+    /// (`HFModelSummary.filePaths`), never its size, so a repo with
+    /// several GGUF quantizations (a real, common shape — one repo,
+    /// ten-plus multi-gigabyte files) can't be told apart by size from
+    /// that response alone. The repo tree endpoint
+    /// (`/api/models/{id}/tree/{revision}`) does report one, so callers
+    /// that actually need to show or choose among individual files
+    /// (`GGUFFilePickerView`) hit this instead — kept as its own call
+    /// rather than folded into `modelInfo`, since most callers never
+    /// need per-file sizes and a search result listing dozens of
+    /// repos shouldn't pay for one more request each just in case.
+    public func fileTree(repoID: String, revision: String = "main") async throws -> [HFRepoFile] {
+        guard let encodedRevision = revision.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://huggingface.co/api/models/\(repoID)/tree/\(encodedRevision)") else {
+            throw ModelError.searchFailed("Could not build tree URL for '\(repoID)'")
+        }
+
+        var request = URLRequest(url: url)
+        if let token = HFTokenStore.load(), !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw ModelError.searchFailed("Could not list files for '\(repoID)'")
+        }
+
+        struct TreeEntry: Decodable {
+            let type: String
+            let path: String
+            let size: Int64?
+        }
+        do {
+            let entries = try JSONDecoder().decode([TreeEntry].self, from: data)
+            return entries.filter { $0.type == "file" }.map { HFRepoFile(path: $0.path, sizeBytes: $0.size) }
+        } catch {
+            throw ModelError.searchFailed("Could not parse Hugging Face file list: \(error.localizedDescription)")
+        }
+    }
+}
+
+/// One file in a Hugging Face repo, with its real size — see
+/// `HuggingFaceCatalog.fileTree`'s own doc comment for why this is a
+/// separate call from the search/lookup ones (`HFModelSummary.filePaths`
+/// carries the same repos' file *names* without sizes).
+public struct HFRepoFile: Sendable, Equatable, Identifiable {
+    public var id: String { path }
+    public let path: String
+    public let sizeBytes: Int64?
+
+    public init(path: String, sizeBytes: Int64?) {
+        self.path = path
+        self.sizeBytes = sizeBytes
+    }
 }

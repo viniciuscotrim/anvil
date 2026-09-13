@@ -73,6 +73,34 @@ public enum URLDownloader {
                 return
             }
 
+            // A real, reported failure mode a bare status-code check
+            // above doesn't catch: a gated/licensed Hugging Face repo
+            // the caller isn't (yet) actually entitled to can answer a
+            // multi-gigabyte file's resolve URL with `200 OK` and a
+            // tiny HTML/JSON body (a "request access" or license page)
+            // instead of a 401/403 — reported live as an expected ~8GB
+            // GGUF landing as ~20KB. `countOfBytesExpectedToReceive` is
+            // the server's own declared `Content-Length` for the
+            // response `didFinishDownloadingTo` is actually reporting
+            // on; a known (non-negative — servers that stream without
+            // one, e.g. chunked transfer, report -1, and there's
+            // nothing to check against then) value that doesn't match
+            // what's actually on disk at `location` means the transfer
+            // wasn't really what it claimed to be, whatever the status
+            // code said.
+            let expectedBytes = downloadTask.countOfBytesExpectedToReceive
+            if expectedBytes >= 0 {
+                let actualBytes = (try? FileManager.default.attributesOfItem(atPath: location.path)[.size] as? Int64) ?? nil
+                if let actualBytes, actualBytes != expectedBytes {
+                    resume(.failure(ModelError.downloadFailed(
+                        "Download incomplete: expected \(expectedBytes) bytes but got \(actualBytes). "
+                        + "This can happen when access to a gated model hasn't been granted yet — "
+                        + "check the model's page on huggingface.co for a \"request access\" step."
+                    )))
+                    return
+                }
+            }
+
             let temporaryDestination = FileManager.default.temporaryDirectory
                 .appendingPathComponent("anvil-download-\(UUID().uuidString)")
             do {

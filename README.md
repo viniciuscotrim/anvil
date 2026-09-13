@@ -9,25 +9,27 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.12.0-ios-gguf (GGUF on iOS)
+## Current release: 0.12.1 (Download Fixes: Truncated Files, GGUF Quant Picker)
 
-The iPhone can now run GGUF models on-device — the same runtime family
-the Mac app already had via `llama_cpp.server`, now natively in-process
-on iOS too (no server, no subprocess — same shape as the existing MLX
-path). See "GGUF on iOS" below for the full narrative. iOS-only this
-round; nothing on the Mac side changed, so no new `.dmg` for it.
+Two real download bugs, reported live on a fresh install of the GGUF
+work below: an expected ~8GB GGUF landed as ~20KB (a gated Hugging Face
+repo can answer `200 OK` with a small HTML page instead of the file —
+`URLDownloader` now checks the real size against the server's declared
+one, cross-platform), and a repo shipping many quantizations could try
+to download all of them at once (iOS now shows a picker). See
+"Download fixes" below for the full writeup.
 
-It follows a real app icon on both platforms (Mac `.icns`, iOS
-`AppIcon.appiconset`) and a fix for Z-Image/FLUX.2/Krea-2 models
-loading through mflux's FLUX.1-only pipeline at `0.11.1`, and 0.10.0's
-threads column plus 0.11.0's round of Chat refinements before that.
-Full release history in [CHANGELOG.md](CHANGELOG.md), now caught up
-through `0.7.0`'s download/queue/image-version-history/Prompt-to-Model
-work, the iOS chat/sync parity and iCloud sync fixes that followed it
-(`0.7.x`–`0.9.0`), and the Models tab fixes and CivitAI support at
-`0.8.x`.
+It follows 0.12.0's GGUF/llama.cpp engine on iOS, a real app icon on
+both platforms (Mac `.icns`, iOS `AppIcon.appiconset`), a fix for
+Z-Image/FLUX.2/Krea-2 models loading through mflux's FLUX.1-only
+pipeline at `0.11.1`, and 0.10.0's threads column plus 0.11.0's round
+of Chat refinements before that. Full release history in
+[CHANGELOG.md](CHANGELOG.md), now caught up through `0.7.0`'s download/
+queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
+parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
+the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.11.1` (still the current Mac build — see above). See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.12.1`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -789,6 +791,61 @@ reply is an estimate (elapsed wall-clock time over
 `ChatContextBuilder`'s own token-count guess) rather than a measured
 figure — `LLM.swift` doesn't report one the way `mlx-swift-lm`'s
 `streamDetails` or the Mac app's HTTP servers do.
+
+## Download fixes: truncated files, GGUF quant picker
+
+Reported live, right after shipping GGUF on iOS above: downloading a
+model expected to be ~8GB produced a ~20KB file instead.
+
+**Bug 1 — a "successful" download that wasn't.** `URLDownloader`
+already validated the HTTP status code (a fix from `0.6.7`, for a
+different-but-similar symptom), but a gated Hugging Face repo without
+proper access can answer a file's resolve URL with `200 OK` and a
+small HTML/JSON "request access" body — genuinely a successful HTTP
+response, just not the file. Fixed by also comparing the finished
+download's real size on disk against `URLSessionDownloadTask`'s own
+`countOfBytesExpectedToReceive` (the server's declared `Content-Length`)
+before accepting it; a mismatch fails with a clear message instead of
+silently keeping the wrong bytes. `URLDownloader` is shared by iOS's
+Hugging Face downloader and CivitAI's on both platforms, so this
+covers all of them, not just the reported case.
+
+**Bug 2 — one repo, every quantization at once.** The specific repo
+reported (`DavidAU/Qwen3.5-9B-...-GGUF`) has 27 files: 24 separate
+`.gguf` quantizations (`IQ2_M` through `Q8_0`, plain and "MTP"
+variants) plus a few extras. `HFModelSummary.filePaths` is *every*
+sibling in the repo, and `HFRepoDownloader.download` downloads
+whatever list it's handed, in full — so tapping "Download" on a result
+like this queued an attempt at 100GB+, not the one file actually
+wanted. Likely the bigger real contributor to the reported symptom:
+whatever briefly interrupted the giant combined download (storage
+pressure, a transient network error partway through the *second* file
+in the list) would leave just the tiny first files that happened to
+finish, which is exactly what "way smaller than expected" looks like
+from the user's side.
+
+Fixed with a real picker, not an automatic guess (asked directly:
+auto-pick a sensible default vs. let the user choose — chose to let
+them choose). `ModelsViewModel.beginDownload` checks the result's own
+`.gguf` file count first — a repo with zero or one is unaffected,
+downloads immediately like before. More than one shows a sheet listing
+every `.gguf` file with its real size, fetched from Hugging Face's repo
+*tree* API (`/api/models/{id}/tree/{revision}`) — the search/lookup
+endpoints' `expand=siblings` returns file *names* only, never sizes, so
+this is a separate, on-demand call (`HuggingFaceCatalog.fileTree`),
+not something paid for by every search result. Each row's label is the
+longest common prefix across all the repo's `.gguf` names, trimmed off
+— for this repo that turns "Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-
+NEO-MAX-IQ2_M.gguf" into just "IQ2_M", correct for any quantizer's own
+naming convention rather than a hardcoded pattern. Picking a file
+narrows the download to just that one — a GGUF is self-contained, no
+sibling files needed the way an MLX/diffusers pipeline directory needs
+its whole folder.
+
+The Mac app's Model Manager has the identical "downloads the whole
+`filePaths` list" gap (`ModelManagerViewModel.swift`, same shape) —
+not touched in this pass since the report was iOS-specific, but worth
+the same fix as a follow-up.
 
 ## Architecture
 

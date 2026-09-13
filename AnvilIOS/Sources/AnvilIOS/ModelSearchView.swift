@@ -68,6 +68,16 @@ struct ModelSearchView: View {
                 if viewModel.isSearching { ProgressView() }
             }
             .dismissKeyboardOnTap()
+            // `item:` needs a stable identity to know a sheet is
+            // showing at all, but the sheet's own content (`files`/
+            // `isLoading` filling in once `beginDownload`'s fetch
+            // finishes) reads live from `viewModel.ggufFilePicker`
+            // itself, not this closure's `_` snapshot — a `@Observable`
+            // model, so that keeps updating the sheet even though this
+            // closure only ever runs once per presentation.
+            .sheet(item: $viewModel.ggufFilePicker) { _ in
+                GGUFFilePickerSheet()
+            }
         }
     }
 
@@ -169,7 +179,7 @@ struct ModelSearchView: View {
             }
             Spacer()
             resultDownloadButton(for: .huggingFace(summary), disabled: !summary.isLoadableOnIOS) {
-                viewModel.download(summary)
+                viewModel.beginDownload(summary)
             }
         }
     }
@@ -303,5 +313,96 @@ struct ModelSearchView: View {
             Button("Remove") { viewModel.removeFromQueue(job) }
                 .font(.caption)
         }
+    }
+}
+
+/// Shown instead of downloading immediately whenever a GGUF repo has
+/// more than one `.gguf` file (`ModelsViewModel.beginDownload`'s own
+/// doc comment has the real bug this exists to prevent — grabbing
+/// every quantization at once, not just the one the user wants).
+/// Reads `viewModel.ggufFilePicker` live rather than a value captured
+/// at presentation time, since it starts out `isLoading` and fills in
+/// once `HuggingFaceCatalog.fileTree`'s request finishes.
+private struct GGUFFilePickerSheet: View {
+    @Environment(ModelsViewModel.self) private var viewModel
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let picker = viewModel.ggufFilePicker {
+                    List {
+                        if picker.isLoading {
+                            HStack {
+                                Spacer()
+                                ProgressView("Loading file sizes…")
+                                Spacer()
+                            }
+                        } else if let errorMessage = picker.errorMessage {
+                            Text(errorMessage).foregroundStyle(.red)
+                        } else {
+                            ForEach(picker.files) { file in
+                                fileRow(file, label: Self.label(for: file, among: picker.files))
+                            }
+                        }
+                    }
+                } else {
+                    // Only reachable for the instant between the sheet
+                    // being dismissed and SwiftUI tearing this view
+                    // down — `.sheet(item:)` keeps content alive briefly
+                    // through its dismiss animation.
+                    EmptyView()
+                }
+            }
+            .navigationTitle("Choose a File")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { viewModel.cancelGGUFFilePicker() }
+                }
+            }
+        }
+    }
+
+    private func fileRow(_ file: HFRepoFile, label: String) -> some View {
+        Button {
+            viewModel.downloadSelectedGGUFFile(file)
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label).font(.headline)
+                    Text(file.path).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                if let bytes = file.sizeBytes {
+                    Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The part of `file`'s name that actually distinguishes it from
+    /// its siblings in this same repo (the longest common prefix
+    /// across all of them, trimmed off) — most quantization filenames
+    /// share one long common stem and differ only in a trailing tag
+    /// (`Q4_K_M`, `IQ2_M`, …); showing just that instead of the full
+    /// name makes the real choice ("which quant/size") legible without
+    /// guessing at any particular naming convention.
+    private static func label(for file: HFRepoFile, among files: [HFRepoFile]) -> String {
+        let names = files.map { ($0.path as NSString).deletingPathExtension }
+        guard names.count > 1, var prefix = names.first else {
+            return (file.path as NSString).deletingPathExtension
+        }
+        for name in names.dropFirst() {
+            while !name.hasPrefix(prefix), !prefix.isEmpty {
+                prefix = String(prefix.dropLast())
+            }
+        }
+        let name = (file.path as NSString).deletingPathExtension
+        let suffix = String(name.dropFirst(prefix.count))
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-_ "))
+        return suffix.isEmpty ? name : suffix
     }
 }

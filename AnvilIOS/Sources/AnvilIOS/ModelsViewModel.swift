@@ -130,6 +130,20 @@ final class ModelsViewModel {
     var downloadProgress: Double?
     var isDownloading: Bool { activeJob != nil }
 
+    /// Drives the "pick a quantization" sheet — set by `beginDownload`
+    /// when a GGUF repo has more than one `.gguf` file (see its own
+    /// doc comment for the real bug this exists to prevent), `nil`
+    /// otherwise. `files` starts empty while `fileTree` is still
+    /// in flight.
+    struct GGUFFilePicker: Identifiable {
+        let summary: HFModelSummary
+        var files: [HFRepoFile] = []
+        var isLoading = true
+        var errorMessage: String?
+        var id: String { summary.modelID }
+    }
+    var ggufFilePicker: GGUFFilePicker?
+
     private let catalog = HuggingFaceCatalog()
     private let civitaiCatalog = CivitAICatalog()
     private let drawThingsCatalog = DrawThingsCatalog()
@@ -294,6 +308,65 @@ final class ModelsViewModel {
     /// (however it finishes: completed, paused, or stopped).
     func download(_ summary: HFModelSummary) {
         enqueueOrStart(.huggingFace(summary))
+    }
+
+    /// A search result row's actual "Download" action — routes through
+    /// here instead of calling `download(_:)` directly so a GGUF repo
+    /// shipping several quantizations (a real, common, and previously
+    /// unhandled shape: one repo, ten-plus multi-gigabyte `.gguf`
+    /// files, e.g. IQ2 through Q8_0) doesn't silently queue *every one
+    /// of them* — `HFRepoDownloader.download` has no concept of "just
+    /// this one file", it downloads whatever `filePaths` it's given in
+    /// full. Reported live: an expected single ~8GB file turned into an
+    /// attempt to pull the whole repo (100GB+ across every quant) at
+    /// once. A repo with zero or one `.gguf` file is unaffected — there
+    /// is nothing to choose between, so it downloads immediately like
+    /// any other result.
+    func beginDownload(_ summary: HFModelSummary) {
+        let ggufPaths = (summary.filePaths ?? []).filter { $0.lowercased().hasSuffix(".gguf") }
+        guard ggufPaths.count > 1 else {
+            download(summary)
+            return
+        }
+        ggufFilePicker = GGUFFilePicker(summary: summary)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let allFiles = try await self.catalog.fileTree(repoID: summary.modelID)
+                let sizesByPath = Dictionary(uniqueKeysWithValues: allFiles.map { ($0.path, $0.sizeBytes) })
+                self.ggufFilePicker?.files = ggufPaths.map { path in
+                    HFRepoFile(path: path, sizeBytes: sizesByPath[path] ?? nil)
+                }
+            } catch {
+                self.ggufFilePicker?.errorMessage = error.localizedDescription
+            }
+            self.ggufFilePicker?.isLoading = false
+        }
+    }
+
+    /// Starts the download for exactly the one file the user picked
+    /// from `ggufFilePicker` — everything else about `summary` (repo
+    /// id, its place in the download queue, how it registers once
+    /// finished) stays the same; only `filePaths` narrows to a single
+    /// entry, since a GGUF file is self-contained and needs no sibling
+    /// files (`config.json`, other quantizations, `README.md`, …) the
+    /// way an MLX/diffusers pipeline directory does.
+    func downloadSelectedGGUFFile(_ file: HFRepoFile) {
+        guard let summary = ggufFilePicker?.summary else { return }
+        ggufFilePicker = nil
+        let narrowed = HFModelSummary(
+            modelID: summary.modelID,
+            downloads: summary.downloads,
+            likes: summary.likes,
+            tags: summary.tags,
+            sizeBytes: file.sizeBytes ?? summary.sizeBytes,
+            filePaths: [file.path]
+        )
+        download(narrowed)
+    }
+
+    func cancelGGUFFilePicker() {
+        ggufFilePicker = nil
     }
 
     func download(_ summary: CivitAIModelSummary) {
