@@ -35,10 +35,19 @@ struct MemoryView: View {
 
             if !chat.memorySuggestions.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Suggestions to review").font(.headline)
-                    Text("Nothing is saved until you accept it.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Suggestions to review (\(chat.memorySuggestions.count))").font(.headline)
+                            Text("Nothing is saved until you accept it — global, usable from any new thread.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Accept All") {
+                            Task { await chat.acceptAllMemorySuggestions() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                     ForEach(chat.memorySuggestions) { suggestion in
                         HStack(alignment: .top, spacing: 8) {
                             VStack(alignment: .leading, spacing: 3) {

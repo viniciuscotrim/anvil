@@ -435,9 +435,19 @@ final class NativeChatEngine: ObservableObject {
     /// Model feature reusing a loaded text model's `ChatClient.send`
     /// for a single isolated request instead of going through the
     /// active thread.
-    func respondOnce(to prompt: String) async throws -> String {
+    ///
+    /// `maxTokens`, when given, overrides `ChatSession`'s own (fairly
+    /// small) default output budget — needed by anything whose reply
+    /// can legitimately run long, like memory extraction's JSON array:
+    /// `nil` (the default) leaves every other caller's behavior exactly
+    /// as it was.
+    func respondOnce(to prompt: String, maxTokens: Int? = nil) async throws -> String {
         guard let container else { throw NativeChatEngineError.notLoaded }
-        return try await ChatSession(container).respond(to: prompt)
+        let session = ChatSession(container)
+        if let maxTokens {
+            session.generateParameters = GenerateParameters(maxTokens: maxTokens)
+        }
+        return try await session.respond(to: prompt)
     }
 
     /// Converts a persisted thread's messages into the wire format

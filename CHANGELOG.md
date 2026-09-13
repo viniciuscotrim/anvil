@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.13.0] - 2026-09-13
+
+### Added
+- **"Suggest from Thread" now actually digests the whole conversation**,
+  not just the same trimmed window a live chat turn uses. Requested
+  explicitly: pick up a conversation in a fresh thread once the current
+  one's context has grown too large, without losing what was already
+  established. The whole thread is now split into token-bounded
+  batches (`ChatContextBuilder.batches`) and every batch is analyzed on
+  its own turn, so coverage doesn't depend on how long the conversation
+  got — reusing the live-chat context budget here would have silently
+  dropped exactly the middle of a long thread, defeating the point.
+  Verified for real against a running model, not just unit-tested: a
+  test conversation produced 8 correct, correctly-typed suggestions
+  (name, location, project, tech stack, two preferences, favorite
+  language, birthday) in one pass.
+- **Suggestions are global**, not scoped to whichever profile the
+  source thread happened to use — the whole point is picking things
+  back up from *any* fresh thread, and the old behavior silently hid a
+  suggestion from a thread using a different profile (or none).
+- **"Accept All"** — a real digest can surface a few dozen suggestions;
+  accepting them one at a time defeated the "everything worth
+  remembering" ask. Still goes through the same per-item accept
+  (global scope, `.inferred` source, traceable back to the thread), so
+  nothing about how a memory ends up saved changes, just the trigger.
+- Mirrored on iOS (`ChatThreadsViewModel`/`MemoryView`) — same
+  batching, same global scope, same Accept All. Also raised
+  `NativeChatEngine.respondOnce`'s output budget for this one call (a
+  new `maxTokens` override, defaulting to unchanged behavior for every
+  other caller) — its own default is sized for an ordinary reply, not
+  a JSON array that can legitimately list many facts.
+
+### Fixed
+- **Memory extraction could silently return nothing** for exactly the
+  conversations most worth summarizing: the old fixed 1200-token reply
+  budget could cut off a genuinely long JSON array mid-object, and the
+  previous parsing swallowed that failure into an empty result with no
+  explanation. Raised to 4000 tokens and a parse failure now sets a
+  visible error instead of silently disappearing.
+
 ## [0.12.2] - 2026-09-13
 
 ### Fixed

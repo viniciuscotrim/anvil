@@ -53,6 +53,40 @@ public struct ChatContextBuilder: Sendable {
         max(1, text.utf8.count / 4)
     }
 
+    /// Splits `messages` into ordered batches, each within
+    /// `maxEstimatedTokensPerBatch` (the same UTF-8-based estimate
+    /// `estimateTokens` uses elsewhere) — for a caller that needs to
+    /// process an entire, arbitrarily long thread exhaustively (e.g.
+    /// digesting it for memory extraction before starting a fresh
+    /// thread) rather than the bounded "first turn + recent window"
+    /// `build(messages:memories:)` gives a live chat request. Reusing
+    /// that bounded window for a "read everything" tool would silently
+    /// drop exactly the middle of a conversation grown too long for
+    /// live chat — the one case this exists to actually handle.
+    /// `.system`/`.tool` messages are dropped — tool-call plumbing
+    /// isn't meant for this kind of analysis either (matches
+    /// `ChatViewModel.visibleMessages`' own filtering). A single
+    /// message that alone exceeds the budget still becomes its own
+    /// (oversized) batch rather than being dropped or looping forever.
+    public static func batches(_ messages: [ChatMessage], maxEstimatedTokensPerBatch: Int) -> [[ChatMessage]] {
+        var result: [[ChatMessage]] = []
+        var current: [ChatMessage] = []
+        var currentTokens = 0
+        for message in messages {
+            guard message.role == .user || message.role == .assistant else { continue }
+            let cost = estimateTokens(message.content)
+            if !current.isEmpty, currentTokens + cost > maxEstimatedTokensPerBatch {
+                result.append(current)
+                current = []
+                currentTokens = 0
+            }
+            current.append(message)
+            currentTokens += cost
+        }
+        if !current.isEmpty { result.append(current) }
+        return result
+    }
+
     private static func memoryPrompt(_ memories: [ChatMemory]) -> String? {
         let usable = memories
             .map { $0.content.trimmingCharacters(in: .whitespacesAndNewlines) }

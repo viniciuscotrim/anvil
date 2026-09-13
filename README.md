@@ -9,28 +9,33 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.12.2 (Chat No Longer Hangs Forever on a Stalled Model)
+## Current release: 0.13.0 (Real "Suggest From Thread" Memory Digest)
 
-Reported live on the Mac app: Chat sat on "Thinking…" indefinitely
-after the model server visibly stopped working (memory/GPU use
-dropped) without closing the connection. `ChatClient` now gives up
-after 120s of true silence instead of only ever timing out (if at all)
-after the existing, deliberately generous 1800s request timeout — see
-"Chat no longer hangs forever" below for the full writeup, including
-the real test that reproduces the exact hang.
+Requested: turn a conversation's context into durable, global memory
+before it grows too large to keep using, then pick it back up from a
+fresh thread. "Suggest from Thread" existed already but reused live
+chat's own bounded context window — exactly wrong for this, since that
+window is what drops a long thread's middle in the first place. Now
+digests the *entire* thread in batches, suggestions are global instead
+of scoped to the source thread's profile, and "Accept All" saves a
+real digest's worth of suggestions in one action instead of one at a
+time. See "A real memory digest" below for the full writeup, including
+a real end-to-end run against a live model (not just unit tests).
+Mac and iOS both.
 
-It follows 0.12.1's fix for downloads landing truncated plus a GGUF
-quantization picker on iOS, 0.12.0's GGUF/llama.cpp engine on iOS, a
-real app icon on both platforms (Mac `.icns`, iOS `AppIcon.appiconset`),
-a fix for Z-Image/FLUX.2/Krea-2 models loading through mflux's
-FLUX.1-only pipeline at `0.11.1`, and 0.10.0's threads column plus
-0.11.0's round of Chat refinements before that. Full release history in
+It follows 0.12.2's fix for Chat hanging forever on a stalled model,
+0.12.1's fix for downloads landing truncated plus a GGUF quantization
+picker on iOS, 0.12.0's GGUF/llama.cpp engine on iOS, a real app icon
+on both platforms (Mac `.icns`, iOS `AppIcon.appiconset`), a fix for
+Z-Image/FLUX.2/Krea-2 models loading through mflux's FLUX.1-only
+pipeline at `0.11.1`, and 0.10.0's threads column plus 0.11.0's round
+of Chat refinements before that. Full release history in
 [CHANGELOG.md](CHANGELOG.md), now caught up through `0.7.0`'s download/
 queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.12.2`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.13.0`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -887,6 +892,69 @@ connection — the exact reported shape — and the test uses a 0.3s
 `stallInterval` (an injectable parameter, defaulting to the real 120s
 for actual callers) so it catches the hang in well under a second
 rather than needing to wait out a real two-minute interval.
+
+## A real memory digest
+
+Requested directly: clicking "Suggest from Thread" should read the
+*whole* conversation and turn everything relevant into durable,
+system-wide memory — so a conversation can be picked back up from a
+brand-new thread once the current one's context has grown too large to
+keep using, without losing what was already established.
+
+The feature already existed (`ChatViewModel.suggestMemoriesFromCurrentThread`,
+reviewable suggestions, an "Accept"/"Dismiss" per item), but three real
+gaps kept it from doing what was asked:
+
+1. **It reused live chat's own bounded context window**
+   (`ChatContextBuilder.build`) — first turn + a recent window, filled
+   backward until a token budget runs out. That's exactly the wrong
+   tool here: it's *built* to drop a long thread's middle, which is
+   precisely what needs reading for this to work at all on a
+   conversation that's actually grown too large. Fixed with a new
+   `ChatContextBuilder.batches(_:maxEstimatedTokensPerBatch:)` — splits
+   the entire thread into ordered, token-bounded excerpts, each
+   analyzed on its own turn, so coverage no longer depends on how long
+   the conversation got. Two real regression tests cover it: every
+   message shows up somewhere across the batches (nothing from the
+   middle silently vanishes), and a single message bigger than the
+   whole per-batch budget still becomes its own batch rather than
+   disappearing.
+2. **Suggestions were scoped to the source thread's own profile**
+   (`acceptMemorySuggestion` passed `currentThread.profileID`). A
+   memory meant to be "system-wide, read by the AI in any new thread"
+   silently wasn't, for a thread using a *different* profile — `send()`
+   only ever includes a memory with no profile of its own, or a
+   matching one. Now always saved with `profileID: nil`.
+3. **A fixed 1200-token reply budget** for the model's own JSON output
+   — fine for a couple of suggestions, but a real digest of a full
+   conversation can legitimately list dozens, and a cut-off JSON array
+   fails to parse. The old code swallowed that failure with `try?`
+   into a silently empty result — exactly the shape of "I clicked the
+   button and nothing happened." Raised to 4000 tokens, and a parse
+   failure now sets a visible error instead of disappearing.
+
+Also added: **Accept All** — a real digest can surface a few dozen
+suggestions, and clicking each one individually defeated the
+"everything worth remembering" ask. It goes through the exact same
+per-item `acceptMemorySuggestion` sequentially, so nothing about how a
+memory is actually saved changes.
+
+Mirrored on iOS (`ChatThreadsViewModel`/`MemoryView`) with the same
+three fixes and Accept All. One further iOS-only gap: `NativeChatEngine
+.respondOnce`'s output budget defaults to whatever `ChatSession` sizes
+an ordinary reply at, not a long JSON array — it now takes an optional
+`maxTokens` override (`nil` leaves every other caller, e.g. Prompt to
+Model, exactly as it was), and this one call passes 4000 to match Mac.
+
+**Verified for real**, not just unit-tested: sent a fabricated but
+realistic multi-fact test conversation (name, city, current project,
+tech stack, two preferences, favorite language, birthday) straight to
+a live, already-running `mlx_lm.server` on this Mac, using the exact
+request shape `suggestMemoriesFromCurrentThread` builds. It came back
+with all 8 facts, correctly typed (fact/preference/date) and correctly
+parsed by the same extraction logic the app uses — real end-to-end
+proof the instruction, the model, and the parsing all agree, not just
+that the code compiles.
 
 ## Architecture
 

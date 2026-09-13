@@ -26,4 +26,51 @@ struct ChatContextBuilderTests {
         #expect(result.messages.suffix(4).map(\.id) == messages.suffix(4).map(\.id))
         #expect(result.messages.count < messages.count)
     }
+
+    /// Regression test for the real gap `batches` exists to fix: a
+    /// conversation long enough that `build(messages:)`'s own bounded
+    /// window would drop its middle turns must still have *every*
+    /// message show up somewhere across the batches — this is the
+    /// "digest the whole thread before it grows unusable" tool, so
+    /// silently losing the middle here would defeat the entire point.
+    @Test
+    func coversEveryMessageAcrossBatchesEvenWhenLongerThanOneContextWindow() {
+        let messages = (0..<40).map { index in
+            ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant, content: String(repeating: "x", count: 400))
+        }
+        // Each message estimates to 100 tokens (400 bytes / 4); a
+        // budget of 250 fits at most 2 per batch, so this genuinely
+        // needs several batches to cover all 40 — the same shape a
+        // real long-running thread that outgrew live chat's own
+        // context budget would have.
+        let batches = ChatContextBuilder.batches(messages, maxEstimatedTokensPerBatch: 250)
+
+        #expect(batches.count > 1)
+        #expect(batches.flatMap { $0 }.map(\.id) == messages.map(\.id))
+        for batch in batches {
+            let total = batch.reduce(0) { $0 + ChatContextBuilder.estimateTokens($1.content) }
+            #expect(total <= 250)
+        }
+    }
+
+    /// `.system`/`.tool` messages are dropped — they're not meant for
+    /// this kind of analysis (matches `ChatViewModel.visibleMessages`'
+    /// own filtering) — while a single message alone bigger than the
+    /// whole per-batch budget still becomes its own batch rather than
+    /// vanishing or looping.
+    @Test
+    func dropsNonConversationalRolesAndKeepsAnOversizedMessageAsItsOwnBatch() {
+        let huge = ChatMessage(role: .user, content: String(repeating: "x", count: 4_000))
+        let messages: [ChatMessage] = [
+            ChatMessage(role: .system, content: "system prompt"),
+            huge,
+            ChatMessage(role: .tool, content: "tool result", toolCallID: "call-1"),
+            ChatMessage(role: .assistant, content: "ok"),
+        ]
+
+        let batches = ChatContextBuilder.batches(messages, maxEstimatedTokensPerBatch: 50)
+
+        #expect(batches.flatMap { $0 }.map(\.role) == [.user, .assistant])
+        #expect(batches.first?.first?.id == huge.id)
+    }
 }

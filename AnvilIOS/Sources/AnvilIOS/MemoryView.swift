@@ -33,7 +33,13 @@ struct MemoryView: View {
                                     throw NativeChatEngineError.notLoaded
                                 }
                                 let transcript = context.map { "\($0.role.rawValue): \($0.content)" }.joined(separator: "\n")
-                                return try await engine.respondOnce(to: "\(instruction)\n\nConversation:\n\(transcript)")
+                                // The default output budget is sized for
+                                // an ordinary chat reply, not a JSON
+                                // array that can legitimately list many
+                                // facts — matches the Mac app's own
+                                // 4000-token override for the same call.
+                                return try await engine.respondOnce(
+                                    to: "\(instruction)\n\nConversation:\n\(transcript)", maxTokens: 4000)
                             }
                         }
                     } label: {
@@ -49,10 +55,13 @@ struct MemoryView: View {
                 }
 
                 if !threads.memorySuggestions.isEmpty {
-                    Section("Suggestions to review") {
-                        Text("Nothing is saved until you accept it.")
+                    Section("Suggestions to review (\(threads.memorySuggestions.count))") {
+                        Text("Nothing is saved until you accept it — global, usable from any new thread.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        Button("Accept All") {
+                            Task { await threads.acceptAllMemorySuggestions() }
+                        }
                         ForEach(threads.memorySuggestions) { suggestion in
                             suggestionRow(suggestion)
                         }

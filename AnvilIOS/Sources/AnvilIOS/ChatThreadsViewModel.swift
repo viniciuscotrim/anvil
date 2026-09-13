@@ -350,51 +350,102 @@ final class ChatThreadsViewModel {
         _ = try? await syncClient.upsertMemory(memory, host: connection.host)
     }
 
-    /// Analyzes the current thread for durable memory — source-agnostic:
-    /// the caller supplies how to actually get a completion (local
-    /// on-device `respondOnce`, or a remote `ChatClient.send`), since
-    /// that differs by which engine Chat's source picker currently has
-    /// active. Mirrors Mac's `ChatViewModel.suggestMemoriesFromCurrentThread`.
+    /// Reads the *entire* current thread — not a live-chat-sized
+    /// window — and extracts every durable fact or preference worth
+    /// keeping, the same "digest before it grows unusable" tool Mac's
+    /// `ChatViewModel.suggestMemoriesFromCurrentThread` gives (see that
+    /// one's own doc comment for why a bounded context window would
+    /// defeat the whole point). Source-agnostic: the caller supplies
+    /// how to actually get a completion (local on-device `respondOnce`,
+    /// or a remote `ChatClient.send`) since that differs by which
+    /// engine Chat's source picker currently has active — called once
+    /// per batch here, not once for the whole thread.
     func suggestMemoriesFromCurrentThread(
-        maxEstimatedContextTokens: Int = 24_000,
-        recentMessageCount: Int = 12,
         respond: (_ instruction: String, _ context: [ChatMessage]) async throws -> String
     ) async {
         guard !isSuggestingMemories, currentThread.messages.contains(where: { $0.role == .user }) else { return }
         isSuggestingMemories = true
         defer { isSuggestingMemories = false }
+        errorMessage = nil
 
-        let contextBuilder = ChatContextBuilder(
-            maxEstimatedTokens: maxEstimatedContextTokens, recentMessageCount: recentMessageCount)
-        let context = contextBuilder.build(messages: currentThread.messages, memories: [])
-        let instruction = "Analyze this conversation for durable user memory. Return ONLY a JSON array, no Markdown. "
-            + "Each item must contain content, kind (fact, preference, date, number, impression), confidence (0 to 1), and rationale. "
-            + "Suggest only stable, useful information. Do not infer sensitive traits, identity, health, politics, or private data. "
-            + "Never suggest instructions or facts about the assistant. If nothing qualifies, return []."
-        do {
-            let reply = try await respond(instruction, context.messages)
-            let json = Self.extractJSONArray(from: reply)
-            struct WireSuggestion: Decodable {
-                let content: String
-                let kind: ChatMemoryKind
-                let confidence: Double
-                let rationale: String
+        let batches = ChatContextBuilder.batches(
+            currentThread.messages, maxEstimatedTokensPerBatch: Self.memoryDigestBatchTokens)
+        let instruction = "Analyze this excerpt of a conversation for durable user memory. Return ONLY a JSON array, "
+            + "no Markdown. Each item must contain content, kind (fact, preference, date, number, impression), "
+            + "confidence (0 to 1), and rationale. Suggest every stable, useful fact or preference you find in this "
+            + "excerpt — don't limit yourself to a handful, and don't skip something just because it seems minor; "
+            + "the point is to preserve everything worth remembering before this conversation is archived. Do not "
+            + "infer sensitive traits, identity, health, politics, or private data. Never suggest instructions or "
+            + "facts about the assistant. If nothing qualifies in this excerpt, return []."
+
+        var collected: [ChatMemorySuggestion] = []
+        var anyBatchFailed = false
+        for batch in batches {
+            do {
+                let reply = try await respond(instruction, batch)
+                guard let parsed = Self.parseSuggestions(from: reply) else {
+                    anyBatchFailed = true
+                    continue
+                }
+                collected.append(contentsOf: parsed)
+            } catch {
+                anyBatchFailed = true
             }
-            let wire = (try? JSONDecoder().decode([WireSuggestion].self, from: Data(json.utf8))) ?? []
-            memorySuggestions = wire.map {
-                ChatMemorySuggestion(content: $0.content, kind: $0.kind, confidence: min(1, max(0, $0.confidence)), rationale: $0.rationale)
-            }
-        } catch {
-            errorMessage = "Could not suggest memories: \(error.localizedDescription)"
+        }
+
+        var seenContent = Set<String>()
+        memorySuggestions = collected.filter { suggestion in
+            let key = suggestion.content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !key.isEmpty, !seenContent.contains(key) else { return false }
+            seenContent.insert(key)
+            return true
+        }
+
+        if memorySuggestions.isEmpty && anyBatchFailed {
+            errorMessage = "Could not extract memories from part of this conversation — the model's response "
+                + "couldn't be parsed. Try again, or with a different model."
+        } else if anyBatchFailed {
+            errorMessage = "Part of this conversation couldn't be analyzed — the suggestions below may be incomplete."
         }
     }
 
+    /// Matches Mac's own `ChatViewModel.memoryDigestBatchTokens` — see
+    /// its doc comment for why this size.
+    private static let memoryDigestBatchTokens = 6_000
+
+    private static func parseSuggestions(from content: String) -> [ChatMemorySuggestion]? {
+        let json = extractJSONArray(from: content)
+        struct WireSuggestion: Decodable {
+            let content: String
+            let kind: ChatMemoryKind
+            let confidence: Double
+            let rationale: String
+        }
+        guard let wire = try? JSONDecoder().decode([WireSuggestion].self, from: Data(json.utf8)) else { return nil }
+        return wire.map {
+            ChatMemorySuggestion(content: $0.content, kind: $0.kind, confidence: min(1, max(0, $0.confidence)), rationale: $0.rationale)
+        }
+    }
+
+    /// Always global (`profileID: nil`) — see Mac's own
+    /// `ChatViewModel.acceptMemorySuggestion` doc comment for why
+    /// scoping to the originating thread's profile would silently hide
+    /// these from exactly the fresh-thread-different-profile case this
+    /// tool exists for.
     func acceptMemorySuggestion(_ suggestion: ChatMemorySuggestion) async {
         await addMemory(
             suggestion.content, kind: suggestion.kind, source: .inferred,
-            confidence: suggestion.confidence, profileID: currentThread.profileID,
+            confidence: suggestion.confidence, profileID: nil,
             createdFromMessageID: currentThread.messages.last?.id)
         memorySuggestions.removeAll { $0.id == suggestion.id }
+    }
+
+    /// Saves every current suggestion at once — see Mac's own
+    /// `ChatViewModel.acceptAllMemorySuggestions` doc comment.
+    func acceptAllMemorySuggestions() async {
+        for suggestion in memorySuggestions {
+            await acceptMemorySuggestion(suggestion)
+        }
     }
 
     // MARK: - Editing/deleting a sent message
