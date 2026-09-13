@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.15.0-memory-model-picker] - 2026-09-13
+
+### Added
+- **Choose which model runs "Suggest from Thread"**: requested live —
+  the digest used to always run on whichever model Chat currently had
+  selected/loaded; now Memory has its own picker offering *every*
+  registered text model, not just a loaded one ("não apenas os
+  modelos carregados mas todos os mapeados na pasta"). Persisted
+  (`AppSettings.memorySuggestionModelID`) and shared across Mac and
+  iOS.
+  - **Mac**: picking a model here doesn't load it — pressing Suggest
+    does, on demand. If it doesn't fit in the remaining unified-memory
+    budget alongside whatever's already loaded, Anvil now asks before
+    unloading anything ("e se faltar memoria o outro modelo atualmente
+    carregado será descarregado antes, após a confirmação do
+    usuário") — a new confirmation dialog names exactly what would be
+    unloaded, and nothing is touched unless the user agrees; declining
+    just cancels the digest.
+  - **iOS**: since the on-device engine only ever holds one model at a
+    time (there's no concurrent residency to manage, unlike Mac's
+    several-processes-at-once design), picking a different model here
+    means Suggest first swaps the engine over to it — asked first too,
+    since that also changes what Chat itself would use for its very
+    next reply on this phone.
+
 ## [0.14.0-suggestion-sync] - 2026-09-13
 
 ### Added

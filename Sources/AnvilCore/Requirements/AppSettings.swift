@@ -20,6 +20,14 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// in the Models tab; picking one there clears it from any other
     /// model, so at most one is ever the default.
     public var defaultChatImageModelID: String?
+    /// Which registered text model (`ModelEntry.id`) "Suggest from
+    /// Thread" should use — nil means "whichever model Chat currently
+    /// has selected". Unlike `defaultChatImageModelID`, this can name a
+    /// model that isn't loaded (or isn't even registered as text) at
+    /// all right now; picking one here doesn't load it — that only
+    /// happens on demand when Suggest is actually pressed. See
+    /// `ChatViewModel.suggestMemoriesFromCurrentThread`'s doc comment.
+    public var memorySuggestionModelID: String?
     /// Chat composer quiet period. Zero sends on submit immediately; a
     /// positive value batches blocks until the user stops typing.
     public var chatMessageWaitSeconds: Double
@@ -58,6 +66,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public init(
         modelsRootPath: String? = nil,
         defaultChatImageModelID: String? = nil,
+        memorySuggestionModelID: String? = nil,
         chatMessageWaitSeconds: Double = 10,
         chatMaxEstimatedContextTokens: Int = 24_000,
         chatRecentMessageCount: Int = 12,
@@ -71,6 +80,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     ) {
         self.modelsRootPath = modelsRootPath
         self.defaultChatImageModelID = defaultChatImageModelID
+        self.memorySuggestionModelID = memorySuggestionModelID
         self.chatMessageWaitSeconds = chatMessageWaitSeconds
         self.chatMaxEstimatedContextTokens = chatMaxEstimatedContextTokens
         self.chatRecentMessageCount = chatRecentMessageCount
@@ -84,7 +94,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case modelsRootPath, defaultChatImageModelID, chatMessageWaitSeconds
+        case modelsRootPath, defaultChatImageModelID, memorySuggestionModelID, chatMessageWaitSeconds
         case chatMaxEstimatedContextTokens, chatRecentMessageCount
         case codeAgentWorkingDirectoryPath, codeAgentAllowFullDiskAccess
         case codeAgentPermissionLevel, codeAgentEnabledFeatures
@@ -104,6 +114,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         modelsRootPath = try container.decodeIfPresent(String.self, forKey: .modelsRootPath)
         defaultChatImageModelID = try container.decodeIfPresent(String.self, forKey: .defaultChatImageModelID)
+        memorySuggestionModelID = try container.decodeIfPresent(String.self, forKey: .memorySuggestionModelID)
         chatMessageWaitSeconds = try container.decodeIfPresent(Double.self, forKey: .chatMessageWaitSeconds) ?? 10
         chatMaxEstimatedContextTokens = try container.decodeIfPresent(Int.self, forKey: .chatMaxEstimatedContextTokens) ?? 24_000
         chatRecentMessageCount = try container.decodeIfPresent(Int.self, forKey: .chatRecentMessageCount) ?? 12

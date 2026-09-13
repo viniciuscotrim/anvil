@@ -46,6 +46,18 @@ final class ChatThreadsViewModel {
     /// is true — see Mac's own `ChatViewModel.memorySuggestionProgress`
     /// doc comment for the real reported problem this fixes.
     private(set) var memorySuggestionProgress: (completed: Int, total: Int)?
+    /// Which text model "Suggest from Thread" should use — nil means
+    /// "whatever `NativeChatEngine` currently has loaded". Unlike Mac
+    /// (which can run several models concurrently), iOS's engine loads
+    /// one model at a time, so picking a different one here means
+    /// `MemoryView` swaps the engine over to it before analyzing —
+    /// after asking, since that also affects whatever Chat itself
+    /// would use next.
+    private(set) var memorySuggestionModelID: String? = AppSettings.load().memorySuggestionModelID
+    /// Every registered text model, loaded or not — same "offer
+    /// everything mapped in the folder, not just what's resident"
+    /// requested for Mac's own picker.
+    private(set) var availableTextModels: [ModelEntry] = []
     /// "This iPhone" or a specific Mac — see `ChatSourceSelection`.
     /// Change it via `selectSource(_:)`, not directly, so the switch
     /// actually kicks off (and keeps running) the background merge.
@@ -90,6 +102,7 @@ final class ChatThreadsViewModel {
     private let store = ChatThreadStore()
     private let memoryStore = ChatMemoryStore()
     private let suggestionStore = ChatMemorySuggestionStore()
+    private let modelRegistry = ModelRegistry()
     private let syncClient = AnvilSyncClient()
     private var syncLoopTask: Task<Void, Never>?
     private let cloudSync = CloudSyncEngine()
@@ -137,6 +150,7 @@ final class ChatThreadsViewModel {
         if !isSuggestingMemories {
             memorySuggestions = await suggestionStore.all()
         }
+        availableTextModels = await modelRegistry.all().filter { $0.kind == .text }
         if !hasLoadedInitialState {
             currentThread = allThreads.first ?? ChatThread(originDeviceName: DeviceIdentity.currentName)
             hasLoadedInitialState = true
@@ -304,6 +318,17 @@ final class ChatThreadsViewModel {
     }
 
     // MARK: - Memory
+
+    /// `MemoryView`'s own picker routes through here rather than
+    /// setting `memorySuggestionModelID` directly, so the choice
+    /// survives an app relaunch — matches Mac's own
+    /// `ChatViewModel.setMemorySuggestionModelID`.
+    func setMemorySuggestionModelID(_ id: String?) {
+        memorySuggestionModelID = id
+        var settings = AppSettings.load()
+        settings.memorySuggestionModelID = id
+        try? settings.save()
+    }
 
     func addMemory(
         _ content: String,

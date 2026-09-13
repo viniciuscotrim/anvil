@@ -38,6 +38,29 @@ struct MemoryView: View {
                     .disabled(chat.isSuggestingMemories || chat.messages.isEmpty)
                 }
 
+                HStack {
+                    Text("Model for suggestions")
+                    Spacer()
+                    // Every registered text model, not just a loaded
+                    // one — requested live: picking one here doesn't
+                    // load it yet, only pressing "Suggest" does (and,
+                    // if there isn't room, asks before unloading
+                    // anything else). Matches Mac's own `ModelManager`
+                    // list ordering (by family) so the picker isn't a
+                    // flat unsorted dump of every quant/size variant.
+                    Picker("", selection: Binding(
+                        get: { chat.memorySuggestionModelID },
+                        set: { chat.setMemorySuggestionModelID($0) }
+                    )) {
+                        Text("Current chat model").tag(Optional<String>.none)
+                        ForEach(chat.availableTextModels) { model in
+                            Text(model.displayName).tag(Optional(model.id))
+                        }
+                    }
+                    .labelsHidden()
+                    .disabled(chat.isSuggestingMemories)
+                }
+
                 if let errorMessage = chat.errorMessage {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -137,6 +160,25 @@ struct MemoryView: View {
         }
         .frame(minWidth: 760, minHeight: 520)
         .task { await chat.loadInitialState() }
+        .confirmationDialog(
+            "Unload \((chat.pendingModelUnloadConfirmation?.modelsToUnloadNames ?? []).joined(separator: ", ")) to load "
+                + "\(chat.pendingModelUnloadConfirmation?.modelToLoadName ?? "")?",
+            isPresented: Binding(
+                get: { chat.pendingModelUnloadConfirmation != nil },
+                set: { if !$0 { chat.resolveModelUnloadConfirmation(unload: false) } }
+            )
+        ) {
+            Button("Unload and Continue", role: .destructive) {
+                chat.resolveModelUnloadConfirmation(unload: true)
+            }
+            Button("Cancel", role: .cancel) {
+                chat.resolveModelUnloadConfirmation(unload: false)
+            }
+        } message: {
+            Text("There isn't enough unified memory to load "
+                + "\(chat.pendingModelUnloadConfirmation?.modelToLoadName ?? "this model") alongside what's "
+                + "already loaded. It'll be unloaded first, then Suggest from Thread will continue.")
+        }
     }
 
     /// Shows which batch is in flight while digesting a whole thread —

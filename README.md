@@ -9,9 +9,23 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.14.0-suggestion-sync (Suggested Memories Sync Across Devices)
+## Current release: 0.15.0-memory-model-picker (Choose the Memory Digest's Model)
 
-Requested live: "as memórias geradas podem já subir pro iCloud, assim
+Requested live: "vamos criar dentro do menu de Memórias a seleção do
+modelo que vai ser utilizado pra fazer as sugestões" — a Memory-screen
+picker for which model runs "Suggest from Thread", offering every
+registered text model, not just a loaded one ("não apenas os modelos
+carregados mas todos os mapeados na pasta"). On Mac, pressing Suggest
+loads the picked model on demand if needed, and — "se faltar memoria o
+outro modelo atualmente carregado será descarregado antes, após a
+confirmação do usuário" — asks before unloading anything else to make
+room. On iOS, since only one model is ever resident at a time, picking
+a different one means Suggest swaps the engine to it first, also
+asked, since it changes what Chat itself uses next on that phone. See
+"Choosing a model for memory suggestions" below for the full writeup.
+
+It follows 0.14.0-suggestion-sync's cross-device sync for suggested
+memories, requested live: "as memórias geradas podem já subir pro iCloud, assim
 eu posso aprová-las ou não no iPhone ou Mac, independente de onde
 foram geradas" (generated memories should already go up to iCloud, so
 I can approve them or not on iPhone or Mac, wherever they were
@@ -53,7 +67,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.14.0-suggestion-sync`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.15.0-memory-model-picker`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1090,6 +1104,54 @@ Mac and iOS both, mirroring the same architecture on each side
 on in Settings on both devices, exactly like thread and memory sync
 already did — with it off, suggestions behave exactly as before,
 local to whichever device generated them.
+
+## Choosing a model for memory suggestions
+
+Requested live: "vamos criar dentro do menu de Memórias a seleção do
+modelo que vai ser utilizado pra fazer as sugestões. Tem que oferecer
+não apenas os modelos carregados mas todos os mapeados na pasta" — a
+picker in Memory for which model runs "Suggest from Thread", offering
+every registered text model, not just one already loaded.
+
+Until now, the digest silently used whatever model Chat currently had
+selected (Mac) or loaded (iOS) — there was no way to run it against a
+different, better-suited model (a stronger reasoner for extracting
+facts, say) without first switching Chat's own active model and back.
+`memorySuggestionModelID` (`AppSettings`, shared by both platforms) is
+now a separate, persisted choice, `nil` meaning "whatever Chat is
+currently using" — and Memory's own picker lists every `ModelEntry` of
+kind `.text` from `ModelRegistry.all()`, loaded or not, the same
+full list the Models tab itself shows.
+
+Picking a model there doesn't load anything by itself — only pressing
+"Suggest" does, on demand, and the two platforms differ in exactly
+what that means:
+
+- **Mac** can run several model server processes at once
+  (`ModelSessionManager`), so loading the chosen model alongside
+  whatever's already running is attempted first. Requested live: "e se
+  faltar memoria o outro modelo atualmente carregado será descarregado
+  antes, após a confirmação do usuário que o modelo pode ser
+  descarregado" — if that fails for lack of unified memory,
+  `ChatViewModel` now asks before unloading anything (a new
+  `pendingModelUnloadConfirmation`/`resolveModelUnloadConfirmation`
+  pair, driven by a `confirmationDialog` naming exactly which
+  currently-loaded model(s) would be freed, text and image both, since
+  they share one `ResidencyPlanner` budget) rather than either failing
+  outright or unloading something without asking. Declining just
+  cancels the digest; nothing is touched. Agreeing unloads them and
+  retries the load once.
+- **iOS** only ever keeps one model resident in `NativeChatEngine` at
+  a time (there's no concurrent-residency budget to manage the way Mac
+  has one) — so picking a different model for suggestions means
+  Suggest first swaps the engine over to it. Also asked first (a local
+  `confirmationDialog` in `MemoryView`), since — unlike Mac, where the
+  suggestion model is independent of Chat's own selection — this
+  swap also changes what Chat itself would use for its very next
+  reply on this phone, not just what the digest runs on.
+
+Mac (`ChatViewModel`/`MemoryView`) and iOS
+(`ChatThreadsViewModel`/`MemoryView`) both.
 
 ## Architecture
 

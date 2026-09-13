@@ -18,6 +18,17 @@ struct MemoryView: View {
     @State private var draftSource: ChatMemorySource = .explicit
     @State private var draftProfileID: UUID?
     @State private var draftConfidence = 0.8
+    /// Set when Suggest needs to swap the engine to a different model
+    /// than whatever it currently has loaded — asked first since, on
+    /// iOS, that also changes what Chat itself would use next (there's
+    /// only ever one model resident at a time here, unlike Mac's
+    /// several-at-once server processes).
+    @State private var pendingModelSwap: PendingModelSwap?
+
+    private struct PendingModelSwap: Identifiable {
+        let id: String
+        let displayName: String
+    }
 
     var body: some View {
         NavigationStack {
@@ -27,25 +38,22 @@ struct MemoryView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button {
-                        Task {
-                            await threads.suggestMemoriesFromCurrentThread { instruction, context in
-                                guard engine.isLoaded else {
-                                    throw NativeChatEngineError.notLoaded
-                                }
-                                let transcript = context.map { "\($0.role.rawValue): \($0.content)" }.joined(separator: "\n")
-                                // The default output budget is sized for
-                                // an ordinary chat reply, not a JSON
-                                // array that can legitimately list many
-                                // facts — matches the Mac app's own
-                                // 4000-token override for the same call.
-                                return try await engine.respondOnce(
-                                    to: "\(instruction)\n\nConversation:\n\(transcript)", maxTokens: 4000)
-                            }
-                        }
+                        beginSuggesting()
                     } label: {
                         Label(suggestButtonLabel, systemImage: "wand.and.stars")
                     }
                     .disabled(threads.isSuggestingMemories || threads.currentThread.messages.isEmpty)
+
+                    Picker("Model for suggestions", selection: Binding(
+                        get: { threads.memorySuggestionModelID },
+                        set: { threads.setMemorySuggestionModelID($0) }
+                    )) {
+                        Text("Current chat model").tag(Optional<String>.none)
+                        ForEach(threads.availableTextModels) { model in
+                            Text(model.displayName).tag(Optional(model.id))
+                        }
+                    }
+                    .disabled(threads.isSuggestingMemories)
                 }
 
                 if let errorMessage = threads.errorMessage {
@@ -103,6 +111,59 @@ struct MemoryView: View {
             .task { await threads.loadInitialState() }
             .task { await profilesViewModel.load() }
             .dismissKeyboardOnTap()
+            .confirmationDialog(
+                "Switch to \(pendingModelSwap?.displayName ?? "") for this?",
+                isPresented: Binding(
+                    get: { pendingModelSwap != nil },
+                    set: { if !$0 { pendingModelSwap = nil } }
+                ),
+                presenting: pendingModelSwap
+            ) { swap in
+                Button("Switch and Continue") {
+                    Task { await loadThenSuggest(modelID: swap.id) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { swap in
+                Text("Chat only keeps one model loaded at a time on this iPhone, so this also switches what "
+                    + "Chat itself uses next, until you load something else.")
+            }
+        }
+    }
+
+    /// Starts a digest against whichever model was picked — loading it
+    /// first (after confirming, since that also replaces whatever Chat
+    /// itself is currently using) if it isn't already the one
+    /// `NativeChatEngine` has resident.
+    private func beginSuggesting() {
+        guard let targetModelID = threads.memorySuggestionModelID, targetModelID != engine.loadedModelID else {
+            Task { await runSuggestMemories() }
+            return
+        }
+        let name = threads.availableTextModels.first { $0.id == targetModelID }?.displayName ?? targetModelID
+        pendingModelSwap = PendingModelSwap(id: targetModelID, displayName: name)
+    }
+
+    private func loadThenSuggest(modelID: String) async {
+        await engine.load(modelID: modelID)
+        guard engine.loadedModelID == modelID else {
+            threads.errorMessage = engine.errorMessage ?? "Could not load that model."
+            return
+        }
+        await runSuggestMemories()
+    }
+
+    private func runSuggestMemories() async {
+        await threads.suggestMemoriesFromCurrentThread { instruction, context in
+            guard engine.isLoaded else {
+                throw NativeChatEngineError.notLoaded
+            }
+            let transcript = context.map { "\($0.role.rawValue): \($0.content)" }.joined(separator: "\n")
+            // The default output budget is sized for an ordinary chat
+            // reply, not a JSON array that can legitimately list many
+            // facts — matches the Mac app's own 4000-token override
+            // for the same call.
+            return try await engine.respondOnce(
+                to: "\(instruction)\n\nConversation:\n\(transcript)", maxTokens: 4000)
         }
     }
 

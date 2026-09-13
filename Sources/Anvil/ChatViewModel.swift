@@ -9,6 +9,15 @@ import AnvilCore
 /// the `@State` toolchain note in README.
 @MainActor
 final class ChatViewModel: ObservableObject {
+    /// Asked before ever unloading another model to make room for the
+    /// one "Suggest from Thread" needs — see
+    /// `suggestMemoriesFromCurrentThread`'s doc comment.
+    struct PendingModelUnloadConfirmation: Identifiable {
+        let id = UUID()
+        let modelToLoadName: String
+        let modelsToUnloadNames: [String]
+    }
+
     enum GenerationPhase: Equatable {
         case idle
         case preparing
@@ -43,6 +52,23 @@ final class ChatViewModel: ObservableObject {
     /// actually in flight, a multi-minute run looked exactly like it
     /// had silently failed.
     @Published private(set) var memorySuggestionProgress: (completed: Int, total: Int)?
+    /// Which text model "Suggest from Thread" uses — nil means
+    /// "whichever model Chat currently has selected". Unlike
+    /// `selectedModelID`, this can (and often will) name a model
+    /// that isn't loaded right now: see `availableTextModels`.
+    @Published var memorySuggestionModelID: String?
+    /// Every registered text model (`ModelRegistry.all()`, filtered to
+    /// `.text`) — not just the ones currently loaded — so the Memory
+    /// screen's picker can offer anything mapped in the models folder,
+    /// same as the Models tab itself does. Refreshed on every
+    /// `loadInitialState()`.
+    @Published private(set) var availableTextModels: [ModelEntry] = []
+    /// Set when "Suggest from Thread" needs to load a model that
+    /// doesn't fit in the remaining memory budget alongside whatever's
+    /// already loaded — never unloads anything on its own; `MemoryView`
+    /// shows this as a confirmation dialog and calls
+    /// `resolveModelUnloadConfirmation` with the user's choice.
+    @Published var pendingModelUnloadConfirmation: PendingModelUnloadConfirmation?
     @Published private(set) var isTemporaryModeActive = false
     @Published var selectedModelID: String?
     @Published var inputText: String = ""
@@ -121,6 +147,9 @@ final class ChatViewModel: ObservableObject {
     private var lastImageGenerationByThread: [UUID: (seed: Int, prompt: String)] = [:]
     private var generationTask: Task<Void, Never>?
     private var bufferedSendTask: Task<Void, Never>?
+    /// Resumed by `resolveModelUnloadConfirmation` once the user
+    /// answers the dialog `pendingModelUnloadConfirmation` describes.
+    private var modelUnloadContinuation: CheckedContinuation<Bool, Never>?
 
     init(
         sessions: ModelSessionManager,
@@ -150,6 +179,7 @@ final class ChatViewModel: ObservableObject {
         self.isMacSyncEnabled = appSettings.isMacSyncEnabled
         self.macSyncAccess = appSettings.macSyncAccess
         self.isCloudSyncEnabled = appSettings.isCloudSyncEnabled
+        self.memorySuggestionModelID = appSettings.memorySuggestionModelID
         self.syncServer = AnvilSyncServer(
             threadStore: threadStore, profileStore: profileStore, memoryStore: memoryStore,
             modelRegistry: modelRegistry, sessions: sessions, imageSessions: imageSessions, requirements: requirements)
@@ -316,6 +346,11 @@ final class ChatViewModel: ObservableObject {
             hasLoadedInitialState = true
         }
         syncSelectedModel()
+        // Every registered text model, loaded or not — the memory
+        // digest picker (unlike the live-chat one) can name a model
+        // that isn't resident right now, so it needs the full registry,
+        // not just `sessions.readySessions`.
+        availableTextModels = await modelRegistry.all().filter { $0.kind == .text }
     }
 
     /// Keeps the selection pointed at a loaded model — called on
@@ -337,6 +372,18 @@ final class ChatViewModel: ObservableObject {
     func selectModel(_ id: String?) {
         selectedModelID = id
         if let id { applyDefaultProfileIfNeeded(forModelID: id) }
+    }
+
+    /// The Memory screen's own model picker routes through here rather
+    /// than setting `memorySuggestionModelID` directly, so the choice
+    /// survives an app relaunch — `nil` (its "Current chat model"
+    /// option) intentionally isn't persisted as a specific id, so it
+    /// keeps tracking whatever's selected in Chat later too.
+    func setMemorySuggestionModelID(_ id: String?) {
+        memorySuggestionModelID = id
+        var settings = AppSettings.load()
+        settings.memorySuggestionModelID = id
+        try? settings.save()
     }
 
     // MARK: - Profiles
@@ -462,8 +509,7 @@ final class ChatViewModel: ObservableObject {
     /// coverage doesn't depend on how long the conversation got.
     func suggestMemoriesFromCurrentThread() async {
         guard !isSuggestingMemories,
-              let modelID = selectedModelID,
-              let endpoint = sessions.gatewayEndpoint(for: modelID) ?? sessions.chatEndpoint(for: modelID),
+              let modelID = memorySuggestionModelID ?? selectedModelID,
               currentThread.messages.contains(where: { $0.role == .user }) else { return }
 
         isSuggestingMemories = true
@@ -473,6 +519,12 @@ final class ChatViewModel: ObservableObject {
         }
         errorMessage = nil
         memorySuggestions = []
+
+        guard await ensureModelLoadedForSuggestions(modelID) else { return }
+        guard let endpoint = sessions.gatewayEndpoint(for: modelID) ?? sessions.chatEndpoint(for: modelID) else {
+            errorMessage = "That model isn't ready to use."
+            return
+        }
 
         // A fresh run for this thread supersedes whatever it last
         // suggested — without clearing these first, re-running "Suggest
@@ -571,6 +623,84 @@ final class ChatViewModel: ObservableObject {
         } else if anyBatchFailed {
             errorMessage = "Part of this conversation couldn't be analyzed — the suggestions above may be incomplete."
         }
+    }
+
+    /// Loads `modelID` on demand if it isn't already resident — the
+    /// whole point of letting the digest use any registered model, not
+    /// just whichever one Chat happens to have loaded, is that it
+    /// shouldn't require switching Chat's own model first. If loading
+    /// fails for lack of unified memory and something else is
+    /// currently loaded (text or image — they share one budget), asks
+    /// the user before unloading it and retrying once; never unloads
+    /// anything silently. Returns `false` (setting `errorMessage`,
+    /// unless the user simply declined) when the model still isn't
+    /// usable afterward.
+    private func ensureModelLoadedForSuggestions(_ modelID: String) async -> Bool {
+        if sessions.isLoaded(modelID: modelID) { return true }
+        guard let entry = await modelRegistry.all().first(where: { $0.id == modelID }) else {
+            errorMessage = "That model is no longer registered."
+            return false
+        }
+        if await sessions.load(entry, requirements: requirements) { return true }
+
+        guard case .failed(let reason)? = sessions.session(for: modelID)?.status,
+              reason.contains("Not enough unified memory") else {
+            errorMessage = "Could not load \(entry.displayName)."
+            return false
+        }
+
+        let otherTextSessions = sessions.readySessions
+        let otherImageSessions = imageSessions.readySessions
+        let namesToUnload = (otherTextSessions.map { $0.model.displayName } + otherImageSessions.map { $0.model.displayName })
+        guard !namesToUnload.isEmpty else {
+            // Nothing else is loaded to free up, so the estimate itself
+            // is simply larger than the whole budget — asking to
+            // unload "nothing" would be meaningless.
+            errorMessage = reason
+            return false
+        }
+
+        guard await confirmUnloadingOtherModels(toLoad: entry.displayName, currentlyLoaded: namesToUnload) else {
+            return false
+        }
+
+        for session in otherTextSessions { await sessions.unload(modelID: session.id) }
+        for session in otherImageSessions { await imageSessions.unload(modelID: session.id) }
+
+        guard await sessions.load(entry, requirements: requirements) else {
+            if case .failed(let retryReason)? = sessions.session(for: modelID)?.status {
+                errorMessage = retryReason
+            } else {
+                errorMessage = "Could not load \(entry.displayName)."
+            }
+            return false
+        }
+        return true
+    }
+
+    /// Suspends until `resolveModelUnloadConfirmation` answers the
+    /// dialog `pendingModelUnloadConfirmation` describes.
+    private func confirmUnloadingOtherModels(toLoad: String, currentlyLoaded: [String]) async -> Bool {
+        await withCheckedContinuation { continuation in
+            modelUnloadContinuation = continuation
+            pendingModelUnloadConfirmation = PendingModelUnloadConfirmation(
+                modelToLoadName: toLoad, modelsToUnloadNames: currentlyLoaded)
+        }
+    }
+
+    /// Called from `MemoryView`'s confirmation dialog with the user's
+    /// answer — `true` to go ahead and unload/retry, `false` to leave
+    /// everything as it is (the digest simply doesn't run this time).
+    /// Guarded so it's safe to call more than once for the same
+    /// dialog: both an explicit button (Unload/Cancel) and the
+    /// dialog's own dismissal (Escape, clicking outside) call this,
+    /// and only the first should actually resume the waiting task —
+    /// without the guard, a second resume would crash.
+    func resolveModelUnloadConfirmation(unload: Bool) {
+        guard pendingModelUnloadConfirmation != nil else { return }
+        pendingModelUnloadConfirmation = nil
+        modelUnloadContinuation?.resume(returning: unload)
+        modelUnloadContinuation = nil
     }
 
     /// Conservative enough to leave real headroom below a typical small
