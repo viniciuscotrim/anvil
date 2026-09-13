@@ -160,9 +160,37 @@ final class ChatViewModel: ObservableObject {
     /// in-flight local generation) or in temporary mode (never touches
     /// disk at all).
     func pollForExternalThreadUpdates() async {
+        // Two different cadences, not one: the 2s check only ever looks
+        // at the thread already open, so it's fast for "is my current
+        // conversation still being answered" but blind to anything else
+        // — a brand-new thread created on the iPhone, a profile or
+        // memory added there, none of that touches `currentThread` and
+        // so never tripped the old, single check at all. The ~60s full
+        // reload is what makes this *actually* in sync rather than just
+        // "on disk somewhere, until you happen to reopen that list" —
+        // every screen that reads `allThreads`/`availableProfiles`/
+        // `memories` sees a change made on the phone within a minute,
+        // not "whenever I next navigate away and back."
+        var ticksSinceFullRefresh = 0
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard !Task.isCancelled, !isSending, !isTemporaryModeActive else { continue }
+            guard !Task.isCancelled else { return }
+            ticksSinceFullRefresh += 1
+
+            if ticksSinceFullRefresh >= 30 {
+                ticksSinceFullRefresh = 0
+                allThreads = await threadStore.all()
+                availableProfiles = await profileStore.all()
+                memories = await memoryStore.all()
+                if !isSending, !isTemporaryModeActive,
+                    let refreshed = allThreads.first(where: { $0.id == currentThread.id }),
+                    refreshed.updatedAt > currentThread.updatedAt {
+                    currentThread = refreshed
+                }
+                continue
+            }
+
+            guard !isSending, !isTemporaryModeActive else { continue }
             let id = currentThread.id
             guard let updated = await threadStore.get(id: id), updated.updatedAt > currentThread.updatedAt else { continue }
             currentThread = updated

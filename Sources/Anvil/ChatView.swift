@@ -349,7 +349,21 @@ struct ChatView: View {
                 ), axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...4)
-                    .onSubmit { chat.handleSubmit() }
+                    // Plain Return submits; Shift+Return inserts a
+                    // newline instead — the same convention Messages/
+                    // Slack use, and the reason `.onSubmit` alone isn't
+                    // enough here: it fires on Return regardless of
+                    // Shift, with no way to tell the two apart on its
+                    // own. `.ignored` for the Shift case lets the field
+                    // fall through to its own default multi-line
+                    // behavior (a vertical-axis TextField already
+                    // inserts a newline on Return whenever nothing else
+                    // claims the keystroke first).
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard !press.modifiers.contains(.shift) else { return .ignored }
+                        chat.handleSubmit()
+                        return .handled
+                    }
                     .onChange(of: chat.inputText) { _, _ in
                         if chat.chatMessageWaitSeconds > 0 && !chat.isSending {
                             chat.scheduleBufferedSend()
