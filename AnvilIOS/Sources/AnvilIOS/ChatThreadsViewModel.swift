@@ -106,11 +106,24 @@ final class ChatThreadsViewModel {
     /// background merge loop with the newly-picked Mac. `profilesViewModel`
     /// merges in lock-step so a profile picked up from the Mac (or
     /// pushed to it) shows up the same moment threads/memories do.
+    /// Also persists the pick (see `lastMacConnectionIDKey`) — a real,
+    /// reported bug otherwise: `activeSource` only ever lived in
+    /// memory, defaulting back to `.local` on every fresh launch, which
+    /// silently killed the sync loop until the user happened to notice
+    /// and reselect the Mac by hand. `resumeLastMacSourceIfNeeded`
+    /// reads this back on the next launch.
     func selectSource(_ source: ChatSourceSelection, profilesViewModel: ProfilesViewModel) async {
         activeSource = source
         errorMessage = nil
         syncLoopTask?.cancel()
         syncLoopTask = nil
+        switch source {
+        case .local:
+            UserDefaults.standard.removeObject(forKey: Self.lastMacConnectionIDKey)
+            return
+        case .mac(let connection):
+            UserDefaults.standard.set(connection.id.uuidString, forKey: Self.lastMacConnectionIDKey)
+        }
         guard case .mac(let connection) = source else { return }
 
         await mergeSyncNow(with: connection, profilesViewModel: profilesViewModel)
@@ -122,6 +135,22 @@ final class ChatThreadsViewModel {
                 await self.mergeSyncNow(with: current, profilesViewModel: profilesViewModel)
             }
         }
+    }
+
+    private static let lastMacConnectionIDKey = "AnvilLastMacConnectionID"
+
+    /// Called once, at launch, after connections have loaded — restores
+    /// whichever Mac was last selected (if any, and if it's still among
+    /// the saved connections) so sync resumes automatically instead of
+    /// staying silently off until the user reopens the source menu and
+    /// picks it again by hand.
+    func resumeLastMacSourceIfNeeded(connections: [RemoteMacConnection], profilesViewModel: ProfilesViewModel) async {
+        guard case .local = activeSource else { return }
+        guard let idString = UserDefaults.standard.string(forKey: Self.lastMacConnectionIDKey),
+            let id = UUID(uuidString: idString),
+            let connection = connections.first(where: { $0.id == id })
+        else { return }
+        await selectSource(.mac(connection), profilesViewModel: profilesViewModel)
     }
 
     /// One full merge pass with `connection`: threads, memories, and

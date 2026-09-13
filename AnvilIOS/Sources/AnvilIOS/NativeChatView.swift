@@ -178,7 +178,15 @@ struct NativeChatView: View {
             .sheet(isPresented: $isConnectionsSheetPresented) { connectionsSheet }
             .task { await profilesViewModel.load() }
             .task { await threads.loadInitialState() }
-            .task { await connectionsModel.refreshConnections() }
+            .task {
+                await connectionsModel.refreshConnections()
+                // Resumes whichever Mac was last selected, if it's
+                // still known — see `resumeLastMacSourceIfNeeded`'s own
+                // doc comment for the real bug this fixes (sync going
+                // silently, permanently idle after every app relaunch).
+                await threads.resumeLastMacSourceIfNeeded(
+                    connections: connectionsModel.connections, profilesViewModel: profilesViewModel)
+            }
         }
     }
 
