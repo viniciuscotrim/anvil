@@ -9,15 +9,16 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.6.7 (Verified Image Downloads, 20KB Error Fix & Clean Curated Hub)
+## Current release: 0.10.0 (Threads Column in Chat)
 
-This release addresses download integrity, search stability, and pipeline loading:
-- **Zero-Byte / 20KB Download Fix**: `URLDownloader` now strictly validates HTTP response status codes, preventing server 401/404 error bodies from corrupting as small placeholder files.
-- **Verified Working Image Hub**: Replaced inaccessible community paths with tested, working MLX community models (FLUX.1 Schnell 4-bit/8-bit/3-bit, FLUX.1 Dev 4-bit/8-bit/3-bit, FLUX.2 Klein 4B & 9B, Krea Turbo, Z-Image Turbo) with full pipelines (transformer, vae, text_encoder).
-- **Clear Search & Stability**: Dedicated "Clear" buttons on all three search tabs with immediate query reset, debounce cancellation, and responsive UI.
-- **Clear Standalone Model Error Messaging**: Detailed and actionable diagnostics when attempting to load raw single-file checkpoints that lack necessary pipeline subfolders.
+This release adds a persistent left-hand threads list to the Chat tab —
+see "A left-hand threads column in Chat" below. It builds on a run of
+iOS chat/sync parity and iCloud sync work (`0.7.0`–`0.9.0`) shipped and
+tagged in git but not yet narrated in this README or in
+[CHANGELOG.md](CHANGELOG.md) in full; `git tag -l -n99` has the
+per-release detail until that catch-up is done.
 
-The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.6.7`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.10.0`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -643,6 +644,22 @@ Two real, separate things going on:
   `mflux-community/flux2-klein-4b-mflux-q4` (4B, 4-bit) is 4.6GB and
   comfortably fits. Both have a clean file layout already (no redundant
   root-level copy) — confirmed via the same file-list check.
+
+## A left-hand threads column in Chat
+
+Requested: a way to navigate every open conversation from the Chat tab
+itself, not just via the separate "Chat History…" window. `ChatView`
+now has an optional left column (`chat.isThreadsSidebarOpen`, on by
+default, toggled from a `sidebar.left` icon in the header) that lists
+`ChatViewModel.allThreads` — the same source the popout window already
+used, so no new state to keep in sync. That list already covered both
+saved threads and in-session **temporary** ones (never written to
+disk, gone once the app quits) via `ChatViewModel`'s `temporaryThreads`
+tracking, so the new column gets both kinds of navigation for free.
+Each row shows the title and last-message preview, highlights whichever
+thread is currently open, and carries its own "new thread" and delete
+controls. The popout "Chat History…" window stays as-is for anyone who
+wants the list in a separate window instead.
 
 ## Architecture
 

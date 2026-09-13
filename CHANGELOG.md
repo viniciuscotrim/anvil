@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.0] - 2026-09-13
+
+### Added
+- **Threads column in Chat (Mac)**: a persistent left-hand list of every
+  open conversation, for navigation — saved threads and in-session
+  temporary ones alike (the latter drop off once the app quits, since
+  they're never written to disk). Shows title, preview, and highlights
+  the active thread; a "+" starts a new thread from the column itself,
+  a trash icon deletes one in place. Toggle it with the new sidebar
+  icon in Chat's header (on by default). The existing "Chat History…"
+  popout window is unchanged for anyone who prefers a separate window.
+
+> Note: entries for `0.7.0`–`0.9.0` (iOS chat/sync parity, iCloud sync,
+> and related fixes) were shipped and tagged in git but never logged
+> here — see `git tag -l -n99` for those releases' descriptions until
+> they're backfilled into this file.
+
 ## [0.6.7] - 2026-09-12
 
 ### Fixed

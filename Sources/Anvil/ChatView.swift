@@ -17,6 +17,12 @@ struct ChatView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            if chat.isThreadsSidebarOpen {
+                threadsSidebar
+                    .frame(width: 240)
+                Divider()
+            }
+
             VStack(spacing: 0) {
                 header
                 Divider()
@@ -125,6 +131,13 @@ struct ChatView: View {
 
     private var header: some View {
         HStack {
+            Button {
+                chat.isThreadsSidebarOpen.toggle()
+            } label: {
+                Image(systemName: "sidebar.left")
+            }
+            .help("Show or hide the threads list.")
+
             if sessions.readySessions.isEmpty {
                 Text("Chat").font(.headline)
             } else {
@@ -404,6 +417,77 @@ struct ChatView: View {
             }
         }
         .padding()
+    }
+
+    // MARK: - Threads column (every open conversation, for navigation —
+    // saved threads and in-memory temporary ones alike, the latter
+    // disappearing once the app quits since they're never written to
+    // disk)
+
+    private var threadsSidebar: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Threads")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    chat.newThread()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .buttonStyle(.borderless)
+                .disabled(chat.isTemporaryModeActive)
+                .help("New Thread")
+            }
+            .padding()
+
+            Divider()
+
+            if chat.allThreads.isEmpty {
+                Spacer()
+                Text("No conversations yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                List(chat.allThreads) { thread in
+                    threadRow(thread)
+                }
+                .listStyle(.sidebar)
+            }
+        }
+    }
+
+    private func threadRow(_ thread: ChatThread) -> some View {
+        let isActive = thread.id == chat.currentThread.id
+        return HStack(spacing: 4) {
+            Button {
+                chat.selectThread(thread)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(thread.title)
+                        .font(.subheadline)
+                        .fontWeight(isActive ? .semibold : .regular)
+                        .lineLimit(1)
+                    Text(thread.preview)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                Task { await chat.deleteThread(thread) }
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .opacity(0.6)
+        }
+        .padding(.vertical, 2)
+        .listRowBackground(isActive ? Color.accentColor.opacity(0.12) : Color.clear)
     }
 
     // MARK: - Sidebar (everything about the conversation lives here)

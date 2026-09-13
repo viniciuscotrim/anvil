@@ -64,6 +64,10 @@ final class ChatViewModel: ObservableObject {
     @Published var settings = GenerationSettings.default
     @Published var isExportPresented = false
     @Published var isSidebarOpen = false
+    /// The left threads column — on by default since it's the main way
+    /// to navigate between conversations (unlike the right sidebar's
+    /// settings, which stay tucked away until asked for).
+    @Published var isThreadsSidebarOpen = true
     @Published private(set) var lastTokensPerSecond: Double?
     @Published private(set) var lastCachedPromptTokens: Int?
     /// Set while a `generate_image` tool call is actively generating —
