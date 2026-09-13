@@ -466,14 +466,22 @@ final class ModelsViewModel {
         }
     }
 
-    /// Moves the model's files to the Trash (not a permanent delete —
-    /// same reasoning as the Mac app's own delete button) and removes
-    /// it from the registry.
+    /// A real, reported bug: this used to call `trashItem` — matching
+    /// the Mac app's own delete button, which moves a model to the real
+    /// Finder Trash so it's recoverable — but a model's files live
+    /// inside this app's own sandboxed container (`effectiveModelsRoot`),
+    /// and iOS only supports `trashItem` for volumes that actually
+    /// implement a Trash (iCloud Drive, Files app locations, …); a
+    /// plain app-container path isn't one, so every call failed with
+    /// "the volume ... doesn't have a Trash". There's no Files app
+    /// entry or other user-facing place these files could have landed
+    /// in a recoverable Trash anyway, so a direct, permanent delete is
+    /// both the fix and the only behavior that actually made sense here.
     func delete(_ entry: ModelEntry) async {
         let url = URL(fileURLWithPath: entry.localPath)
         if FileManager.default.fileExists(atPath: url.path) {
             do {
-                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                try FileManager.default.removeItem(at: url)
             } catch {
                 errorMessage = "Could not delete \(entry.displayName): \(error.localizedDescription)"
                 return

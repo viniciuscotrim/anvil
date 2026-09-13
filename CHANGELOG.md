@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.13.1-ios-delete-fix] - 2026-09-13
+
+### Fixed
+- **Couldn't delete a downloaded model on iOS**: reported live —
+  "Couldn't delete Z-Image because the volume 'User' doesn't have one"
+  (a Trash). `ModelsViewModel.delete` moved a model's files to the
+  Trash via `trashItem`, matching the Mac app's own delete button
+  (recoverable there via the real Finder Trash) — but a model's files
+  live inside this app's own sandboxed container, and iOS only
+  supports `trashItem` for volumes that actually implement a Trash
+  (iCloud Drive, Files app locations, …); a plain app-container path
+  isn't one, so every delete failed. There's no Files app entry or
+  other recoverable place these files could have landed anyway, so
+  this is now a direct, permanent delete — iOS-only change, the Mac
+  app's own Trash-based delete is untouched.
+
 ## [0.13.0] - 2026-09-13
 
 ### Added

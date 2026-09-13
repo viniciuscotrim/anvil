@@ -9,23 +9,22 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.13.0 (Real "Suggest From Thread" Memory Digest)
+## Current release: 0.13.1-ios-delete-fix (iOS: Deleting a Model Actually Works)
 
-Requested: turn a conversation's context into durable, global memory
-before it grows too large to keep using, then pick it back up from a
-fresh thread. "Suggest from Thread" existed already but reused live
-chat's own bounded context window — exactly wrong for this, since that
-window is what drops a long thread's middle in the first place. Now
-digests the *entire* thread in batches, suggestions are global instead
-of scoped to the source thread's profile, and "Accept All" saves a
-real digest's worth of suggestions in one action instead of one at a
-time. See "A real memory digest" below for the full writeup, including
-a real end-to-end run against a live model (not just unit tests).
-Mac and iOS both.
+Reported live: deleting a downloaded model on iOS failed outright —
+"Couldn't delete Z-Image because the volume 'User' doesn't have one"
+(a Trash). iOS only supports moving a file to the Trash for a handful
+of volumes that actually implement one; a model's files live inside
+this app's own sandboxed container, which isn't one, so every delete
+failed the same way. Now a direct, permanent delete on iOS — nothing
+on the Mac side changed, so no new `.dmg` for it.
 
-It follows 0.12.2's fix for Chat hanging forever on a stalled model,
-0.12.1's fix for downloads landing truncated plus a GGUF quantization
-picker on iOS, 0.12.0's GGUF/llama.cpp engine on iOS, a real app icon
+It follows 0.13.0's real "Suggest from Thread" memory digest (turns a
+conversation's context into durable, global memory before it grows too
+large to keep using, then picks it back up from a fresh thread — see
+"A real memory digest" below), 0.12.2's fix for Chat hanging forever on
+a stalled model, 0.12.1's fix for downloads landing truncated plus a
+GGUF quantization picker on iOS, 0.12.0's GGUF/llama.cpp engine on iOS, a real app icon
 on both platforms (Mac `.icns`, iOS `AppIcon.appiconset`), a fix for
 Z-Image/FLUX.2/Krea-2 models loading through mflux's FLUX.1-only
 pipeline at `0.11.1`, and 0.10.0's threads column plus 0.11.0's round
@@ -955,6 +954,24 @@ with all 8 facts, correctly typed (fact/preference/date) and correctly
 parsed by the same extraction logic the app uses — real end-to-end
 proof the instruction, the model, and the parsing all agree, not just
 that the code compiles.
+
+## iOS: deleting a model actually works
+
+Reported live: deleting a downloaded model on iOS failed with
+"Couldn't delete Z-Image because the volume 'User' doesn't have one."
+`ModelsViewModel.delete` called `FileManager.trashItem`, matching the
+Mac app's own delete button — there, a model's files really do move to
+the real Finder Trash, recoverable like any other delete. On iOS, a
+model's files live inside this app's own sandboxed container
+(`effectiveModelsRoot`), and `trashItem` is only actually implemented
+for a handful of volumes — iCloud Drive, Files app locations, Photos —
+not a plain app-container path, so every call failed outright with
+exactly that "doesn't have a Trash" message. There's no Files app entry
+or other user-facing place these files could have landed in a
+recoverable Trash on iOS anyway, so a direct, permanent `removeItem` is
+both the fix and the only behavior that made sense here. iOS-only
+change; the Mac app's own Trash-based delete already works correctly
+and is untouched.
 
 ## Architecture
 
