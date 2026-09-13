@@ -13,10 +13,12 @@ import Foundation
 public struct DrawThingsDownloader: Sendable {
     private let registry: ModelRegistry
     private let hfDownloader: HFRepoDownloader
+    private let catalog: HuggingFaceCatalog
 
-    public init(registry: ModelRegistry) {
+    public init(registry: ModelRegistry, catalog: HuggingFaceCatalog = HuggingFaceCatalog()) {
         self.registry = registry
         self.hfDownloader = HFRepoDownloader(registry: registry)
+        self.catalog = catalog
     }
 
     /// Destination folder for a Draw Things model download (separated per quantization variant).
@@ -40,7 +42,29 @@ public struct DrawThingsDownloader: Sendable {
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> ModelEntry {
         let destinationDir = Self.destinationDirectory(for: summary)
-        let files = summary.filePaths ?? (summary.filename.map { [$0] } ?? ["model.ckpt"])
+        // A confirmed, real bug: every curated catalog entry
+        // (`DrawThingsCatalog.curatedModels`) leaves both `filePaths`
+        // and `filename` unset — they're multi-file mflux-format repos
+        // (`text_encoder/`, `vae/`, `transformer/`, …), not the
+        // single-`.ckpt`-file case those two fields exist for at all.
+        // The old fallback to a literal `"model.ckpt"` was guaranteed
+        // to 404 on every single one of them (confirmed directly
+        // against huggingface.co). Fetching the repo's real file list
+        // here — the same call `HuggingFaceCatalog.modelInfo` already
+        // makes for the plain Hugging Face search tab — is what makes
+        // this correct regardless of a repo's actual layout, and stays
+        // correct if Draw Things' catalog adds more curated entries
+        // later without anyone having to hand-maintain a file list.
+        let files: [String]
+        if let explicit = summary.filePaths ?? summary.filename.map({ [$0] }) {
+            files = explicit
+        } else {
+            let info = try await catalog.modelInfo(id: summary.repoID)
+            guard let resolvedFiles = info.filePaths, !resolvedFiles.isEmpty else {
+                throw ModelError.downloadFailed("Could not find this repo's file list on Hugging Face.")
+            }
+            files = resolvedFiles
+        }
 
         let entry = try await hfDownloader.download(
             repoID: summary.repoID,

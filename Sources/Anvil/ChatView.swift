@@ -12,6 +12,7 @@ struct ChatView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var newMemoryText = ""
     @State private var memoryMessageID: UUID?
+    @State private var shiftReturnMonitor: Any?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -77,6 +78,32 @@ struct ChatView: View {
             await chat.pollForExternalThreadUpdates()
         }
         .onChange(of: sessions.sessions) { _, _ in chat.syncSelectedModel() }
+        .onAppear {
+            // Shift+Return -> insert a newline in the composer instead
+            // of submitting. Not `.onKeyPress(.return)` on the
+            // TextField itself — that reliably caused a real, reported
+            // regression (Shift+Return selecting the entire field's
+            // text instead of adding a line, a known SwiftUI quirk
+            // around returning `.ignored` from a Return-scoped
+            // `onKeyPress` and having the event redelivered through the
+            // responder chain). A local `NSEvent` monitor sidesteps
+            // that entirely: it never touches SwiftUI's own key-press
+            // handling, just appends the newline directly and consumes
+            // the event so `.onSubmit` never also fires for the same
+            // keystroke.
+            guard shiftReturnMonitor == nil else { return }
+            shiftReturnMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                guard event.keyCode == 36, event.modifierFlags.contains(.shift) else { return event }
+                chat.inputText += "\n"
+                return nil
+            }
+        }
+        .onDisappear {
+            if let monitor = shiftReturnMonitor {
+                NSEvent.removeMonitor(monitor)
+                shiftReturnMonitor = nil
+            }
+        }
         .fileExporter(
             isPresented: Binding(
                 get: { chat.isExportPresented },
@@ -349,21 +376,7 @@ struct ChatView: View {
                 ), axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...4)
-                    // Plain Return submits; Shift+Return inserts a
-                    // newline instead — the same convention Messages/
-                    // Slack use, and the reason `.onSubmit` alone isn't
-                    // enough here: it fires on Return regardless of
-                    // Shift, with no way to tell the two apart on its
-                    // own. `.ignored` for the Shift case lets the field
-                    // fall through to its own default multi-line
-                    // behavior (a vertical-axis TextField already
-                    // inserts a newline on Return whenever nothing else
-                    // claims the keystroke first).
-                    .onKeyPress(.return, phases: .down) { press in
-                        guard !press.modifiers.contains(.shift) else { return .ignored }
-                        chat.handleSubmit()
-                        return .handled
-                    }
+                    .onSubmit { chat.handleSubmit() }
                     .onChange(of: chat.inputText) { _, _ in
                         if chat.chatMessageWaitSeconds > 0 && !chat.isSending {
                             chat.scheduleBufferedSend()
