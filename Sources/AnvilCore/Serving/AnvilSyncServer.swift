@@ -404,9 +404,30 @@ public actor AnvilSyncServer {
         let systemPrompt = systemPromptParts.isEmpty ? nil : systemPromptParts.joined(separator: "\n\n")
 
         do {
-            var reply = try await ChatClient().send(
-                messages: context.messages, baseURL: endpoint, modelDisplayName: modelDisplayName,
-                settings: .default, systemPrompt: systemPrompt, conversationID: threadID.uuidString)
+            // A real, reproduced bug this bounded timeout fixes: this
+            // placeholder is written to disk immediately, and nothing
+            // else ever revisits it — if the detached task below never
+            // throws and never returns (a genuinely stuck network call,
+            // confirmed against a live conversation: both this Mac's
+            // model server and the app itself fully idle, no crash, no
+            // log line, just an empty placeholder sitting there
+            // indefinitely), the placeholder was stuck that way
+            // forever, indistinguishable from "still generating" to
+            // whoever's looking at it. `ChatClient.send`'s own
+            // 1800s/30-minute URLSession timeout is meant to be the
+            // backstop for a slow-but-progressing request, not "the
+            // longest a user should ever wait to find out this failed
+            // silently" — so this races it against a much shorter,
+            // user-reasonable bound and always resolves the placeholder
+            // either way.
+            var reply = try await Self.withTimeout(seconds: 300) {
+                try await ChatClient().send(
+                    messages: context.messages, baseURL: endpoint, modelDisplayName: modelDisplayName,
+                    settings: .default, systemPrompt: systemPrompt, conversationID: threadID.uuidString)
+            }
+            if reply.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (reply.toolCalls?.isEmpty ?? true) {
+                throw ServingError.requestFailed("The model returned an empty response.")
+            }
             reply.responderName = profile?.name
             reply.memoryIDsUsed = context.memoryIDs
             await Self.replacePlaceholder(threadID: threadID, placeholderID: placeholderID, with: reply, threadStore: threadStore)
@@ -414,6 +435,28 @@ public actor AnvilSyncServer {
             let failure = ChatMessage(
                 role: .assistant, content: "Error: \(error.localizedDescription)", modelDisplayName: modelDisplayName)
             await Self.replacePlaceholder(threadID: threadID, placeholderID: placeholderID, with: failure, threadStore: threadStore)
+        }
+    }
+
+    /// Races `operation` against a plain `Task.sleep` — whichever
+    /// finishes first wins, and the loser is cancelled. Generic enough
+    /// to reuse anywhere a background call needs a harder, more
+    /// user-reasonable bound than whatever timeout the underlying
+    /// transport (URLSession here) already has.
+    private static func withTimeout<T: Sendable>(
+        seconds: UInt64, operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                throw ServingError.requestFailed("Timed out after \(seconds)s with no response.")
+            }
+            guard let result = try await group.next() else {
+                throw ServingError.requestFailed("Timed out after \(seconds)s with no response.")
+            }
+            group.cancelAll()
+            return result
         }
     }
 

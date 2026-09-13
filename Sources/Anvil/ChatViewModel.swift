@@ -824,7 +824,31 @@ final class ChatViewModel: ObservableObject {
                     reply = message
                 }
             }
-            guard var reply else { return }
+            // A real, reproduced bug this replaces: silently returning
+            // here left an empty assistant placeholder on screen and on
+            // disk forever, with no error shown and nothing to retry —
+            // exactly what happened to a live conversation (confirmed
+            // by reading its persisted state directly: an untouched
+            // empty placeholder, both the app and the model server
+            // fully idle, no crash, no log line anywhere). `.done`
+            // should always fire once `streamSend`'s byte-reading loop
+            // ends, by that method's own design — but "should always"
+            // isn't a guarantee a user should ever pay for with a
+            // silent hang. Treat its absence as the failure it is.
+            guard var reply else {
+                generationPhase = .failed
+                errorMessage = "The response ended with no content — nothing to show. Try sending again."
+                currentThread.messages[replyIndex] = ChatMessage(
+                    role: .assistant,
+                    content: "⚠️ No response was received — the connection may have dropped. Try sending again.",
+                    modelDisplayName: modelDisplayName,
+                    responderName: responderName
+                )
+                if !isTemporaryModeActive {
+                    persistCurrentThread()
+                }
+                return
+            }
             reply.responderName = responderName
             reply.memoryIDsUsed = memoryIDsUsed
             currentThread.messages[replyIndex] = reply
@@ -875,6 +899,19 @@ final class ChatViewModel: ObservableObject {
                     followUpReply.responderName = responderName
                     followUpReply.memoryIDsUsed = followUpContext.memoryIDs
                     currentThread.messages[followUpIndex] = followUpReply
+                } else {
+                    // Same real bug as the `guard var reply` case above,
+                    // same fix — this is the follow-up turn after a
+                    // `generate_image` tool call, and it silently left
+                    // an empty placeholder behind exactly the same way.
+                    generationPhase = .failed
+                    errorMessage = "The follow-up response after generating the image ended with no content. Try sending again."
+                    currentThread.messages[followUpIndex] = ChatMessage(
+                        role: .assistant,
+                        content: "⚠️ The image generated, but the follow-up reply never arrived — the connection may have dropped. Try sending again.",
+                        modelDisplayName: modelDisplayName,
+                        responderName: responderName
+                    )
                 }
             }
 

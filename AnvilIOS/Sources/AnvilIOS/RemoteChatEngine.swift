@@ -273,7 +273,23 @@ final class RemoteChatEngine: ObservableObject {
                     reply = message
                 }
             }
-            guard var reply else { return }
+            // Same real bug fixed on the Mac side (`ChatViewModel`'s own
+            // `runChatLoop`): silently returning here left an empty
+            // assistant placeholder with no error and nothing to retry.
+            guard var reply else {
+                generationPhase = .failed
+                errorMessage = "The response ended with no content — nothing to show. Try sending again."
+                if let index = Self.index(of: replyID, in: threads.currentThread.messages) {
+                    threads.currentThread.messages[index] = ChatMessage(
+                        role: .assistant,
+                        content: "⚠️ No response was received — the connection may have dropped. Try sending again.",
+                        modelDisplayName: modelDisplayName,
+                        responderName: responderName
+                    )
+                }
+                await threads.persistCurrentThread()
+                return
+            }
             reply.responderName = responderName
             reply.memoryIDsUsed = memoryIDsUsed
             if let index = Self.index(of: replyID, in: threads.currentThread.messages) {
@@ -322,6 +338,18 @@ final class RemoteChatEngine: ObservableObject {
                     followUpReply.responderName = responderName
                     followUpReply.memoryIDsUsed = followUpContext.memoryIDs
                     threads.currentThread.messages[index] = followUpReply
+                } else if let index = Self.index(of: followUpID, in: threads.currentThread.messages) {
+                    // Same bug, same fix, one turn later — the
+                    // follow-up reply after a `generate_image` tool
+                    // call ended with no content.
+                    generationPhase = .failed
+                    errorMessage = "The follow-up response after generating the image ended with no content. Try sending again."
+                    threads.currentThread.messages[index] = ChatMessage(
+                        role: .assistant,
+                        content: "⚠️ The image generated, but the follow-up reply never arrived — the connection may have dropped. Try sending again.",
+                        modelDisplayName: modelDisplayName,
+                        responderName: responderName
+                    )
                 }
             }
 
