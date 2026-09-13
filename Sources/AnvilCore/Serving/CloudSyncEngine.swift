@@ -220,6 +220,7 @@ public actor CloudSyncEngine {
         record["messagesJSON"] = String(decoding: messagesData, as: UTF8.self) as CKRecordValue
         record["createdAt"] = thread.createdAt as CKRecordValue
         record["updatedAt"] = thread.updatedAt as CKRecordValue
+        record["isTitleCustom"] = (thread.isTitleCustom ? 1 : 0) as CKRecordValue
         if let profileID = thread.profileID { record["profileID"] = profileID.uuidString as CKRecordValue }
         if let origin = thread.originDeviceName { record["originDeviceName"] = origin as CKRecordValue }
         return record
@@ -259,9 +260,12 @@ public actor CloudSyncEngine {
         else { return nil }
         let profileID = (record["profileID"] as? String).flatMap(UUID.init(uuidString:))
         let originDeviceName = record["originDeviceName"] as? String
+        // Absent on a record written before this field existed — treat
+        // that the same as `ChatThread`'s own decode fallback (false).
+        let isTitleCustom = (record["isTitleCustom"] as? Int).map { $0 != 0 } ?? false
         return ChatThread(
             id: id, title: title, messages: messages, createdAt: createdAt, updatedAt: updatedAt,
-            profileID: profileID, originDeviceName: originDeviceName)
+            profileID: profileID, originDeviceName: originDeviceName, isTitleCustom: isTitleCustom)
     }
 
     private static func profile(from record: CKRecord) -> ChatProfile? {

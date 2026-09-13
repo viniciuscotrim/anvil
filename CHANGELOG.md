@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.11.0] - 2026-09-13
+
+### Added
+- **Editable conversation titles**: a thread's title now defaults to
+  "Profile name · created date" (or "New Chat · date" with no profile)
+  instead of the first message's text, stays in sync with the profile
+  until you type your own title in Chat's header, and is locked in for
+  good the moment you do.
+
+### Changed
+- **Chat's right-hand panel is leaner**: "New Thread", "Chat History…",
+  and "Clear Conversation" are gone — the threads column and its own
+  delete button already cover them. The standalone "Chat History…"
+  window is removed entirely.
+- **Temporary Chat moved to the composer**: the toggle now lives next
+  to the message field (an icon button) instead of the sidebar, and is
+  disabled the moment the thread has a first message — matching how a
+  thread's Profile already locks at that point.
+- **iPhone Sync and iCloud Sync moved to the global top bar**: both were
+  chat-specific settings that were actually app-wide. Their icons now
+  sit to the left of the app version (iPhone, then iCloud), each
+  opening a popover with the same controls the Chat sidebar used to
+  carry.
+- **Popping a conversation out into its own window now actually
+  detaches it**: the main window's conversation pane goes blank (only
+  the threads column stays usable there) while the popout has the
+  conversation plus its settings panel, always shown. Closing the
+  popout window is what brings the main window's pane back.
+
 ## [0.10.0] - 2026-09-13
 
 ### Added

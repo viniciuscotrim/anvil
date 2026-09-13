@@ -9,16 +9,20 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.10.0 (Threads Column in Chat)
+## Current release: 0.11.0 (Chat Layout Refinements)
 
-This release adds a persistent left-hand threads list to the Chat tab —
-see "A left-hand threads column in Chat" below. It builds on a run of
-iOS chat/sync parity and iCloud sync work (`0.7.0`–`0.9.0`) shipped and
-tagged in git but not yet narrated in this README or in
-[CHANGELOG.md](CHANGELOG.md) in full; `git tag -l -n99` has the
-per-release detail until that catch-up is done.
+Follows straight on from 0.10.0's threads column with a round of
+refinements to the same area — editable titles, a leaner right-hand
+panel, Temporary Chat in the composer, iPhone/iCloud sync promoted to
+the global top bar, and a popout window that actually detaches the
+conversation. See "A left-hand threads column in Chat" below for the
+full narrative. It builds on a run of iOS chat/sync parity and iCloud
+sync work (`0.7.0`–`0.9.0`) shipped and tagged in git but not yet
+narrated in this README or in [CHANGELOG.md](CHANGELOG.md) in full;
+`git tag -l -n99` has the per-release detail until that catch-up is
+done.
 
-The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.10.0`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.11.0`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -658,8 +662,53 @@ disk, gone once the app quits) via `ChatViewModel`'s `temporaryThreads`
 tracking, so the new column gets both kinds of navigation for free.
 Each row shows the title and last-message preview, highlights whichever
 thread is currently open, and carries its own "new thread" and delete
-controls. The popout "Chat History…" window stays as-is for anyone who
-wants the list in a separate window instead.
+controls. (The separate "Chat History…" window this replaced is gone
+as of 0.11.0 below — the column made it fully redundant.)
+
+## Chat layout refinements: titles, a leaner panel, a real popout
+
+A follow-up round on the threads column above, all requested together:
+
+- **Editable titles.** A thread's title used to be silently derived
+  from its first message. It now defaults to "Profile name · created
+  date" (`ChatViewModel.autoTitle`) and is shown as an editable
+  `TextField` right in Chat's header — type a new one and
+  `ChatThread.isTitleCustom` locks it in for good; clear it back to
+  empty and it reverts to the auto-generated one. Until it's locked,
+  the title stays in sync with the profile (picking one, or a model
+  applying its default) the same way `profileID` itself only changes
+  pre-first-message. Synced via LAN (already plain `Codable`) and
+  iCloud (`CloudSyncEngine`'s `CKRecord` mapping gained the field too,
+  defaulting to `false` on a record written before it existed).
+- **A leaner right-hand panel.** "New Thread", "Chat History…", and
+  "Clear Conversation" are gone from Chat's sidebar — the threads
+  column and its own per-row delete button already cover all three.
+- **Temporary Chat moved to the composer.** The toggle is now an icon
+  button next to the message field, not a sidebar row, and — like
+  Profile — locks the moment the thread has a first message
+  (`ChatViewModel.canChangeProfile` doubles as the gate for both; the
+  doc comment on it says so). There's no way to convert a temporary
+  thread into a permanent one after that, by design — same as Profile,
+  start a new thread instead.
+- **iPhone Sync and iCloud Sync are app-wide now, not Chat-specific.**
+  Both settings actually applied regardless of which tab or thread was
+  open, so their controls moved to `RootView`'s global top bar —
+  compact icons (iPhone, then iCloud) just to the left of the app
+  version, each opening a popover with the exact controls the Chat
+  sidebar used to carry. Their startup calls
+  (`applyMacSyncSettingsIfNeeded`/`applyCloudSyncSettingsIfNeeded`)
+  moved out of `ChatView`'s `.task` into `RootView`'s for the same
+  reason — status has to be known even if Chat is never opened.
+- **Popping a conversation out now really detaches it.** Before, the
+  popout window just showed a second copy of the same chat pane. Now
+  `ChatView(isPopout: true)` sets `chat.isPoppedOut`, and the main
+  window reacts by blanking its own conversation pane (header,
+  messages, composer) in favor of a plain "open in a separate window"
+  placeholder — only the threads column stays usable there. The popout
+  itself carries the conversation plus the settings panel, always
+  shown (no left column, no panel toggle — that's its whole reason to
+  exist). Closing the popout is the only way back; there's no separate
+  in-app "undo."
 
 ## Architecture
 

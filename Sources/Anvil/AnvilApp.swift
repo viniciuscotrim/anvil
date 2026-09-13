@@ -29,11 +29,6 @@ struct AnvilApp: App {
         }
         .windowResizability(.contentSize)
 
-        WindowGroup("Chat History", id: "threads") {
-            ThreadsListView()
-                .environmentObject(appState.chat)
-        }
-
         WindowGroup("Code History", id: "code-threads") {
             CodeThreadsListView()
                 .environmentObject(appState.codeAgent)
@@ -46,10 +41,14 @@ struct AnvilApp: App {
 
         // A detached copy of the same live chat — same `ChatViewModel`
         // instance, so it's the identical conversation, not a fork —
-        // opened via the "Pop Out" button in Chat's sidebar so the user
+        // opened via the "pop out" button in Chat's header so the user
         // can keep it visible while using the rest of the app.
+        // `isPopout: true` gives it a different layout (no threads
+        // column, settings panel always shown) and marks
+        // `chat.isPoppedOut` for as long as this window stays open —
+        // see `ChatView`'s own header comment.
         WindowGroup("Chat", id: "chat-popout") {
-            ChatView()
+            ChatView(isPopout: true)
                 .environmentObject(appState.sessions)
                 .environmentObject(appState.imageSessions)
                 .environmentObject(appState.chat)

@@ -1,12 +1,14 @@
 import SwiftUI
 import AppKit
-import CloudKit
 import AnvilCore
 
-/// An app-level chat window. Header carries only the active model
-/// (switchable) and performance metrics; everything else about the
-/// conversation — threads, temporary mode, display options, generation
-/// settings, export — lives in the collapsible side panel.
+/// An app-level chat window. The threads column (left) navigates
+/// between conversations; the header carries the editable title, the
+/// active model (switchable), and performance metrics; Temporary Chat
+/// lives in the composer, since it only matters at the start of a
+/// thread; display options, generation settings, and export live in
+/// the collapsible side panel. iPhone/iCloud sync are app-wide, not
+/// per-conversation — see `RootView`'s top bar instead.
 struct ChatView: View {
     @EnvironmentObject private var sessions: ModelSessionManager
     @EnvironmentObject private var chat: ChatViewModel
@@ -14,79 +16,101 @@ struct ChatView: View {
     @State private var newMemoryText = ""
     @State private var memoryMessageID: UUID?
     @State private var shiftReturnMonitor: Any?
+    @FocusState private var isTitleFieldFocused: Bool
+    /// True only for the detached window opened via the "pop out"
+    /// button (`WindowGroup(id: "chat-popout")` in `AnvilApp`) — same
+    /// `ChatViewModel`, but a different layout: no threads column (that
+    /// stays in the main window) and the right-hand settings panel is
+    /// always shown here instead of being optional.
+    var isPopout: Bool = false
 
     var body: some View {
         HStack(spacing: 0) {
-            if chat.isThreadsSidebarOpen {
+            if !isPopout, chat.isThreadsSidebarOpen || chat.isPoppedOut {
                 threadsSidebar
                     .frame(width: 240)
                 Divider()
             }
 
-            VStack(spacing: 0) {
-                header
-                Divider()
+            if !isPopout, chat.isPoppedOut {
+                poppedOutPlaceholder
+                    .frame(minWidth: 480, minHeight: 480)
+            } else {
+                VStack(spacing: 0) {
+                    header
+                    Divider()
 
-                if sessions.readySessions.isEmpty {
-                    emptyState
-                } else if chat.visibleMessages.isEmpty {
-                    Spacer()
-                    Text("Say something to \(activeModelName).")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                } else {
-                    messageList
-                }
-
-                if let error = chat.errorMessage {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                        Text(error)
+                    if sessions.readySessions.isEmpty {
+                        emptyState
+                    } else if chat.visibleMessages.isEmpty {
                         Spacer()
-                        Button {
-                            chat.errorMessage = nil
-                        } label: {
-                            Image(systemName: "xmark")
-                        }
-                        .buttonStyle(.borderless)
+                        Text("Say something to \(activeModelName).")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    } else {
+                        messageList
                     }
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal)
-                    .padding(.top, 4)
-                }
 
-                if !chat.isSending,
-                   let phase = chat.generationPhase.label,
-                   chat.generationPhase == .cancelled {
-                    Text(phase)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let error = chat.errorMessage {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                            Text(error)
+                            Spacer()
+                            Button {
+                                chat.errorMessage = nil
+                            } label: {
+                                Image(systemName: "xmark")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .font(.callout)
+                        .foregroundStyle(.red)
                         .padding(.horizontal)
                         .padding(.top, 4)
+                    }
+
+                    if !chat.isSending,
+                       let phase = chat.generationPhase.label,
+                       chat.generationPhase == .cancelled {
+                        Text(phase)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal)
+                            .padding(.top, 4)
+                    }
+
+                    Divider()
+                    inputBar
                 }
-
-                Divider()
-                inputBar
+                .frame(minWidth: 480, minHeight: 480)
             }
-            .frame(minWidth: 480, minHeight: 480)
 
-            if chat.isSidebarOpen {
+            // In the popout, the settings panel is the whole reason the
+            // window exists, so it's always visible there — no toggle.
+            // In the main window it stays optional, and disappears
+            // entirely once popped out (it now lives in that window).
+            if isPopout {
+                Divider()
+                sidebar
+                    .frame(width: 280)
+            } else if chat.isSidebarOpen && !chat.isPoppedOut {
                 Divider()
                 sidebar
                     .frame(width: 280)
             }
         }
         .task {
+            // iPhone/iCloud sync startup lives in `RootView`'s own
+            // `.task` now — those controls are app-wide (see the top
+            // bar), not specific to whether Chat has ever been opened.
             await chat.loadInitialState()
-            await chat.applyMacSyncSettingsIfNeeded()
-            await chat.applyCloudSyncSettingsIfNeeded()
         }
         .task {
             await chat.pollForExternalThreadUpdates()
         }
         .onChange(of: sessions.sessions) { _, _ in chat.syncSelectedModel() }
         .onAppear {
+            if isPopout { chat.isPoppedOut = true }
             // Shift+Return -> insert a newline in the composer instead
             // of submitting. Not `.onKeyPress(.return)` on the
             // TextField itself — that reliably caused a real, reported
@@ -107,6 +131,9 @@ struct ChatView: View {
             }
         }
         .onDisappear {
+            // The only way `isPoppedOut` clears — closing this window
+            // is what brings the main window's conversation pane back.
+            if isPopout { chat.isPoppedOut = false }
             if let monitor = shiftReturnMonitor {
                 NSEvent.removeMonitor(monitor)
                 shiftReturnMonitor = nil
@@ -131,16 +158,18 @@ struct ChatView: View {
 
     private var header: some View {
         HStack {
-            Button {
-                chat.isThreadsSidebarOpen.toggle()
-            } label: {
-                Image(systemName: "sidebar.left")
+            if !isPopout {
+                Button {
+                    chat.isThreadsSidebarOpen.toggle()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .help("Show or hide the threads list.")
             }
-            .help("Show or hide the threads list.")
 
-            if sessions.readySessions.isEmpty {
-                Text("Chat").font(.headline)
-            } else {
+            titleField
+
+            if !sessions.readySessions.isEmpty {
                 Picker("", selection: Binding(
                     get: { chat.selectedModelID },
                     set: { chat.selectModel($0) }
@@ -150,7 +179,7 @@ struct ChatView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(maxWidth: 260)
+                .frame(maxWidth: 220)
             }
 
             if chat.isTemporaryModeActive {
@@ -179,20 +208,64 @@ struct ChatView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Button {
-                openWindow(id: "chat-popout")
-            } label: {
-                Image(systemName: "macwindow.badge.plus")
-            }
-            .help("Open this conversation in its own window.")
+            if !isPopout {
+                Button {
+                    openWindow(id: "chat-popout")
+                } label: {
+                    Image(systemName: "macwindow.badge.plus")
+                }
+                .help("Open this conversation in its own window.")
+                .disabled(chat.isPoppedOut)
 
-            Button {
-                chat.isSidebarOpen.toggle()
-            } label: {
-                Image(systemName: "sidebar.right")
+                Button {
+                    chat.isSidebarOpen.toggle()
+                } label: {
+                    Image(systemName: "sidebar.right")
+                }
             }
         }
         .padding()
+    }
+
+    /// Editable conversation title — defaults to "Profile · created
+    /// date" (see `ChatViewModel.autoTitle`) and stays in sync with the
+    /// profile until the user types something here, which locks it in
+    /// (`ChatThread.isTitleCustom`) for good.
+    private var titleField: some View {
+        TextField("Title", text: Binding(
+            get: { chat.currentThread.title },
+            set: { chat.updateThreadTitleDraft($0) }
+        ))
+        .textFieldStyle(.plain)
+        .font(.headline)
+        .lineLimit(1)
+        .frame(minWidth: 100, idealWidth: 200, maxWidth: 280)
+        .focused($isTitleFieldFocused)
+        .onSubmit { chat.commitThreadTitle() }
+        .onChange(of: isTitleFieldFocused) { wasFocused, isFocused in
+            if wasFocused, !isFocused { chat.commitThreadTitle() }
+        }
+        .help("Conversation title — click to rename.")
+    }
+
+    /// Shown in the main window's conversation pane in place of the
+    /// normal header/messages/input once the conversation is open in
+    /// its own popped-out window — the threads column next to this
+    /// stays fully usable, only the conversation itself moved.
+    private var poppedOutPlaceholder: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Image(systemName: "macwindow")
+                .font(.system(size: 32))
+                .foregroundStyle(.secondary)
+            Text("This conversation is open in a separate window.")
+                .foregroundStyle(.secondary)
+            Text("Close that window to bring it back here.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var emptyState: some View {
@@ -385,6 +458,20 @@ struct ChatView: View {
     private var inputBar: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
+                Toggle(isOn: Binding(
+                    get: { chat.isTemporaryModeActive },
+                    set: { _ in chat.toggleTemporaryMode() }
+                )) {
+                    Image(systemName: "eyeglasses")
+                }
+                .toggleStyle(.button)
+                .disabled(!chat.canChangeProfile)
+                .help(
+                    chat.canChangeProfile
+                        ? "Temporary chat — this conversation is never saved to disk."
+                        : "Locked after the first message — start a new thread to go temporary."
+                )
+
                 TextField("Message…", text: Binding(
                     get: { chat.inputText },
                     set: { chat.inputText = $0 }
@@ -494,21 +581,6 @@ struct ChatView: View {
 
     private var sidebar: some View {
         Form {
-            Section("Conversation") {
-                Button("New Thread") { chat.newThread() }
-                    .disabled(chat.isTemporaryModeActive)
-                Button("Chat History…") {
-                    openWindow(id: "threads")
-                }
-                Button("Clear Conversation") { chat.clearCurrentConversation() }
-                    .disabled(chat.messages.isEmpty)
-                Toggle("Temporary Chat", isOn: Binding(
-                    get: { chat.isTemporaryModeActive },
-                    set: { _ in chat.toggleTemporaryMode() }
-                ))
-                .help("While on, this conversation is never saved to disk.")
-            }
-
             Section("Profile") {
                 Picker("Profile", selection: Binding(
                     get: { chat.activeProfile?.id },
@@ -653,38 +725,6 @@ struct ChatView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("iPhone Sync") {
-                Toggle("Let iPhone Use This Mac's Threads", isOn: Binding(
-                    get: { chat.isMacSyncEnabled },
-                    set: { chat.setMacSyncEnabled($0) }
-                ))
-                if chat.isMacSyncEnabled {
-                    Picker("Access", selection: Binding(
-                        get: { chat.macSyncAccess },
-                        set: { chat.setMacSyncAccess($0) }
-                    )) {
-                        ForEach(ServerAccess.allCases) { access in
-                            Text(access.label).tag(access)
-                        }
-                    }
-                }
-                Text("Off by default. When on, the Chat tab in Anvil for iOS can pick this Mac as its source — same threads, profiles, and memories, kept in sync on this Mac even when the iPhone sends the message.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("iCloud Sync") {
-                Toggle("Sync Threads, Profiles & Memories via iCloud", isOn: Binding(
-                    get: { chat.isCloudSyncEnabled },
-                    set: { chat.setCloudSyncEnabled($0) }
-                ))
-                if chat.isCloudSyncEnabled, let status = chat.cloudAccountStatus, status != .available {
-                    Text(cloudAccountStatusText(status))
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-            }
-
             Section("Export") {
                 Button {
                     copyAllToPasteboard()
@@ -708,16 +748,5 @@ struct ChatView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(chat.exportMarkdown(), forType: .string)
-    }
-
-    private func cloudAccountStatusText(_ status: CKAccountStatus) -> String {
-        switch status {
-        case .noAccount: return "Not signed into iCloud — sign in via System Settings to use this."
-        case .restricted: return "iCloud is restricted on this Mac (e.g. parental controls)."
-        case .couldNotDetermine: return "Couldn't check iCloud account status — try again shortly."
-        case .temporarilyUnavailable: return "iCloud is temporarily unavailable — try again shortly."
-        case .available: return ""
-        @unknown default: return "iCloud isn't available right now."
-        }
     }
 }

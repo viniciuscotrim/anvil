@@ -68,6 +68,13 @@ final class ChatViewModel: ObservableObject {
     /// to navigate between conversations (unlike the right sidebar's
     /// settings, which stay tucked away until asked for).
     @Published var isThreadsSidebarOpen = true
+    /// True while the "pop out" window (`ChatView(isPopout: true)`) is
+    /// on screen — the main window's `ChatView` uses this to blank its
+    /// own conversation pane (keeping only the threads column) instead
+    /// of showing the same conversation twice at once. Set/cleared from
+    /// that window's own `onAppear`/`onDisappear`, so closing it is the
+    /// only way back — there's no separate "undo" action for this.
+    @Published var isPoppedOut = false
     @Published private(set) var lastTokensPerSecond: Double?
     @Published private(set) var lastCachedPromptTokens: Int?
     /// Set while a `generate_image` tool call is actively generating —
@@ -310,11 +317,62 @@ final class ChatViewModel: ObservableObject {
     }
 
     /// Only true before the first message — see `ChatThread.profileID`.
+    /// Also gates the Temporary Chat toggle: both only make sense to
+    /// change before the conversation has actually started.
     var canChangeProfile: Bool { currentThread.messages.isEmpty }
 
     func setProfile(_ profile: ChatProfile?) {
         guard canChangeProfile else { return }
         currentThread.profileID = profile?.id
+        if !currentThread.isTitleCustom {
+            currentThread.title = autoTitle(profileID: profile?.id, createdAt: currentThread.createdAt, temporary: isTemporaryModeActive)
+        }
+    }
+
+    // MARK: - Thread title
+
+    /// "Profile name · created date", regenerated any time the profile
+    /// changes (only possible pre-first-message) — until the user
+    /// renames the thread, at which point `isTitleCustom` locks it and
+    /// nothing here touches it again.
+    private func autoTitle(profileID: UUID?, createdAt: Date, temporary: Bool) -> String {
+        let dateString = Self.titleDateFormatter.string(from: createdAt)
+        let base = profileID.flatMap { id in availableProfiles.first { $0.id == id }?.name } ?? "New Chat"
+        return temporary ? "Temporary: \(base) · \(dateString)" : "\(base) · \(dateString)"
+    }
+
+    private static let titleDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    /// Live-updates the title as the user types in the header's title
+    /// field — not yet persisted (see `commitThreadTitle`), so a rename
+    /// abandoned mid-edit (e.g. the app quits) never partially saves.
+    func updateThreadTitleDraft(_ text: String) {
+        currentThread.title = text
+        currentThread.isTitleCustom = true
+    }
+
+    /// Called when the title field is submitted or loses focus. An
+    /// empty title reverts to the auto-generated one instead of saving
+    /// a blank thread name.
+    func commitThreadTitle() {
+        let trimmed = currentThread.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            currentThread.title = autoTitle(
+                profileID: currentThread.profileID, createdAt: currentThread.createdAt, temporary: isTemporaryModeActive)
+            currentThread.isTitleCustom = false
+        } else {
+            currentThread.title = trimmed
+        }
+        if isTemporaryModeActive {
+            rememberTemporaryThread()
+        } else {
+            persistCurrentThread()
+        }
     }
 
     func addMemory(
@@ -477,6 +535,9 @@ final class ChatViewModel: ObservableObject {
         guard canChangeProfile, currentThread.profileID == nil else { return }
         guard let defaultProfile = availableProfiles.first(where: { $0.defaultForModelID == modelID }) else { return }
         currentThread.profileID = defaultProfile.id
+        if !currentThread.isTitleCustom {
+            currentThread.title = autoTitle(profileID: defaultProfile.id, createdAt: currentThread.createdAt, temporary: isTemporaryModeActive)
+        }
     }
 
     // MARK: - Threads
@@ -488,7 +549,9 @@ final class ChatViewModel: ObservableObject {
     func newThread() {
         guard !isSending else { return }
         if isTemporaryModeActive { rememberTemporaryThread() }
-        currentThread = ChatThread(originDeviceName: DeviceIdentity.currentName)
+        var thread = ChatThread(originDeviceName: DeviceIdentity.currentName)
+        thread.title = autoTitle(profileID: nil, createdAt: thread.createdAt, temporary: false)
+        currentThread = thread
         isTemporaryModeActive = false
     }
 
@@ -530,25 +593,14 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    /// Empties the active conversation without deleting the thread
-    /// entry itself.
-    func clearCurrentConversation() {
-        cancelBufferedSend()
-        currentThread.messages.removeAll()
-        lastTokensPerSecond = nil
-        lastCachedPromptTokens = nil
-        generationPhase = .idle
-        lastImageGenerationByThread.removeValue(forKey: currentThread.id)
-        if !isTemporaryModeActive {
-            persistCurrentThread()
-        }
-    }
-
     /// Only the user flips this — nothing else enters or exits
-    /// temporary mode on its own. While active, the conversation never
-    /// touches disk; turning it off restores whatever thread was active
-    /// before.
+    /// temporary mode on its own — and only before the current thread's
+    /// first message (see `canChangeProfile`, reused as the same gate;
+    /// the UI disables the toggle once that's false). While active, the
+    /// conversation never touches disk; turning it off restores
+    /// whatever thread was active before.
     func toggleTemporaryMode() {
+        guard canChangeProfile else { return }
         cancelBufferedSend()
         if isTemporaryModeActive {
             rememberTemporaryThread()
@@ -557,7 +609,9 @@ final class ChatViewModel: ObservableObject {
             threadBeforeTemporaryMode = nil
         } else {
             threadBeforeTemporaryMode = currentThread
-            currentThread = ChatThread(title: "Temporary Chat", originDeviceName: DeviceIdentity.currentName)
+            var thread = ChatThread(originDeviceName: DeviceIdentity.currentName)
+            thread.title = autoTitle(profileID: nil, createdAt: thread.createdAt, temporary: true)
+            currentThread = thread
             isTemporaryModeActive = true
             rememberTemporaryThread()
         }
@@ -652,12 +706,6 @@ final class ChatViewModel: ObservableObject {
         errorMessage = nil
 
         currentThread.messages.append(ChatMessage(role: .user, content: text))
-        if currentThread.title == "New Chat" || currentThread.title == "Temporary Chat" {
-            if currentThread.messages.count == 1 {
-                let title = String(text.prefix(48))
-                currentThread.title = isTemporaryModeActive ? "Temporary: \(title)" : title
-            }
-        }
         // Saved right away — not just after the full round trip
         // completes — so the message survives even if something else
         // interrupts before the assistant answers. A durability-only
