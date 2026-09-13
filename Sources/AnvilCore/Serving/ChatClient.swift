@@ -138,6 +138,11 @@ public struct ChatClient: Sendable {
     /// wait for the rest of a reply nobody wants anymore — the other
     /// real half of the same problem: no way to actually stop a
     /// generation that won't be needed once started.
+    /// `stallInterval` — how long the connection can go completely
+    /// silent before this gives up — defaults to a real 120s for actual
+    /// callers; overridable only so a test can use a fraction of a
+    /// second instead of actually waiting two real minutes to exercise
+    /// the watchdog below.
     public func streamSend(
         messages: [ChatMessage],
         baseURL: URL,
@@ -146,7 +151,8 @@ public struct ChatClient: Sendable {
         settings: GenerationSettings = .default,
         tools: [ChatTool] = [],
         systemPrompt: String? = nil,
-        conversationID: String? = nil
+        conversationID: String? = nil,
+        stallInterval: TimeInterval = 120
     ) -> AsyncThrowingStream<ChatStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -199,7 +205,56 @@ public struct ChatClient: Sendable {
                     var completionTokens = 0
                     var cachedPromptTokens: Int?
 
+                    // A real, reported failure mode this exists to fix:
+                    // the underlying model server can stop actually
+                    // working mid-generation (a hung/crashed inference
+                    // loop, an MLX/Metal-side stall) without closing the
+                    // connection or sending anything else — reported
+                    // live as memory/GPU use visibly dropping in
+                    // Activity Monitor while Chat just sat on
+                    // "Thinking…" indefinitely. `request.timeoutInterval`
+                    // (1800s) is deliberately generous for a genuinely
+                    // slow model that's still actively producing output,
+                    // so it's the wrong tool for catching *this* — a
+                    // connection that goes completely silent. This
+                    // watchdog tracks time since the last byte actually
+                    // arrived (ticked on every line, even one that
+                    // parses to nothing) and cancels the read the moment
+                    // that silence — not the total reply time — exceeds
+                    // a much shorter bound, so a real hang surfaces in
+                    // ~2 minutes with a clear message instead of only
+                    // ever failing (if at all) after the full 1800s.
+                    let lastActivity = ActivityClock()
+                    // At most 5s between checks, but never longer than
+                    // the interval itself — otherwise a short test-only
+                    // `stallInterval` would wait a fixed 5s regardless.
+                    let pollInterval = min(5, stallInterval / 4)
+                    let watchdog = Task {
+                        while !Task.isCancelled {
+                            try? await Task.sleep(nanoseconds: UInt64(max(0, pollInterval) * 1_000_000_000))
+                            guard !Task.isCancelled else { return }
+                            if lastActivity.secondsSinceLastTick() >= stallInterval {
+                                // Finishing the continuation here (rather
+                                // than throwing from inside the `for try
+                                // await` loop below, which is exactly
+                                // what's stuck) is what actually unblocks
+                                // it: `continuation.onTermination` below
+                                // already cancels `task` once the stream
+                                // terminates, and that cancellation is
+                                // what `bytes.lines`'s blocked read
+                                // actually responds to.
+                                continuation.finish(throwing: ServingError.requestFailed(
+                                    "The model stopped responding (no output for over \(Int(stallInterval))s) "
+                                    + "— it may have crashed or hung. Try again, or reload the model."
+                                ))
+                                return
+                            }
+                        }
+                    }
+                    defer { watchdog.cancel() }
+
                     for try await line in bytes.lines {
+                        lastActivity.tick()
                         try Task.checkCancellation()
                         guard line.hasPrefix("data:") else { continue }
                         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
@@ -271,6 +326,27 @@ public struct ChatClient: Sendable {
         var id: String?
         var name: String?
         var arguments: String = ""
+    }
+
+    /// A lock-protected "last seen" timestamp — `streamSend`'s stall
+    /// watchdog (a separate `Task`) reads it while the line-reading loop
+    /// (a different `Task`) writes it on every line, so a plain `Date`
+    /// var isn't safe here.
+    private final class ActivityClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lastTick = Date()
+
+        func tick() {
+            lock.lock()
+            lastTick = Date()
+            lock.unlock()
+        }
+
+        func secondsSinceLastTick() -> TimeInterval {
+            lock.lock()
+            defer { lock.unlock() }
+            return Date().timeIntervalSince(lastTick)
+        }
     }
 
     /// Wire shape stays intentionally narrow: role/content always, plus

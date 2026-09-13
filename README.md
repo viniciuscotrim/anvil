@@ -9,27 +9,28 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.12.1 (Download Fixes: Truncated Files, GGUF Quant Picker)
+## Current release: 0.12.2 (Chat No Longer Hangs Forever on a Stalled Model)
 
-Two real download bugs, reported live on a fresh install of the GGUF
-work below: an expected ~8GB GGUF landed as ~20KB (a gated Hugging Face
-repo can answer `200 OK` with a small HTML page instead of the file —
-`URLDownloader` now checks the real size against the server's declared
-one, cross-platform), and a repo shipping many quantizations could try
-to download all of them at once (iOS now shows a picker). See
-"Download fixes" below for the full writeup.
+Reported live on the Mac app: Chat sat on "Thinking…" indefinitely
+after the model server visibly stopped working (memory/GPU use
+dropped) without closing the connection. `ChatClient` now gives up
+after 120s of true silence instead of only ever timing out (if at all)
+after the existing, deliberately generous 1800s request timeout — see
+"Chat no longer hangs forever" below for the full writeup, including
+the real test that reproduces the exact hang.
 
-It follows 0.12.0's GGUF/llama.cpp engine on iOS, a real app icon on
-both platforms (Mac `.icns`, iOS `AppIcon.appiconset`), a fix for
-Z-Image/FLUX.2/Krea-2 models loading through mflux's FLUX.1-only
-pipeline at `0.11.1`, and 0.10.0's threads column plus 0.11.0's round
-of Chat refinements before that. Full release history in
+It follows 0.12.1's fix for downloads landing truncated plus a GGUF
+quantization picker on iOS, 0.12.0's GGUF/llama.cpp engine on iOS, a
+real app icon on both platforms (Mac `.icns`, iOS `AppIcon.appiconset`),
+a fix for Z-Image/FLUX.2/Krea-2 models loading through mflux's
+FLUX.1-only pipeline at `0.11.1`, and 0.10.0's threads column plus
+0.11.0's round of Chat refinements before that. Full release history in
 [CHANGELOG.md](CHANGELOG.md), now caught up through `0.7.0`'s download/
 queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.12.1`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.12.2`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -846,6 +847,46 @@ The Mac app's Model Manager has the identical "downloads the whole
 `filePaths` list" gap (`ModelManagerViewModel.swift`, same shape) —
 not touched in this pass since the report was iOS-specific, but worth
 the same fix as a follow-up.
+
+## Chat no longer hangs forever on a stalled model
+
+Reported live on the Mac app: sent a message, Chat sat on
+"Thinking…", and — watching Activity Monitor — the model server's own
+memory/GPU use visibly dropped back down while Chat just kept waiting,
+with nothing happening and no way to tell "still working" apart from
+"stuck" other than waiting to see if it ever came back (it didn't).
+
+`ChatClient.streamSend` already set `request.timeoutInterval = 1800`
+(30 minutes) — deliberately generous, since a genuinely slow model
+producing output steadily can take that long. That's exactly why it's
+the wrong tool for this: the reported failure isn't a slow reply, it's
+the connection going *completely silent* — the server stopped actually
+computing without closing the socket or sending anything else, so the
+existing timeout (which resets on any activity) never had a reason to
+fire, possibly for the full 30 minutes, possibly never.
+
+Fixed with a separate watchdog that tracks *time since the last byte
+actually arrived* (ticked on every SSE line read, even one that parses
+to nothing — a keepalive counts as much as real content) rather than
+total time since the request started. 120s of true silence now ends
+the stream with a clear "the model stopped responding" error, instead
+of only ever failing — if at all — after the full half hour. Cancelling
+the stalled read is what actually unblocks the connection: finishing
+the stream's continuation from the watchdog triggers
+`AsyncThrowingStream`'s own `onTermination`, which cancels the
+underlying task, which `URLSession.AsyncBytes` responds to by aborting
+the connection — a real, working example of that same cancellation
+path. `ChatClient` is shared code (`AnvilCore`), so this covers every
+caller at once: Mac Chat, Code, and Prompt to Model, plus iOS's
+remote-Mac chat.
+
+Verified with a real test (`stallWatchdogSurfacesAHungConnectionInsteadOfWaitingForever`),
+not just read for plausibility: a mock `URLProtocol` sends one genuine
+SSE chunk, then never sends anything else and never closes the
+connection — the exact reported shape — and the test uses a 0.3s
+`stallInterval` (an injectable parameter, defaulting to the real 120s
+for actual callers) so it catches the hang in well under a second
+rather than needing to wait out a real two-minute interval.
 
 ## Architecture
 

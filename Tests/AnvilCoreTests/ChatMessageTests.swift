@@ -209,6 +209,42 @@ struct ChatClientTests {
         #expect(reply.tokensPerSecond != nil)
         #expect(reply.cachedPromptTokens == 7)
     }
+
+    /// Regression test for a real, reported bug: the underlying model
+    /// server can stop actually working mid-generation (a hung/crashed
+    /// inference loop) without closing the connection or sending
+    /// anything else — reported live as memory/GPU use dropping while
+    /// Chat sat on "Thinking…" indefinitely. `StallingURLProtocol`
+    /// reproduces exactly that shape (one real chunk, then a connection
+    /// that never sends anything else and never closes); a tiny
+    /// `stallInterval` (0.3s, not the real 120s default) is what keeps
+    /// this test fast rather than an actual two-minute wait.
+    @Test
+    func stallWatchdogSurfacesAHungConnectionInsteadOfWaitingForever() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StallingURLProtocol.self]
+        let client = ChatClient(session: URLSession(configuration: config))
+
+        let stream = client.streamSend(
+            messages: [ChatMessage(role: .user, content: "hi")],
+            baseURL: URL(string: "http://127.0.0.1:9")!,
+            stallInterval: 0.3
+        )
+
+        var caughtError: Error?
+        do {
+            for try await _ in stream {}
+        } catch {
+            caughtError = error
+        }
+
+        let servingError = try #require(caughtError as? ServingError)
+        guard case .requestFailed(let message) = servingError else {
+            Issue.record("expected .requestFailed, got \(servingError)")
+            return
+        }
+        #expect(message.contains("stopped responding"))
+    }
 }
 
 /// Plain lock-backed recorder (not an actor) so the URLProtocol's
@@ -262,6 +298,31 @@ private final class MockURLProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Self.responseBody)
         client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+/// Simulates the exact hang `stallWatchdogSurfacesAHungConnectionInsteadOfWaitingForever`
+/// tests: one real SSE chunk, then a connection that never delivers
+/// anything else and never closes — `didLoad` is called exactly once,
+/// `urlProtocolDidFinishLoading` never at all.
+private final class StallingURLProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: nil,
+            headerFields: ["Content-Type": "text/event-stream"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        let chunk = Data((#"data: {"choices":[{"delta":{"content":"hi"}}]}"# + "\n\n").utf8)
+        client?.urlProtocol(self, didLoad: chunk)
+        // Deliberately nothing further — no more `didLoad`, no
+        // `urlProtocolDidFinishLoading`. `stopLoading()` below still
+        // gets called once the watchdog's cancellation reaches this
+        // task; that's fine, there's nothing to clean up.
     }
 
     override func stopLoading() {}

@@ -1,6 +1,23 @@
 # Changelog
 
-## [0.12.1] - 2026-09-13
+## [0.12.2] - 2026-09-13
+
+### Fixed
+- **Chat could hang forever on "Thinking…"**: reported live — the model
+  server stopped actually working mid-generation (memory/GPU use
+  visibly dropped) without closing the connection or sending anything
+  else, so Chat just kept waiting. The existing 1800s request timeout
+  is deliberately generous for a genuinely slow-but-working model, so
+  it's the wrong tool for a connection that's gone completely silent.
+  `ChatClient.streamSend` now tracks time since the last byte actually
+  arrived and gives up after 120s of true silence — not total reply
+  time — with a clear "the model stopped responding" error instead of
+  only ever failing (if at all) after the full half hour. Shared by
+  every `ChatClient` caller: Mac Chat, Code, Prompt to Model, and iOS's
+  remote-Mac chat. Verified with a real test simulating the exact
+  hang (one real chunk, then a connection that never sends anything
+  else or closes) — the watchdog catches it in well under a second in
+  the test (a 0.3s stall interval, vs. the real 120s default).
 
 ### Fixed
 - **A "20KB instead of 8GB" download**, reported live on iOS: a
