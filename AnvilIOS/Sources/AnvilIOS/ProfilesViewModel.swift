@@ -19,6 +19,7 @@ final class ProfilesViewModel {
 
     private let store = ChatProfileStore()
     private let syncClient = AnvilSyncClient()
+    private let cloudSync = CloudSyncEngine()
 
     func load() async {
         profiles = await store.all()
@@ -29,6 +30,11 @@ final class ProfilesViewModel {
         do {
             let saved = try await store.upsert(profile)
             await load()
+            if AppSettings.load().isCloudSyncEnabled {
+                try? await cloudSync.start()
+                await cloudSync.markProfileChanged(saved)
+                await cloudSync.syncNow()
+            }
             return saved
         } catch {
             errorMessage = error.localizedDescription
@@ -39,6 +45,11 @@ final class ProfilesViewModel {
     func delete(_ profile: ChatProfile) async {
         try? await store.delete(id: profile.id)
         await load()
+        if AppSettings.load().isCloudSyncEnabled {
+            try? await cloudSync.start()
+            await cloudSync.markProfileDeleted(id: profile.id)
+            await cloudSync.syncNow()
+        }
     }
 
     func defaultProfile(forModelID modelID: String) async -> ChatProfile? {

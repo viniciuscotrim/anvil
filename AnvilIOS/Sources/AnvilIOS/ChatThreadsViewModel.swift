@@ -1,4 +1,5 @@
 import AnvilCore
+import CloudKit
 import Foundation
 
 /// Which Mac (if any) this phone is actively merge-syncing with and
@@ -86,6 +87,38 @@ final class ChatThreadsViewModel {
     private let memoryStore = ChatMemoryStore()
     private let syncClient = AnvilSyncClient()
     private var syncLoopTask: Task<Void, Never>?
+    private let cloudSync = CloudSyncEngine()
+    /// Off by default — see `CloudSyncEngine`'s own header comment.
+    /// Independent of `activeSource`/`AnvilSyncServer`: this one works
+    /// from anywhere, no Mac reachability required at all, through the
+    /// user's own private iCloud database.
+    private(set) var isCloudSyncEnabled = AppSettings.load().isCloudSyncEnabled
+    private(set) var cloudAccountStatus: CKAccountStatus?
+
+    /// Called once at launch — starts the cloud sync engine if it was
+    /// left on from a previous launch, after confirming the account is
+    /// actually usable. Degrades to "just doesn't sync" otherwise,
+    /// never blocks or errors the rest of the app.
+    func applyCloudSyncSettingsIfNeeded() async {
+        guard isCloudSyncEnabled else { return }
+        cloudAccountStatus = await cloudSync.accountStatus()
+        guard cloudAccountStatus == .available else { return }
+        try? await cloudSync.start()
+    }
+
+    func setCloudSyncEnabled(_ enabled: Bool) {
+        isCloudSyncEnabled = enabled
+        var settings = AppSettings.load()
+        settings.isCloudSyncEnabled = enabled
+        try? settings.save()
+        Task {
+            if enabled {
+                await applyCloudSyncSettingsIfNeeded()
+            } else {
+                await cloudSync.stop()
+            }
+        }
+    }
     /// `.task` on the view reruns every time it re-enters the hierarchy
     /// (switching tabs and back) — only the first call should pick the
     /// initial thread; later calls just refresh `allThreads`, the same
@@ -247,12 +280,14 @@ final class ChatThreadsViewModel {
         _ = try? await memoryStore.upsert(memory)
         memories = await memoryStore.all()
         await pushMemoryIfMacActive(memory)
+        await pushMemoryToCloudIfEnabled(memory)
     }
 
     func updateMemory(_ memory: ChatMemory) async {
         _ = try? await memoryStore.upsert(memory)
         memories = await memoryStore.all()
         await pushMemoryIfMacActive(memory)
+        await pushMemoryToCloudIfEnabled(memory)
     }
 
     func deleteMemory(_ memory: ChatMemory) async {
@@ -261,6 +296,16 @@ final class ChatThreadsViewModel {
         if case .mac(let connection) = activeSource {
             try? await syncClient.deleteMemory(id: memory.id, host: connection.host)
         }
+        if isCloudSyncEnabled {
+            await cloudSync.markMemoryDeleted(id: memory.id)
+            await cloudSync.syncNow()
+        }
+    }
+
+    private func pushMemoryToCloudIfEnabled(_ memory: ChatMemory) async {
+        guard isCloudSyncEnabled else { return }
+        await cloudSync.markMemoryChanged(memory)
+        await cloudSync.syncNow()
     }
 
     /// Best-effort, immediate push so a new/edited memory reaches the
@@ -386,6 +431,10 @@ final class ChatThreadsViewModel {
         if case .mac(let connection) = activeSource {
             try? await syncClient.deleteThread(id: thread.id, host: connection.host)
         }
+        if isCloudSyncEnabled {
+            await cloudSync.markThreadDeleted(id: thread.id)
+            await cloudSync.syncNow()
+        }
         allThreads.removeAll { $0.id == thread.id }
         if currentThread.id == thread.id {
             currentThread = allThreads.first ?? ChatThread(originDeviceName: DeviceIdentity.currentName)
@@ -424,6 +473,10 @@ final class ChatThreadsViewModel {
         if case .mac(let connection) = activeSource {
             _ = try? await syncClient.upsertThread(saved, host: connection.host)
         }
+        if isCloudSyncEnabled {
+            await cloudSync.markThreadChanged(saved)
+            await cloudSync.syncNow()
+        }
     }
 
     /// Write-only: saves to disk without reassigning `currentThread`, so
@@ -436,10 +489,15 @@ final class ChatThreadsViewModel {
         guard !isTemporaryModeActive else { return }
         let threadToSave = currentThread
         let source = activeSource
+        let cloudEnabled = isCloudSyncEnabled
         Task {
             guard let saved = try? await store.upsert(threadToSave) else { return }
             if case .mac(let connection) = source {
                 _ = try? await syncClient.upsertThread(saved, host: connection.host)
+            }
+            if cloudEnabled {
+                await cloudSync.markThreadChanged(saved)
+                await cloudSync.syncNow()
             }
         }
     }

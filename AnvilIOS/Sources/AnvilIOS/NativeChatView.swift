@@ -178,6 +178,7 @@ struct NativeChatView: View {
             .sheet(isPresented: $isConnectionsSheetPresented) { connectionsSheet }
             .task { await profilesViewModel.load() }
             .task { await threads.loadInitialState() }
+            .task { await threads.applyCloudSyncSettingsIfNeeded() }
             .task {
                 await connectionsModel.refreshConnections()
                 // Resumes whichever Mac was last selected, if it's
