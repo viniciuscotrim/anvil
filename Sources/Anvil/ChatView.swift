@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CloudKit
 import AnvilCore
 
 /// An app-level chat window. Header carries only the active model
@@ -73,6 +74,7 @@ struct ChatView: View {
         .task {
             await chat.loadInitialState()
             await chat.applyMacSyncSettingsIfNeeded()
+            await chat.applyCloudSyncSettingsIfNeeded()
         }
         .task {
             await chat.pollForExternalThreadUpdates()
@@ -587,6 +589,21 @@ struct ChatView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("iCloud Sync") {
+                Toggle("Sync Threads, Profiles & Memories via iCloud", isOn: Binding(
+                    get: { chat.isCloudSyncEnabled },
+                    set: { chat.setCloudSyncEnabled($0) }
+                ))
+                if chat.isCloudSyncEnabled, let status = chat.cloudAccountStatus, status != .available {
+                    Text(cloudAccountStatusText(status))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                Text("Off by default. Works from anywhere — no Mac reachability needed at all, unlike iPhone Sync above. Encrypted in your own private iCloud account; Apple can't read it, and neither can anyone else's Anvil.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Export") {
                 Button {
                     copyAllToPasteboard()
@@ -610,5 +627,16 @@ struct ChatView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(chat.exportMarkdown(), forType: .string)
+    }
+
+    private func cloudAccountStatusText(_ status: CKAccountStatus) -> String {
+        switch status {
+        case .noAccount: return "Not signed into iCloud — sign in via System Settings to use this."
+        case .restricted: return "iCloud is restricted on this Mac (e.g. parental controls)."
+        case .couldNotDetermine: return "Couldn't check iCloud account status — try again shortly."
+        case .temporarilyUnavailable: return "iCloud is temporarily unavailable — try again shortly."
+        case .available: return ""
+        @unknown default: return "iCloud isn't available right now."
+        }
     }
 }

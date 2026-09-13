@@ -24,6 +24,7 @@ final class ProfilesViewModel: ObservableObject {
     }
 
     private let store: ChatProfileStore
+    private let cloudSync = CloudSyncEngine()
     private let registry: ModelRegistry
 
     init(store: ChatProfileStore, registry: ModelRegistry) {
@@ -70,10 +71,15 @@ final class ProfilesViewModel: ObservableObject {
             originDeviceName: existingOrigin ?? DeviceIdentity.currentName
         )
         do {
-            _ = try await store.upsert(profile)
+            let saved = try await store.upsert(profile)
             editingDraft = nil
             errorMessage = nil
             await load()
+            if AppSettings.load().isCloudSyncEnabled {
+                try? await cloudSync.start()
+                await cloudSync.markProfileChanged(saved)
+                await cloudSync.syncNow()
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -82,6 +88,11 @@ final class ProfilesViewModel: ObservableObject {
     func delete(_ profile: ChatProfile) async {
         try? await store.delete(id: profile.id)
         await load()
+        if AppSettings.load().isCloudSyncEnabled {
+            try? await cloudSync.start()
+            await cloudSync.markProfileDeleted(id: profile.id)
+            await cloudSync.syncNow()
+        }
     }
 
     func modelDisplayName(for modelID: String?) -> String? {

@@ -49,6 +49,11 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// Reuses the same Local-only/Network semantic every per-model
     /// server already exposes via its own gear icon.
     public var macSyncAccess: ServerAccess
+    /// Off by default — `CloudSyncEngine` (threads/profiles/memories
+    /// through the user's own private iCloud database) never runs
+    /// until this is explicitly turned on, the same "opt-in, works
+    /// fully without it" rule `isMacSyncEnabled` already follows.
+    public var isCloudSyncEnabled: Bool
 
     public init(
         modelsRootPath: String? = nil,
@@ -61,7 +66,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         codeAgentPermissionLevel: CodeAgentPermissionLevel = .manual,
         codeAgentEnabledFeatures: Set<CodeAgentFeature> = [],
         isMacSyncEnabled: Bool = false,
-        macSyncAccess: ServerAccess = .localOnly
+        macSyncAccess: ServerAccess = .localOnly,
+        isCloudSyncEnabled: Bool = false
     ) {
         self.modelsRootPath = modelsRootPath
         self.defaultChatImageModelID = defaultChatImageModelID
@@ -74,6 +80,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.codeAgentEnabledFeatures = codeAgentEnabledFeatures
         self.isMacSyncEnabled = isMacSyncEnabled
         self.macSyncAccess = macSyncAccess
+        self.isCloudSyncEnabled = isCloudSyncEnabled
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -81,7 +88,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         case chatMaxEstimatedContextTokens, chatRecentMessageCount
         case codeAgentWorkingDirectoryPath, codeAgentAllowFullDiskAccess
         case codeAgentPermissionLevel, codeAgentEnabledFeatures
-        case isMacSyncEnabled, macSyncAccess
+        case isMacSyncEnabled, macSyncAccess, isCloudSyncEnabled
     }
 
     // A settings file saved before a field existed just defaults it on
@@ -106,6 +113,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         codeAgentEnabledFeatures = try container.decodeIfPresent(Set<CodeAgentFeature>.self, forKey: .codeAgentEnabledFeatures) ?? []
         isMacSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .isMacSyncEnabled) ?? false
         macSyncAccess = try container.decodeIfPresent(ServerAccess.self, forKey: .macSyncAccess) ?? .localOnly
+        isCloudSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .isCloudSyncEnabled) ?? false
     }
 
     private static var fileURL: URL {

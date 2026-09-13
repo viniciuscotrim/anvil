@@ -1,3 +1,4 @@
+import CloudKit
 import Foundation
 import AnvilCore
 
@@ -48,6 +49,12 @@ final class ChatViewModel: ObservableObject {
     /// resume this Mac's own conversation" needs this explicit opt-in.
     @Published var isMacSyncEnabled: Bool
     @Published var macSyncAccess: ServerAccess
+    /// Off by default — see `CloudSyncEngine`'s own header comment.
+    /// Independent of `isMacSyncEnabled`/`AnvilSyncServer`: this one
+    /// works from anywhere, no Mac reachability required, through the
+    /// user's own private iCloud database.
+    @Published var isCloudSyncEnabled: Bool
+    @Published private(set) var cloudAccountStatus: CKAccountStatus?
     @Published private(set) var lastEstimatedContextTokens: Int = 0
     @Published var isSending = false
     @Published private(set) var isWaitingToSend = false
@@ -75,6 +82,7 @@ final class ChatViewModel: ObservableObject {
     private let client = ChatClient()
     private let imageClient = ImageClient()
     private let syncServer: AnvilSyncServer
+    private let cloudSync: CloudSyncEngine
     private var threadBeforeTemporaryMode: ChatThread?
     private var temporaryThreads: [UUID: ChatThread] = [:]
     /// `.task { loadInitialState() }` on `ChatView` reruns every time the
@@ -121,8 +129,39 @@ final class ChatViewModel: ObservableObject {
         self.recentMessageCount = max(2, appSettings.chatRecentMessageCount)
         self.isMacSyncEnabled = appSettings.isMacSyncEnabled
         self.macSyncAccess = appSettings.macSyncAccess
+        self.isCloudSyncEnabled = appSettings.isCloudSyncEnabled
         self.syncServer = AnvilSyncServer(
             modelRegistry: modelRegistry, sessions: sessions, imageSessions: imageSessions, requirements: requirements)
+        self.cloudSync = CloudSyncEngine(threadStore: threadStore, profileStore: profileStore, memoryStore: memoryStore)
+    }
+
+    // MARK: - iCloud sync
+
+    /// Called once from `ChatView`'s own `.task` — starts the cloud
+    /// sync engine if it was left on from a previous launch, after
+    /// confirming the account is actually usable (signed in, iCloud
+    /// Drive on for this app). Off (and silent) otherwise — this is
+    /// meant to degrade to "just doesn't sync," never to block or
+    /// error the rest of the app.
+    func applyCloudSyncSettingsIfNeeded() async {
+        guard isCloudSyncEnabled else { return }
+        cloudAccountStatus = await cloudSync.accountStatus()
+        guard cloudAccountStatus == .available else { return }
+        try? await cloudSync.start()
+    }
+
+    func setCloudSyncEnabled(_ enabled: Bool) {
+        isCloudSyncEnabled = enabled
+        var settings = AppSettings.load()
+        settings.isCloudSyncEnabled = enabled
+        try? settings.save()
+        Task {
+            if enabled {
+                await applyCloudSyncSettingsIfNeeded()
+            } else {
+                await cloudSync.stop()
+            }
+        }
     }
 
     // MARK: - iPhone sync
@@ -283,7 +322,7 @@ final class ChatViewModel: ObservableObject {
     ) async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        _ = try? await memoryStore.upsert(ChatMemory(
+        let memory = ChatMemory(
             content: trimmed,
             kind: kind,
             source: source,
@@ -291,18 +330,31 @@ final class ChatViewModel: ObservableObject {
             profileID: profileID,
             originDeviceName: DeviceIdentity.currentName,
             createdFromMessageID: createdFromMessageID
-        ))
+        )
+        guard let saved = try? await memoryStore.upsert(memory) else { return }
         memories = await memoryStore.all()
+        if isCloudSyncEnabled {
+            await cloudSync.markMemoryChanged(saved)
+            await cloudSync.syncNow()
+        }
     }
 
     func updateMemory(_ memory: ChatMemory) async {
-        _ = try? await memoryStore.upsert(memory)
+        guard let saved = try? await memoryStore.upsert(memory) else { return }
         memories = await memoryStore.all()
+        if isCloudSyncEnabled {
+            await cloudSync.markMemoryChanged(saved)
+            await cloudSync.syncNow()
+        }
     }
 
     func deleteMemory(_ memory: ChatMemory) async {
         try? await memoryStore.delete(id: memory.id)
         memories = await memoryStore.all()
+        if isCloudSyncEnabled {
+            await cloudSync.markMemoryDeleted(id: memory.id)
+            await cloudSync.syncNow()
+        }
     }
 
     func suggestMemoriesFromCurrentThread() async {
@@ -941,12 +993,17 @@ final class ChatViewModel: ObservableObject {
 
     private func persistCurrentThread() {
         let threadToSave = currentThread
+        let cloudEnabled = isCloudSyncEnabled
         Task {
             guard let saved = try? await threadStore.upsert(threadToSave) else { return }
             if currentThread.id == saved.id {
                 currentThread = saved
             }
             allThreads = await threadStore.all()
+            if cloudEnabled {
+                await cloudSync.markThreadChanged(saved)
+                await cloudSync.syncNow()
+            }
         }
     }
 
@@ -954,8 +1011,13 @@ final class ChatViewModel: ObservableObject {
     /// see the call site in `send()` for why that distinction matters.
     private func persistCurrentThreadForDurability() {
         let threadToSave = currentThread
+        let cloudEnabled = isCloudSyncEnabled
         Task {
-            _ = try? await threadStore.upsert(threadToSave)
+            guard let saved = try? await threadStore.upsert(threadToSave) else { return }
+            if cloudEnabled {
+                await cloudSync.markThreadChanged(saved)
+                await cloudSync.syncNow()
+            }
         }
     }
 }

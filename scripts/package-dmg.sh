@@ -58,6 +58,7 @@ sed \
 
 echo "==> Code-signing $APP_NAME.app (hardened runtime)"
 codesign --force --deep --options runtime --timestamp \
+  --entitlements "$ROOT_DIR/Sources/Anvil/Anvil.entitlements" \
   --sign "$SIGNING_IDENTITY" \
   "$APP_BUNDLE"
 

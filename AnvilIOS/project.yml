@@ -46,6 +46,10 @@ targets:
       path: Sources/AnvilIOS/AnvilIOS.entitlements
       properties:
         com.apple.developer.kernel.increased-memory-limit: true
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.viniciuscotrim.anvil
+        com.apple.developer.icloud-services:
+          - CloudKit
     info:
       path: Sources/AnvilIOS/Info.plist
       properties:
