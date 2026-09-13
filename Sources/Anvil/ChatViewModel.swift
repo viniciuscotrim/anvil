@@ -113,6 +113,14 @@ final class ChatViewModel: ObservableObject {
     /// nil the rest of the time, including while just waiting on the
     /// text model itself.
     @Published private(set) var imageToolProgress: Double?
+    /// Live status from `ContextShiftCoordinator`'s background watcher
+    /// — non-nil the moment a compaction pass starts (`isPaused`
+    /// becomes true right away), updated continuously with real
+    /// memory numbers throughout, and cleared once the pass finishes
+    /// or fails. `ChatView` renders this as a status banner distinct
+    /// from `errorMessage` (this isn't a failure, just informational)
+    /// while it's non-nil with `isPaused == true`.
+    @Published private(set) var contextShiftStatus: ContextShiftCoordinator.Status?
 
     private let sessions: ModelSessionManager
     private let threadStore: ChatThreadStore
@@ -121,6 +129,7 @@ final class ChatViewModel: ObservableObject {
     private let profileStore: ChatProfileStore
     private let memoryStore: ChatMemoryStore
     private let suggestionStore: ChatMemorySuggestionStore
+    private let contextShift: ContextShiftCoordinator
     private let modelRegistry: ModelRegistry
     private let requirements: RequirementsManager
     private let client = ChatClient()
@@ -150,6 +159,11 @@ final class ChatViewModel: ObservableObject {
     /// Resumed by `resolveModelUnloadConfirmation` once the user
     /// answers the dialog `pendingModelUnloadConfirmation` describes.
     private var modelUnloadContinuation: CheckedContinuation<Bool, Never>?
+    /// Guards `startContextShiftMonitoringIfNeeded()` so it only ever
+    /// tries once per launch — a missing embedding/summarization model
+    /// isn't retried on every `loadInitialState()` re-run (switching
+    /// tabs and back), only after downloading one and relaunching.
+    private var hasAttemptedContextShiftStart = false
 
     init(
         sessions: ModelSessionManager,
@@ -159,6 +173,7 @@ final class ChatViewModel: ObservableObject {
         profileStore: ChatProfileStore,
         memoryStore: ChatMemoryStore,
         suggestionStore: ChatMemorySuggestionStore = ChatMemorySuggestionStore(),
+        contextShift: ContextShiftCoordinator = ContextShiftCoordinator(),
         modelRegistry: ModelRegistry,
         requirements: RequirementsManager
     ) {
@@ -169,6 +184,7 @@ final class ChatViewModel: ObservableObject {
         self.profileStore = profileStore
         self.memoryStore = memoryStore
         self.suggestionStore = suggestionStore
+        self.contextShift = contextShift
         self.modelRegistry = modelRegistry
         self.requirements = requirements
         self.currentThread = ChatThread(originDeviceName: DeviceIdentity.currentName)
@@ -352,6 +368,135 @@ final class ChatViewModel: ObservableObject {
         // `syncSelectedModel()` below, which falls back to it.
         availableTextModels = await modelRegistry.all().filter { $0.kind == .text }
         syncSelectedModel()
+        await startContextShiftMonitoringIfNeeded()
+    }
+
+    // MARK: - Context shift (conversation compaction)
+
+    /// Starts `ContextShiftCoordinator`'s background watcher the first
+    /// time all three models its pipeline needs — nomic-embed-text-v2
+    /// -moe, CodeRankEmbed, Phi-4-mini-instruct — are actually
+    /// registered. Silently stays inactive otherwise (no error shown):
+    /// this is a background safety net, not something the user
+    /// explicitly asked to turn on, so a missing model shouldn't nag on
+    /// every launch — downloading the three in the Search tab and
+    /// relaunching is what turns it on.
+    ///
+    /// Called from `RootView`'s own always-running `.task` (like
+    /// iPhone/iCloud sync), not gated behind ever opening the Chat
+    /// tab — resolves the three model paths directly from
+    /// `modelRegistry` rather than `availableTextModels`, which only
+    /// `loadInitialState()` (itself only ever called once Chat has
+    /// appeared) populates.
+    func startContextShiftMonitoringIfNeeded() async {
+        guard !hasAttemptedContextShiftStart, !(await contextShift.isWatching) else { return }
+        hasAttemptedContextShiftStart = true
+
+        let textModels = await modelRegistry.all().filter { $0.kind == .text }
+        func firstRegisteredModel(matching keyword: String) -> ModelEntry? {
+            textModels.first { $0.id.lowercased().contains(keyword) }
+        }
+        guard let nomic = firstRegisteredModel(matching: "nomic-embed-text"),
+              let coderank = firstRegisteredModel(matching: "coderankembed"),
+              let phi4 = firstRegisteredModel(matching: "phi-4-mini-instruct") else {
+            return
+        }
+
+        await contextShift.configureCallbacks(
+            onPauseRequested: { [weak self] in
+                await self?.handleContextShiftPauseRequested()
+            },
+            onUnloadRequested: { [weak self] modelID in
+                await self?.handleContextShiftUnloadRequested(modelID)
+            },
+            onShiftReady: { [weak self] result in
+                await self?.handleContextShiftReady(result)
+            },
+            onShiftFailed: { [weak self] reason in
+                await self?.handleContextShiftFailed(reason)
+            },
+            onStatusChanged: { [weak self] status in
+                await self?.updateContextShiftStatus(status)
+            }
+        )
+
+        try? await contextShift.startWatchingIfNeeded(
+            nomicModelPath: nomic.localPath,
+            coderankModelPath: coderank.localPath,
+            phi4ModelPath: phi4.localPath,
+            requirements: requirements
+        )
+    }
+
+    @MainActor
+    private func updateContextShiftStatus(_ status: ContextShiftCoordinator.Status) {
+        contextShiftStatus = status
+    }
+
+    @MainActor
+    private func handleContextShiftPauseRequested() {
+        contextShiftStatus = ContextShiftCoordinator.Status(isPaused: true)
+    }
+
+    /// The active model this pipeline unloads is whichever one the
+    /// Python side read from the status file `send()` wrote — always
+    /// resolved back through `sessions`, never assumed still loaded
+    /// (the user could have unloaded it manually in the moment between
+    /// the trigger firing and this callback running).
+    private func handleContextShiftUnloadRequested(_ modelID: String?) async {
+        guard let modelID, sessions.isLoaded(modelID: modelID) else { return }
+        await sessions.unload(modelID: modelID)
+    }
+
+    /// Phase 4: reconstructs the thread from the compacted payload —
+    /// `[Instruções de Sistema] + [Resumo] + [últimas 5 mensagens
+    /// intactas]` — reloads the model that was active before, saves
+    /// the summary as a suggestion needing the same explicit approval
+    /// "Suggest from Thread" already requires (requested live: "todos
+    /// os resultados gerados de memória devem ser alocados e
+    /// solicitados aprovação como já acontece hoje no menu Memórias"),
+    /// and un-pauses sending.
+    @MainActor
+    private func handleContextShiftReady(_ result: ContextShiftCoordinator.ShiftResult) async {
+        let recap = ChatMessage(
+            role: .assistant,
+            content: "🗜️ This conversation was compacted to stay within memory limits. Summary of what came before:\n\n\(result.summary)",
+            modelDisplayName: "Context Shift"
+        )
+        currentThread.messages = [recap] + result.intactMessages
+        if !isTemporaryModeActive {
+            persistCurrentThread()
+        }
+
+        var suggestion = ChatMemorySuggestion(
+            content: result.summary,
+            kind: .summary,
+            confidence: 1,
+            rationale: "Automatic context-shift compaction — \(result.textChunksIndexed) text and \(result.codeChunksIndexed) code chunks indexed alongside it."
+        )
+        suggestion.sourceThreadID = currentThread.id
+        suggestion.createdFromMessageID = recap.id
+        suggestion.originDeviceName = DeviceIdentity.currentName
+        if let saved = try? await suggestionStore.upsert(suggestion) { suggestion = saved }
+        memorySuggestions.append(suggestion)
+        if isCloudSyncEnabled {
+            await cloudSync.markSuggestionChanged(suggestion)
+            await cloudSync.syncNow()
+        }
+
+        contextShiftStatus = nil
+        errorMessage = nil
+
+        if let modelID = selectedModelID,
+           let entry = await modelRegistry.all().first(where: { $0.id == modelID }) {
+            _ = await sessions.load(entry, requirements: requirements)
+        }
+    }
+
+    @MainActor
+    private func handleContextShiftFailed(_ reason: String) {
+        contextShiftStatus = nil
+        errorMessage = "Conversation compaction failed (\(reason)) — the model may need to be reloaded manually."
     }
 
     /// Keeps the selection pointed at a loaded model — called on
@@ -1044,6 +1189,15 @@ final class ChatViewModel: ObservableObject {
             errorMessage = "Pick a model first."
             return
         }
+        // "pausar o recebimento de novos prompts na API local" — a
+        // context-shift compaction pass is in progress (the active
+        // model is being unloaded/reloaded out from under this
+        // conversation), so a new send has nothing to actually talk to
+        // right now.
+        guard contextShiftStatus?.isPaused != true else {
+            errorMessage = "Compacting conversation history to free up memory — try again in a moment."
+            return
+        }
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending else { return }
         // A real, reproduced failure mode (confirmed against a raw
@@ -1113,6 +1267,23 @@ final class ChatViewModel: ObservableObject {
         lastEstimatedContextTokens = context.messages.reduce(0) { $0 + ChatContextBuilder.estimateTokens($1.content) }
         let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty, memoryPrompt: context.memoryPrompt)
         let responderName = activeProfile?.name
+
+        // Rewritten after every turn — the one piece of state
+        // `ContextShiftCoordinator`'s background watcher actually
+        // reads (see its own doc comment for why the 90%-of-context
+        // trigger decision genuinely lives in that Python process, not
+        // duplicated here): this Mac's own estimate of how full the
+        // active model's context window is, plus a fresh export of the
+        // thread to compact if that watcher decides to act on it.
+        if let modelPath = sessions.session(for: id)?.model.localPath {
+            await contextShift.writeStatus(
+                activeModelID: id,
+                activeModelPath: modelPath,
+                estimatedTokens: lastEstimatedContextTokens,
+                systemPrompt: systemPrompt,
+                messages: currentThread.messages
+            )
+        }
 
         generationTask = Task { [weak self] in
             await self?.runChatLoop(

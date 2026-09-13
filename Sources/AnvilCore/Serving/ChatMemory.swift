@@ -9,6 +9,13 @@ public enum ChatMemoryKind: String, Codable, CaseIterable, Sendable {
     case date
     case number
     case impression
+    /// A consolidated recap of a whole excerpt's decisions and logical
+    /// flow — what `ContextShiftCoordinator`'s compaction pipeline
+    /// produces, as opposed to the single atomic facts/preferences
+    /// "Suggest from Thread" extracts. Both land in the same
+    /// suggestion queue and need the same explicit approval before
+    /// becoming a real `ChatMemory`.
+    case summary
 
     public var label: String {
         switch self {
@@ -17,6 +24,7 @@ public enum ChatMemoryKind: String, Codable, CaseIterable, Sendable {
         case .date: return "Date"
         case .number: return "Number"
         case .impression: return "Impression"
+        case .summary: return "Summary"
         }
     }
 }

@@ -24,6 +24,7 @@ final class AppState: ObservableObject {
     let profileStore: ChatProfileStore
     let memoryStore: ChatMemoryStore
     let suggestionStore: ChatMemorySuggestionStore
+    let contextShift: ContextShiftCoordinator
     let modelRegistry: ModelRegistry
     let chat: ChatViewModel
     let imageGeneration: ImageGenerationViewModel
@@ -51,6 +52,7 @@ final class AppState: ObservableObject {
         let profileStore = ChatProfileStore()
         let memoryStore = ChatMemoryStore()
         let suggestionStore = ChatMemorySuggestionStore()
+        let contextShift = ContextShiftCoordinator()
         let modelRegistry = ModelRegistry()
         self.requirements = requirements
         self.residency = residency
@@ -62,6 +64,7 @@ final class AppState: ObservableObject {
         self.profileStore = profileStore
         self.memoryStore = memoryStore
         self.suggestionStore = suggestionStore
+        self.contextShift = contextShift
         self.modelRegistry = modelRegistry
         self.imageGeneration = ImageGenerationViewModel(imageSessions: imageSessions, store: generatedImageStore)
         self.chat = ChatViewModel(
@@ -72,6 +75,7 @@ final class AppState: ObservableObject {
             profileStore: profileStore,
             memoryStore: memoryStore,
             suggestionStore: suggestionStore,
+            contextShift: contextShift,
             modelRegistry: modelRegistry,
             requirements: requirements
         )

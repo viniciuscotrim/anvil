@@ -73,9 +73,12 @@ struct RootView: View {
             // sync are app-wide (their buttons now live in this bar, not
             // Chat's sidebar), so they need to be live and their status
             // known even if the user never opens the Chat tab this
-            // session.
+            // session. Conversation compaction is the same story: it
+            // has to watch for a context-window trigger regardless of
+            // which tab happens to be open.
             await chat.applyMacSyncSettingsIfNeeded()
             await chat.applyCloudSyncSettingsIfNeeded()
+            await chat.startContextShiftMonitoringIfNeeded()
         }
     }
 

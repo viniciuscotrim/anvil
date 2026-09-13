@@ -67,6 +67,10 @@ struct ChatView: View {
                         Spacer()
                     }
 
+                    if let status = chat.contextShiftStatus, status.isPaused {
+                        contextShiftBanner(status)
+                    }
+
                     if let error = chat.errorMessage {
                         HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill")
@@ -343,6 +347,38 @@ struct ChatView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Spacer()
+        }
+    }
+
+    /// Live hot-swap status while `ContextShiftCoordinator`'s
+    /// background pipeline is compacting this conversation — distinct
+    /// from `chat.errorMessage`'s red banner since this isn't a
+    /// failure, just something happening. Shows the current phase and
+    /// real memory numbers (from the Python side's own `psutil`
+    /// readings) as they arrive, so the wait doesn't look stalled the
+    /// way a multi-minute "Suggest from Thread" run once did before it
+    /// got the same treatment.
+    private func contextShiftBanner(_ status: ContextShiftCoordinator.Status) -> some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text(contextShiftPhaseLabel(status.phase))
+            if let rss = status.processRSSBytes {
+                Text("· \(ByteCountFormatter.string(fromByteCount: rss, countStyle: .memory))")
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .font(.callout)
+        .padding(.horizontal)
+        .padding(.top, 4)
+    }
+
+    private func contextShiftPhaseLabel(_ phase: String?) -> String {
+        switch phase {
+        case "rag_text": return "Compacting conversation — indexing text…"
+        case "rag_code": return "Compacting conversation — indexing code…"
+        case "summarize": return "Compacting conversation — summarizing…"
+        default: return "Compacting conversation to free up memory…"
         }
     }
 

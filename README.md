@@ -9,9 +9,31 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.18.0-search-tab-and-background-downloads (A Search Tab, and Downloads That Survive Backgrounding)
+## Current release: 0.19.0-context-shift (Automatic Conversation Compaction)
 
-Three related asks in one message. **Mac**: the Models screen split
+Requested live: a full spec for a Python orchestration pipeline,
+focused on Apple Silicon (MLX), that compacts a conversation's history
+when its context window fills up — a strict "Stop-and-Swap" discipline
+(one heavy model resident at a time, 17 GB max per phase, 24 GB total)
+across four phases: a KV-cache trigger, RAG vectorization of old
+history (text and code embedded separately, into a local vector
+store), Phi-4 summarization, and reloading the original model with a
+compacted payload. New `ContextShiftScript`/`ContextShiftCoordinator`
+implement exactly that — verified end-to-end against this Mac's own
+real, already-downloaded nomic-embed-text-v2-moe, CodeRankEmbed, and
+Phi-4-mini-instruct-mlx-fp16 checkpoints before ever being written into
+Swift, including a real compatibility gap found and fixed along the
+way (`mlx_embeddings` doesn't support the `nomic_bert` architecture
+either of the named embedding models actually use — falls back to
+`sentence-transformers` on PyTorch/MPS, still Apple Silicon
+GPU-accelerated). Generated summaries are never auto-approved — they
+land in the same `ChatMemorySuggestionStore` queue "Suggest from
+Thread" already uses. See "Automatic conversation compaction (Context
+Shift)" below for the full writeup, including the real engineering
+tradeoffs found along the way.
+
+It follows 0.18.0-search-tab-and-background-downloads. Three related
+asks in one message. **Mac**: the Models screen split
 into "Search" (Hugging Face/CivitAI/Draw Things, downloads, results)
 and "Models" (the registered library, same tab, same place) —
 requested live: "vamos separar a busca e download de modelos em uma
@@ -135,7 +157,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.18.0-search-tab-and-background-downloads`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.19.0-context-shift`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1482,6 +1504,116 @@ restores alongside the transfer, not this app's memory — carries the
 one thing actually needed: where the finished file belongs. The
 delegate moves it there directly, whether or not anything is still
 waiting on a continuation for that task when it happens.
+
+## Automatic conversation compaction (Context Shift)
+
+Requested live: a Python orchestration pipeline, focused on Apple
+Silicon (MLX), for the model lifecycle side of one specific problem —
+a conversation whose history has grown large enough to fill its
+model's context window needs to be compacted *before* that happens,
+under a strict 24 GB unified-memory ceiling, with no more than 17 GB
+resident for any single phase, using a "Stop-and-Swap" discipline: only
+one heavy model in memory at a time.
+
+**Architecture.** `ContextShiftScript` (Mac-only) is a standalone
+Python program — embedded in Swift and written to disk the same way
+`ImageServerScript` already is — run by a new `ContextShiftCoordinator`
+actor as a long-running background subprocess, communicating with
+Anvil entirely through line-delimited JSON: one JSON object per line on
+stdout for every status/progress event, the same shape read back on
+stdin for control acknowledgements (`{"event": "unload_complete"}`).
+
+1. **Trigger.** The subprocess tails a small status file Anvil
+   rewrites after every `send()` (the active model's own local path
+   and this Mac's own real token estimate — already computed by
+   `ChatContextBuilder`, not duplicated) and reads that model's actual
+   context window straight from its own `config.json`
+   (`max_position_embeddings` and a few historical fallback field
+   names) rather than a hardcoded number. The moment usage crosses 90%
+   of that window, it emits `pause_requested` (Anvil disables sending
+   and shows a status banner in Chat's header) and `unload_requested`,
+   then blocks until Anvil acknowledges the model is actually unloaded
+   — Stop-and-Swap means never starting the next phase until the
+   memory it needs is genuinely free, not just requested.
+2. **RAG.** Every fenced Markdown code block in the old history is
+   pulled out and embedded on its own (CodeRankEmbed), separately from
+   the surrounding natural-language text (nomic-embed-text-v2-moe,
+   multilingual — no language filtering, Portuguese and English chunks
+   embed the same way) — mixing code and prose into one embedding
+   dilutes both. Written into a small local vector store: brute-force
+   cosine similarity over a plain `numpy` matrix (a `.npz`/`.json`
+   pair), deliberately not a real vector database — exact and fast
+   enough at the scale of one conversation's chunks, and needs nothing
+   beyond `numpy`, already an MLX dependency.
+3. **Compression.** Phi-4-mini-instruct-mlx-fp16 (~7.6 GB raw, loads
+   at well under the 17 GB ceiling — confirmed directly, peaking under
+   6 GB resident) summarizes the old history into bullet points via a
+   hidden system prompt instructing it to capture durable decisions and
+   the conversation's logical flow, in whatever language the excerpt
+   itself is in. Long histories are batched the same greedy,
+   character-budget way `ChatContextBuilder.batches` already chunks a
+   thread on the Swift side — a Python-side counterpart to the same
+   idea, not a port of the actual code.
+4. **Reload.** Anvil reloads whichever model was active before, splices
+   the compacted portion of the thread down to `[a recap message
+   carrying Phi-4's summary] + [the last 5 messages, intact]`, and lets
+   sending resume.
+
+Every phase releases its own memory *before* the next one loads
+anything — `del model; gc.collect(); mx.clear_cache()` for the MLX
+phases (Phi-4), the PyTorch/MPS equivalent
+(`torch.mps.empty_cache()`) for the embedding phase — logging real
+`psutil` numbers throughout (`memory_status` events: this process's own
+RSS, the whole system's used/total) for Chat's own live hot-swap
+banner, and checked once per phase against the 17 GB ceiling
+(`step_budget_exceeded`, logged rather than raised — a step that
+already finished has nothing left to abort, but the operator needs to
+know the budget itself needs retuning).
+
+**A real compatibility gap, found and fixed, not glossed over.** The
+two named embedding models — nomic-embed-text-v2-moe and CodeRankEmbed
+— both report `model_type: "nomic_bert"` in their own `config.json`.
+Confirmed directly against the actual downloaded checkpoints:
+`mlx_embeddings` 0.1.0's own architecture registry doesn't include
+`nomic_bert` yet (`ValueError: Model type nomic_bert not supported`).
+`embed_texts` tries `mlx_embeddings` first regardless (so a future
+release adding support is picked up automatically, zero code changes
+needed here) and falls back to `sentence-transformers` on PyTorch/MPS
+— still Apple Silicon GPU acceleration, just not the `mlx` package for
+this one phase. That fallback needed one more fix of its own: nomic's
+`trust_remote_code` modeling file calls
+`self.get_extended_attention_mask(...)`, a helper every
+`transformers` 4.x `PreTrainedModel` had and `transformers` 5.x
+removed outright — confirmed directly (`AttributeError:
+'NomicBertModel' object has no attribute 'get_extended_attention_mask'`
+before a small monkey-patch reimplementing that exact, historically
+stable helper; correct 768-dim embeddings after it).
+
+**Approval, not auto-trust.** Requested live: "todos os resultados
+gerados de memória devem ser alocados e solicitados aprovação como já
+acontece hoje no menu Memórias" — a finished compaction's summary
+never becomes a real, AI-usable `ChatMemory` on its own. It lands as a
+`ChatMemorySuggestion` (a new `.summary` kind, alongside the existing
+fact/preference/date/number/impression "Suggest from Thread" already
+produces) in the exact same approval queue, needing the same explicit
+accept before it's ever read into a future request.
+
+**Verification.** `ContextShiftScript --self-test` covers everything
+that doesn't need a real multi-gigabyte model on disk — 17 checks:
+code/text splitting, greedy chunking, the vector store's own
+save/load/search round trip, and the JSON-lines protocol shape —
+runnable with nothing downloaded at all. Beyond that, both `--run-once` (a
+single compaction pass against a thread export) and a full `--watch`
+cycle (trigger → pause → unload-ack → RAG → summarize → ready → back to
+watching) ran end-to-end against this Mac's own real, already-
+downloaded checkpoints for all three named models, producing correct,
+accurately-summarized Portuguese bullet points in each case. One thing
+this didn't (and couldn't practically) verify within a single work
+session: the exact "screen stays locked / app stays foregrounded for
+several real minutes mid-compaction" timing a live, very long
+conversation would eventually hit — the pipeline's own correctness
+under real models and real memory pressure is what's confirmed here,
+not that specific duration.
 
 ## Architecture
 

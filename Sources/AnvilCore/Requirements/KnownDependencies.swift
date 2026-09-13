@@ -93,6 +93,38 @@ public struct ImageModelRuntimeDependency: Dependency {
     }
 }
 
+/// Installs only when `ContextShiftCoordinator` actually starts
+/// watching (a text model has to be loaded first) — the packages
+/// `ContextShiftScript`'s RAG phase needs. `mlx_embeddings` is tried
+/// first for both embedding models, but confirmed directly (see
+/// `ContextShiftScript`'s own header comment) that neither
+/// nomic-embed-text-v2-moe nor CodeRankEmbed's `nomic_bert`
+/// architecture is one it supports yet, so `sentence-transformers`
+/// (`einops` is a hard runtime requirement of nomic's own
+/// `trust_remote_code` modeling file) is what actually runs today,
+/// on PyTorch/MPS rather than pure MLX — still Apple Silicon GPU
+/// acceleration, just not the `mlx` package, for this one phase.
+public struct ContextShiftRuntimeDependency: Dependency {
+    public let id = "context-shift"
+    public let displayName = "Conversation compaction"
+
+    private let python = PythonEnvironment()
+
+    public init() {}
+
+    public func isSatisfied() async -> Bool {
+        guard await python.isPackageInstalled("psutil") else { return false }
+        guard await python.isPackageInstalled("sentence_transformers") else { return false }
+        guard await python.isPackageInstalled("einops") else { return false }
+        return true
+    }
+
+    public func install(onProgress: @escaping @Sendable (InstallProgress) -> Void) async throws {
+        onProgress(InstallProgress(message: "Setting up conversation compaction…"))
+        try await python.pipInstall(["psutil", "mlx-embeddings", "sentence-transformers", "einops"])
+    }
+}
+
 /// Installs only when the user enables voice chat / taps the mic.
 public struct VoiceRuntimeDependency: Dependency {
     public let id = "mlx-audio"

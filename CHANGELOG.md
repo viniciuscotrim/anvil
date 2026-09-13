@@ -1,5 +1,85 @@
 # Changelog
 
+## [0.19.0-context-shift] - 2026-09-13
+
+### Added
+- **Automatic conversation compaction ("Context Shift") when a
+  conversation's context fills up, under a strict Apple-Silicon
+  unified-memory budget**: requested live, a full spec for a Python
+  orchestration pipeline focused on MLX, a "Stop-and-Swap" discipline
+  (only one heavy model resident at a time, 17 GB max per phase, 24 GB
+  total budget), and four phases — a KV-cache trigger, RAG
+  vectorization of old history (text and code separately), Phi-4
+  summarization, and reloading the original model with a compacted
+  payload. New `ContextShiftScript` (a standalone Python program,
+  embedded and written to disk the same way `ImageServerScript`
+  already is) implements exactly that:
+  - **Trigger**: a long-running watcher tails a small status file Anvil
+    rewrites after every turn (estimated tokens + the active model's
+    own path); the moment usage crosses 90% of that model's own
+    context window (read straight from its `config.json`), it asks
+    Anvil to pause new sends and unload the active model, and waits
+    for confirmation the memory is actually free before doing anything
+    else.
+  - **RAG**: fenced code blocks in the old history are pulled out and
+    embedded separately from the surrounding prose (CodeRankEmbed for
+    code, nomic-embed-text-v2-moe for text — multilingual, no language
+    filtering) into a small local vector store (`numpy`-only, no
+    compiled ANN library or server), one model loaded and released at
+    a time.
+  - **Compression**: Phi-4-mini-instruct-mlx-fp16, native MLX
+    (`mlx_lm`), summarizes the old history into bullet points via a
+    hidden system prompt, batched the same way `ChatContextBuilder
+    .batches` already chunks a long thread on the Swift side.
+  - **Reload**: Anvil reloads whichever model was active before,
+    replaces the compacted portion of the thread with `[a recap
+    message carrying Phi-4's summary] + [the last 5 messages,
+    intact]`, and resumes accepting sends.
+  - Every phase releases its own memory before the next one loads
+    anything (`mx.clear_cache()` for MLX, `torch.mps.empty_cache()` for
+    the one PyTorch/MPS-backed phase — see below), logging real
+    `psutil` memory numbers throughout for a live hot-swap status in
+    Chat's own header banner.
+  - **A real compatibility finding, not glossed over**: confirmed
+    directly against the actual checkpoints this pipeline names —
+    nomic-embed-text-v2-moe and CodeRankEmbed both report
+    `model_type: "nomic_bert"`, an architecture `mlx_embeddings` 0.1.0
+    doesn't support yet. Both fall back to `sentence-transformers` on
+    PyTorch/MPS (still Apple Silicon GPU acceleration, just not the
+    `mlx` package for this one phase) — which itself needed a
+    monkey-patched `get_extended_attention_mask` (removed from
+    `transformers` 5.x, which nomic's own `trust_remote_code` modeling
+    file still calls) to actually produce embeddings. `mlx_embeddings`
+    is still tried first, so a future release adding `nomic_bert`
+    support is picked up automatically.
+  - Generated summaries are **never auto-approved**: requested live,
+    "todos os resultados gerados de memória devem ser alocados e
+    solicitados aprovação como já acontece hoje no menu Memórias" — a
+    completed compaction lands as a `ChatMemorySuggestion` (a new
+    `.summary` kind) in the exact same approval queue "Suggest from
+    Thread" already uses, not a real `ChatMemory` until explicitly
+    accepted.
+  - New `ContextShiftCoordinator` (Mac-only, same subprocess/
+    `NamedLauncher` pattern as `LLMServer`/`ImageServer`) drives the
+    script and translates its JSON-lines events into the real actions:
+    pausing sends, unloading via `ModelSessionManager`, and routing the
+    result through `ChatMemorySuggestionStore`.
+  - Verified thoroughly before being written into Swift at all:
+    `ContextShiftScript --self-test` covers every part that doesn't
+    need a real model (17 checks — code/text splitting, chunking, the
+    vector store's save/load/search round trip, the JSON-lines
+    protocol); a full `--run-once` and a full `--watch` cycle both ran
+    end-to-end against this Mac's own already-downloaded
+    nomic-embed-text-v2-moe/CodeRankEmbed/Phi-4-mini-instruct-mlx-fp16
+    checkpoints, producing correct bullet-point summaries in the
+    right language, peaking under 6 GB RSS (well inside the 17 GB
+    ceiling) — the exact real-world scenario a genuinely multi-minute,
+    "screen stays locked/app stays open for the full duration" trigger
+    isn't practically reproducible within a single work session, so
+    that specific end-to-end timing isn't claimed here, only the
+    pipeline's own correctness under real models and real memory
+    pressure.
+
 ## [0.18.0-search-tab-and-background-downloads] - 2026-09-13
 
 ### Added
