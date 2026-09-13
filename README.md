@@ -9,27 +9,25 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.11.1 (Real App Icon + Z-Image/FLUX.2/Krea-2 Loading Fix)
+## Current release: 0.12.0-ios-gguf (GGUF on iOS)
 
-A real app icon on both platforms (Mac `.icns`, iOS `AppIcon.appiconset`
-— neither had one before), and a real bug fix: Z-Image, FLUX.2, and
-Krea-2 models were all being loaded through mflux's FLUX.1-only
-pipeline and failing the moment anyone tried to generate with one. See
-"Why some image models wouldn't load" below, and the full writeup at
-[docs/image-model-loading.md](docs/image-model-loading.md).
+The iPhone can now run GGUF models on-device — the same runtime family
+the Mac app already had via `llama_cpp.server`, now natively in-process
+on iOS too (no server, no subprocess — same shape as the existing MLX
+path). See "GGUF on iOS" below for the full narrative. iOS-only this
+round; nothing on the Mac side changed, so no new `.dmg` for it.
 
-It follows straight on from 0.10.0's threads column and 0.11.0's round
-of refinements to the same area — editable titles, a leaner right-hand
-panel, Temporary Chat in the composer, iPhone/iCloud sync promoted to
-the global top bar, and a popout window that actually detaches the
-conversation (see "A left-hand threads column in Chat" below). Full
-release history in [CHANGELOG.md](CHANGELOG.md), now caught up through
-`0.7.0`'s download/queue/image-version-history/Prompt-to-Model work,
-the iOS chat/sync parity and iCloud sync fixes that followed it
+It follows a real app icon on both platforms (Mac `.icns`, iOS
+`AppIcon.appiconset`) and a fix for Z-Image/FLUX.2/Krea-2 models
+loading through mflux's FLUX.1-only pipeline at `0.11.1`, and 0.10.0's
+threads column plus 0.11.0's round of Chat refinements before that.
+Full release history in [CHANGELOG.md](CHANGELOG.md), now caught up
+through `0.7.0`'s download/queue/image-version-history/Prompt-to-Model
+work, the iOS chat/sync parity and iCloud sync fixes that followed it
 (`0.7.x`–`0.9.0`), and the Models tab fixes and CivitAI support at
 `0.8.x`.
 
-The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.11.1`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.11.1` (still the current Mac build — see above). See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -742,6 +740,55 @@ generated and saved a real PNG. Full writeup, including why FLUX.2/
 Krea-2 were verified by reading `mflux`'s own installed source rather
 than a live download, and what happens for a model outside these four
 families: [docs/image-model-loading.md](docs/image-model-loading.md).
+
+## GGUF on iOS
+
+Requested: bring the GGUF/llama.cpp engine to the iPhone, the same way
+the Mac app already runs it (`LLMServer` spawning `llama_cpp.server`).
+That exact approach can't port over — there's no `Process` on iOS at
+all, the same reason `NativeChatEngine`'s MLX path already runs
+in-process instead of over HTTP to a subprocess.
+
+`ggml-org/llama.cpp` itself dropped its own root `Package.swift` at
+some point (confirmed by checking — no `Package.swift` at the repo
+root on `master` or any recent tag), so consuming it via SPM directly
+isn't an option the way `mlx-swift`/`mlx-swift-lm` are. `AnvilIOS` now
+depends on `eastriverlee/LLM.swift` instead — a real, actively
+maintained (876 GitHub stars, pushed within the month at integration
+time) Swift wrapper that itself pulls `ggml-org/llama.cpp`'s own
+prebuilt xcframework release as a binary target, so the actual
+inference code is still upstream llama.cpp, not a reimplementation.
+
+`GGUFChatBackend` wraps it to the same shape `NativeChatEngine` already
+uses for MLX (`load`/`send`/`streamSend`/generation settings), and
+`load` picks the backend automatically — a `.gguf` file present in a
+downloaded model's folder means `GGUFChatBackend`, otherwise the
+existing MLX path, no separate "which engine" choice to make. The
+Models tab's search results no longer flag a GGUF result as unable to
+load on iOS — it's a normal, loadable result now, like MLX or mflux.
+
+The one choice that matters most: `GGUFChatBackend` leaves the chat
+template unset, which makes `llama.cpp`'s own bundled template engine
+render each model's *actual* embedded Jinja chat template instead of
+guessing one of a handful of hardcoded presets. `LLM.swift` ships five
+(ChatML, Alpaca, Llama 2, Mistral, Gemma) — none of them Llama 3's own
+`<|start_header_id|>` header format, which is exactly the model this
+was verified against for real: downloaded a genuine
+`hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF`, loaded it in
+~1.3s, confirmed its embedded template really does start with
+`<|start_header_id|>` (so none of the five presets would have matched
+it), and got a correct, coherent answer with the template left
+unset — proof this works generically for whatever GGUF someone
+downloads, not just a family that happens to match a preset.
+
+Two gaps, both explicit trims rather than oversights: no
+`generate_image` tool-calling from this backend yet (`LLM.swift`'s
+`Tool` protocol doesn't share a shape with `MLXLMCommon`'s, so wiring
+it is separable follow-up work), and `tokensPerSecond` for a GGUF
+reply is an estimate (elapsed wall-clock time over
+`ChatContextBuilder`'s own token-count guess) rather than a measured
+figure — `LLM.swift` doesn't report one the way `mlx-swift-lm`'s
+`streamDetails` or the Mac app's HTTP servers do.
 
 ## Architecture
 

@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.12.0-ios-gguf] - 2026-09-13
+
+### Added
+- **GGUF/llama.cpp on iOS**: the iPhone can now run GGUF models
+  on-device, the same runtime family the Mac app already had via
+  `llama_cpp.server` — `NativeChatEngine` picks it automatically
+  whenever a downloaded model's folder has a `.gguf` file, no manual
+  "which engine" choice. Built on `GGUFChatBackend`, a thin wrapper
+  around `eastriverlee/LLM.swift` (itself over `ggml-org/llama.cpp`'s
+  own runtime) — `ggml-org/llama.cpp` dropped its own root
+  `Package.swift` at some point, so this was the practical way to
+  consume it via SPM at all. The one design choice that matters:
+  each model's own embedded Jinja chat template is rendered by
+  `llama.cpp` itself (`template` left `nil`) rather than guessed from
+  a fixed preset — verified for real against a downloaded
+  `Llama-3.2-1B-Instruct` GGUF (header-tag format, outside every one
+  of `LLM.swift`'s five hardcoded presets), which still answered
+  correctly.
+- The Models tab's search results no longer flag a GGUF result "can't
+  load on-device here" — it's a normal, loadable "· GGUF (llama.cpp)"
+  result now, same green treatment as MLX/mflux.
+
+### Known gaps (explicit trims, not oversights)
+- No `generate_image` tool-calling from the GGUF backend yet —
+  `LLM.swift`'s `Tool` protocol is a different shape from
+  `MLXLMCommon`'s; separate follow-up work.
+- `tokensPerSecond` for a GGUF reply is an estimate (elapsed time over
+  an estimated token count), not the measured figure the MLX path and
+  the Mac app's HTTP servers report — `LLM.swift` doesn't expose one.
+
 ## [0.11.1] - 2026-09-13
 
 ### Fixed

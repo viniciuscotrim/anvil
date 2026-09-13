@@ -8,11 +8,16 @@ import Tokenizers
 
 /// Native, in-process text generation for iOS — the real replacement
 /// for what the Mac app does with `LLMServer` (spawning `mlx_lm.server`
-/// as a subprocess and talking to it over HTTP), which can't exist on
-/// iOS at all: there is no `Process` there. This runs the model
-/// directly inside the app via `mlx-swift-lm` (Apple/ml-explore's own,
-/// actively maintained Swift port of MLX's LLM stack) — no server, no
-/// port, no separate process to manage or clean up.
+/// or `llama_cpp.server` as a subprocess and talking to it over HTTP),
+/// which can't exist on iOS at all: there is no `Process` there. This
+/// runs the model directly inside the app, via `mlx-swift-lm` (Apple/
+/// ml-explore's own, actively maintained Swift port of MLX's LLM
+/// stack) for MLX-format weights, or `GGUFChatBackend` (wrapping
+/// `LLM.swift`, itself over `ggml-org/llama.cpp`'s own runtime) for
+/// GGUF — no server, no port, no separate process to manage or clean
+/// up either way. `load` picks the backend from what's actually on
+/// disk (see its own doc comment); `container`/`session` and
+/// `ggufBackend` are mutually exclusive, one active backend at a time.
 ///
 /// Downloads route through the exact same `HFRepoDownloader`/
 /// `ModelRegistry` pipeline the Models tab uses (`resolveLocalDirectory`),
@@ -76,6 +81,13 @@ final class NativeChatEngine: ObservableObject {
     // one instead of MLXLMCommon's.
     private var container: MLXLMCommon.ModelContainer?
     private var session: ChatSession?
+    /// The GGUF/llama.cpp counterpart to `container`/`session` — set
+    /// instead of them when `load` detects a `.gguf` file rather than
+    /// an MLX-format directory. Never both at once; see `load`'s own
+    /// detection and `GGUFChatBackend`'s header comment for why this
+    /// is a genuinely separate backend rather than a second branch
+    /// inside `ChatSession`'s own machinery.
+    private var ggufBackend: GGUFChatBackend?
     private let imageEngine: NativeImageEngine
     // Qualified explicitly: `MLXLLM` exports its own public
     // `ModelRegistry` typealias (`= LLMRegistry`), which collides with
@@ -92,8 +104,8 @@ final class NativeChatEngine: ObservableObject {
 
     /// Whether a model's weights are currently resident — gates the
     /// Load/Unload button and the model-ID field, same meaning it had
-    /// before the container/session split.
-    var isLoaded: Bool { container != nil }
+    /// before the container/session split. True for either backend.
+    var isLoaded: Bool { container != nil || ggufBackend != nil }
 
     /// Downloads/loads `modelID`'s weights if they aren't already
     /// resident (skipped entirely if the same model is already loaded —
@@ -105,21 +117,41 @@ final class NativeChatEngine: ObservableObject {
     /// a registered model's default `ChatProfile`, the same "loading
     /// this model applies its bound profile automatically" behavior the
     /// Mac app's `ChatViewModel` gives.
+    ///
+    /// Picks the backend from what's actually on disk, not from any
+    /// registry-declared "kind" — a `.gguf` file present means
+    /// `GGUFChatBackend` (llama.cpp), same detection `LLMServer.swift`
+    /// uses on the Mac side for the same reason: it's the one signal
+    /// that can't be stale or unset.
     func load(modelID: String, instructions: String? = nil, history: [ChatMessage] = []) async {
         guard !isLoading else { return }
         errorMessage = nil
 
-        if container == nil || loadedModelID != modelID {
+        if !isLoaded || loadedModelID != modelID {
             isLoading = true
             loadProgress = 0
             do {
                 let directory = try await resolveLocalDirectory(modelID: modelID)
-                container = try await LLMModelFactory.shared.loadContainer(
-                    from: directory, using: #huggingFaceTokenizerLoader())
+                if let ggufFile = try Self.ggufFile(in: directory) {
+                    guard let backend = GGUFChatBackend(
+                        modelPath: ggufFile, instructions: instructions, history: history)
+                    else {
+                        throw NativeChatEngineError.loadFailed(modelID)
+                    }
+                    container = nil
+                    session = nil
+                    ggufBackend = backend
+                } else {
+                    ggufBackend = nil
+                    container = try await LLMModelFactory.shared.loadContainer(
+                        from: directory, using: #huggingFaceTokenizerLoader())
+                }
                 loadedModelID = modelID
             } catch {
                 errorMessage = error.localizedDescription
                 container = nil
+                session = nil
+                ggufBackend = nil
                 loadedModelID = nil
                 isLoading = false
                 loadProgress = nil
@@ -130,6 +162,17 @@ final class NativeChatEngine: ObservableObject {
         }
 
         startSession(instructions: instructions, history: history)
+    }
+
+    /// The one `.gguf` file in a downloaded model's directory, if any —
+    /// same simple "first match" heuristic `LLMServer.swift` uses on
+    /// the Mac side (a GGUF repo is realistically ever one file per
+    /// registered download; Anvil doesn't support multi-part GGUF
+    /// shards on either platform today).
+    private static func ggufFile(in directory: URL) throws -> URL? {
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        guard let name = files.first(where: { $0.lowercased().hasSuffix(".gguf") }) else { return nil }
+        return directory.appendingPathComponent(name)
     }
 
     /// Resolves `modelID` to a local directory of already-downloaded
@@ -171,6 +214,16 @@ final class NativeChatEngine: ObservableObject {
     /// what's already baked into it), but `refreshTools` still keeps
     /// `tools`/`toolDispatch` current on every turn regardless.
     func startSession(instructions: String? = nil, history: [ChatMessage] = []) {
+        // The GGUF backend never offers `generate_image` (see
+        // `GGUFChatBackend`'s header comment on why that's out of
+        // scope for now), so — unlike the MLX branch below — its
+        // instructions are never extended with the tool's usage
+        // discipline reminder; doing so would just confuse a model
+        // that's never actually offered the tool.
+        if let ggufBackend {
+            ggufBackend.restart(instructions: instructions, history: history)
+            return
+        }
         guard let container else { return }
         var parts: [String] = []
         if let instructions, !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -187,12 +240,17 @@ final class NativeChatEngine: ObservableObject {
     func unload() {
         container = nil
         session = nil
+        ggufBackend = nil
         loadedModelID = nil
     }
 
     /// One full reply — the same "wait for the whole thing" shape
     /// `ChatClient.send` gives the macOS app.
     func send(_ text: String) async throws -> String {
+        if let ggufBackend {
+            applyGenerationSettings()
+            return await ggufBackend.send(text)
+        }
         guard let session else { throw NativeChatEngineError.notLoaded }
         refreshTools()
         applyGenerationSettings()
@@ -207,6 +265,35 @@ final class NativeChatEngine: ObservableObject {
     /// captured into `lastTokensPerSecond` once the stream ends, instead
     /// of only ever yielding text.
     func streamSend(_ text: String) throws -> AsyncThrowingStream<String, Error> {
+        if let ggufBackend {
+            applyGenerationSettings()
+            let (backendStream, tokensPerSecond) = ggufBackend.streamSend(text)
+            let (stream, continuation) = AsyncThrowingStream<String, Error>.makeStream()
+            let forwardingTask = Task { [weak self] in
+                do {
+                    for try await chunk in backendStream {
+                        if case .terminated = continuation.yield(chunk) { break }
+                    }
+                    let measured = tokensPerSecond()
+                    Task { @MainActor in self?.lastTokensPerSecond = measured }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            // Unlike the MLX branch below, cancelling `forwardingTask`
+            // alone isn't enough to actually stop generation — `LLM`
+            // doesn't check Swift's cooperative cancellation inside its
+            // own decode loop, only its own `interrupt()` flag (what
+            // `GGUFChatBackend.stop()` sets) — so the Stop button needs
+            // this explicit call to have any effect on this backend.
+            continuation.onTermination = { [weak self] _ in
+                forwardingTask.cancel()
+                Task { @MainActor in self?.ggufBackend?.stop() }
+            }
+            return stream
+        }
+
         guard let session else { throw NativeChatEngineError.notLoaded }
         refreshTools()
         applyGenerationSettings()
@@ -258,6 +345,7 @@ final class NativeChatEngine: ObservableObject {
             topK: settings.topK,
             minP: Float(settings.minP)
         )
+        ggufBackend?.applyGenerationSettings(settings)
     }
 
     /// Offers `generate_image` only once the on-device image engine has
@@ -375,6 +463,7 @@ final class NativeChatEngine: ObservableObject {
 enum NativeChatEngineError: LocalizedError {
     case notLoaded
     case noFilesAvailable(String)
+    case loadFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -382,6 +471,8 @@ enum NativeChatEngineError: LocalizedError {
             "No model is loaded."
         case .noFilesAvailable(let modelID):
             "No file list available for \(modelID)."
+        case .loadFailed(let modelID):
+            "Could not load \(modelID) — the GGUF file may be corrupt or an unsupported format."
         }
     }
 }

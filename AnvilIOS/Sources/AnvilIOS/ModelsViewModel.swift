@@ -3,19 +3,19 @@ import AnvilCore
 import Observation
 
 /// Whether iOS's own on-device engines (`NativeChatEngine` — MLX-format
-/// only; `NativeImageEngine`/`StableDiffusionModelLoader` — diffusers-
-/// pipeline `mflux`-shaped only) can actually load a result at all, as
-/// opposed to `ModelCompatibility`'s own broader "does this look like a
-/// pipeline some engine could run" read — `llamaCpp`/`drawThings` are
-/// real, useful engines the *Mac* app is gaining, but iOS has no
-/// runtime for either yet, so a result needing one of those is
-/// downloadable-but-inert here today, worth flagging before the
-/// download, not after. iOS-only extension — doesn't change
-/// `ModelCompatibility`'s own cross-platform meaning.
+/// *and*, as of the GGUF backend in `GGUFChatBackend.swift`, llama.cpp
+/// via `LLM.swift`; `NativeImageEngine`/`StableDiffusionModelLoader` —
+/// diffusers-pipeline `mflux`-shaped only) can actually load a result
+/// at all, as opposed to `ModelCompatibility`'s own broader "does this
+/// look like a pipeline some engine could run" read — `drawThings` is
+/// a real, useful engine the *Mac* app has, but iOS has no runtime for
+/// it, so a result needing it is downloadable-but-inert here today,
+/// worth flagging before the download, not after. iOS-only extension —
+/// doesn't change `ModelCompatibility`'s own cross-platform meaning.
 extension HFModelSummary {
     var isLoadableOnIOS: Bool {
         switch compatibility {
-        case .supported(.llamaCpp), .supported(.drawThings): return false
+        case .supported(.drawThings): return false
         default: return true
         }
     }

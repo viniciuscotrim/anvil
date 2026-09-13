@@ -16,6 +16,21 @@ packages:
   MLXSwift:
     url: https://github.com/ml-explore/mlx-swift
     from: 0.31.6
+  # GGUF/llama.cpp inference — the iOS counterpart to the Mac app's
+  # llama_cpp.server subprocess (LLMServer.swift's `.llamaCpp` case),
+  # which can't exist here at all (no Process on iOS). ggml-org/
+  # llama.cpp itself dropped its own root Package.swift, so this wraps
+  # its prebuilt xcframework release directly (`llama-b10068-
+  # xcframework.zip`, pinned via LLM.swift's own Package.swift) with a
+  # real Swift API — critically, `LLM(from:)` with no explicit
+  # `template:` renders each model's own embedded Jinja chat template
+  # (llama.cpp's own template engine) instead of guessing a fixed
+  # prefix/suffix format, so an arbitrary downloaded GGUF (ChatML,
+  # Llama 3's header format, Gemma, whatever it ships with) still gets
+  # asked correctly. See `GGUFChatBackend.swift`.
+  LLMSwift:
+    url: https://github.com/eastriverlee/LLM.swift
+    exactVersion: 3.0.3
 targets:
   AnvilIOS:
     type: application
@@ -42,6 +57,8 @@ targets:
         product: MLXNN
       - package: SwiftTransformers
         product: Hub
+      - package: LLMSwift
+        product: LLM
     entitlements:
       path: Sources/AnvilIOS/AnvilIOS.entitlements
       properties:

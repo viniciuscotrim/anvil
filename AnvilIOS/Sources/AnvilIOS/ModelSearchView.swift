@@ -155,7 +155,7 @@ struct ModelSearchView: View {
                     case .supported(.mlx), .supported(.mflux):
                         Text("· compatible").foregroundStyle(.green)
                     case .supported(.llamaCpp):
-                        Text("· GGUF (llama.cpp), can't load on-device here").foregroundStyle(.red)
+                        Text("· GGUF (llama.cpp)").foregroundStyle(.green)
                     case .supported(.drawThings):
                         Text("· Draw Things format, can't load on-device here").foregroundStyle(.red)
                     case .incompatible(let reason):
