@@ -1,3 +1,4 @@
+import AnvilCore
 import MLX
 import SwiftUI
 
@@ -16,6 +17,10 @@ import SwiftUI
 /// app's tabs.
 @main
 struct AnvilIOSApp: App {
+    // Only for `handleEventsForBackgroundURLSession` — see
+    // `AnvilIOSAppDelegate`'s own header comment; nothing else in this
+    // app needs a UIKit app delegate.
+    @UIApplicationDelegateAdaptor(AnvilIOSAppDelegate.self) private var appDelegate
     @State private var modelsViewModel = ModelsViewModel()
     @State private var profilesViewModel = ProfilesViewModel()
     /// Owned here (not by `NativeChatView`) so the Memory tab can see
@@ -48,6 +53,14 @@ struct AnvilIOSApp: App {
         // globally, before either engine ever loads a model.
         MLX.Memory.cacheLimit = 16 * 1024 * 1024
         MLX.Memory.memoryLimit = 4_500_000_000
+
+        // Reconnects to any model download still in flight (or already
+        // finished) from before this launch — the common case right
+        // after the screen locks or the app switches away is that this
+        // process is merely suspended, not relaunched, so this mostly
+        // matters after a fuller termination. See
+        // `BackgroundDownloadCoordinator`'s own header comment.
+        Task { await BackgroundDownloadCoordinator.shared.reconnectIfNeeded() }
 
         let imageEngine = NativeImageEngine()
         _imageEngine = StateObject(wrappedValue: imageEngine)

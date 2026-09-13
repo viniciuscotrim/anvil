@@ -23,12 +23,14 @@ struct RootView: View {
                     isInstalling: requirements.isInstalling,
                     errorMessage: requirements.lastError
                 )
-            case .modelManager, .chat, .images, .profiles, .promptToModel, .code:
+            case .modelSearch, .modelManager, .chat, .images, .profiles, .promptToModel, .code:
                 tabBar
                 Divider()
                 switch router.screen {
+                case .modelSearch:
+                    ModelSearchView()
                 case .modelManager:
-                    ModelManagerView()
+                    ModelLibraryView()
                 case .chat:
                     ChatView()
                 case .images:
@@ -44,6 +46,22 @@ struct RootView: View {
                 }
             }
         }
+        // One consistent minimum for the whole window — every tab's
+        // own content frame varies (420–520 tall, 480–640 wide) and
+        // used to be the *only* constraint `.windowResizability
+        // (.contentSize)` had to work with, so the window could be
+        // resized down to whatever the currently-visible tab's own
+        // smallest declared minimum allowed. Reported live: at a
+        // small-enough size, the combined old "Models" screen (search
+        // controls, live downloads, results, *and* the registered
+        // library all stacked in one place) didn't fit and visibly
+        // crowded/overlapped this very tab bar above it — "quando o
+        // app abre tem menus como Hugging Face/CivitAI etc sobre
+        // [os] menus como Models/Chat/etc." One frame here, comfortably
+        // larger than any single tab's own minimum, means the window
+        // never has to be manually resized after install just to see
+        // everything laid out correctly, on any tab.
+        .frame(minWidth: 900, minHeight: 640)
         .task {
             let ready = await requirements.ensure(HuggingFaceClientDependency())
             if ready {
@@ -63,6 +81,7 @@ struct RootView: View {
 
     private var tabBar: some View {
         HStack(spacing: 8) {
+            tabButton("Search", screen: .modelSearch)
             tabButton("Models", screen: .modelManager)
             tabButton("Chat", screen: .chat)
             tabButton("Images", screen: .images)

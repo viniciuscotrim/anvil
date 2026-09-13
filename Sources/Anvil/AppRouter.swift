@@ -7,6 +7,10 @@ import Foundation
 final class AppRouter: ObservableObject {
     enum Screen: Equatable {
         case bootstrap
+        /// Search and download — its own tab now, separate from
+        /// `modelManager`'s registered-model library. See
+        /// `ModelSearchView`'s own header comment.
+        case modelSearch
         case modelManager
         case chat
         case images

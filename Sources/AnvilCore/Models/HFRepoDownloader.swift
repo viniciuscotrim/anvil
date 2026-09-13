@@ -85,6 +85,20 @@ public struct HFRepoDownloader: Sendable {
                 withIntermediateDirectories: true
             )
 
+            #if os(iOS)
+            // A background `URLSession` (not `URLDownloader`'s own
+            // foreground one) — requested live: a download has to keep
+            // moving when the screen locks or the user switches away,
+            // which a foreground session's sockets don't survive. See
+            // `BackgroundDownloadCoordinator`'s own header comment for
+            // why it moves the finished file into place itself instead
+            // of handing back a temp URL for this loop to move, the
+            // way the Mac path below still does.
+            try await BackgroundDownloadCoordinator.shared.download(request, to: destinationFile) { fileFraction in
+                onProgress?((completedFiles + fileFraction) / Double(total))
+            }
+            try Task.checkCancellation()
+            #else
             let temporaryFileURL = try await URLDownloader.download(request) { fileFraction in
                 onProgress?((completedFiles + fileFraction) / Double(total))
             }
@@ -99,6 +113,7 @@ public struct HFRepoDownloader: Sendable {
                 try FileManager.default.removeItem(at: destinationFile)
             }
             try FileManager.default.moveItem(at: temporaryFileURL, to: destinationFile)
+            #endif
         }
 
         let entry = ModelEntry(

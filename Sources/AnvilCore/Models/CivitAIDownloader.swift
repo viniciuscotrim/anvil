@@ -44,11 +44,19 @@ public struct CivitAIDownloader: Sendable {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
+        #if os(iOS)
+        // See `HFRepoDownloader`'s matching branch — a background
+        // session keeps this transferring through a locked screen or a
+        // switched-away app, moving the finished file into place
+        // itself rather than handing back a temp URL to move here.
+        try await BackgroundDownloadCoordinator.shared.download(request, to: destinationFile, onProgress: onProgress)
+        #else
         let temporaryFileURL = try await URLDownloader.download(request, onProgress: onProgress)
         if FileManager.default.fileExists(atPath: destinationFile.path) {
             try FileManager.default.removeItem(at: destinationFile)
         }
         try FileManager.default.moveItem(at: temporaryFileURL, to: destinationFile)
+        #endif
 
         let entry = ModelEntry(
             id: "civitai:\(summary.id)",

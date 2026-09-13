@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.18.0-search-tab-and-background-downloads] - 2026-09-13
+
+### Added
+- **iOS downloads keep going through a locked screen or a switched-away
+  app**: requested live — "vamos no iPhone atualizar pra que ele
+  consiga continuar fazendo o download do modelo mesmo que a tela
+  bloquear ou trocar de app." Model downloads (Hugging Face, CivitAI,
+  Draw Things) used a plain foreground `URLSession`, which iOS
+  suspends the instant this process itself is suspended — exactly the
+  reported stall. New `BackgroundDownloadCoordinator` routes iOS
+  downloads through a real background `URLSession` instead, handing
+  the transfer to the system's own daemon so it keeps moving
+  independent of whether this app is suspended, backgrounded, or even
+  terminated outright; a new `AnvilIOSAppDelegate` wakes the app to
+  process a background session's events via the documented
+  `handleEventsForBackgroundURLSession` hook. Each task's own
+  `taskDescription` carries where its finished file belongs, so even a
+  full relaunch-from-terminated finishes the job with no reliance on
+  any of the app's own in-memory state surviving. Mac is unaffected —
+  it has no such suspension model to begin with, and keeps using the
+  same plain session as before.
+
+### Changed
+- **Mac's Models screen split into "Search" and "Models" tabs**,
+  matching what iOS already had: requested live — "vamos separar a
+  busca e download de modelos em uma nova aba/menu chamado Search, e
+  os modelos Registrados ficam onde estão agora. Igual já temos no
+  iPhone." New `ModelSearchView` (Hugging Face/CivitAI/Draw Things
+  search, downloads in progress, results) and `ModelLibraryView`
+  (registered models — same "Models" tab, same place in the tab bar)
+  replace the old combined `ModelManagerView`, both still backed by
+  the one shared `ModelManagerViewModel`. Fixes a real reported layout
+  bug along the way: the old combined screen stacked search controls,
+  live downloads, results, *and* the whole registered library in one
+  unscrollable `VStack`, which didn't fit at the window's old minimum
+  size and visibly crowded/overlapped the app's own top-level tab bar
+  above it — "quando o app abre tem menus como Hugging Face/CivitAI
+  etc sobre [os] menus como Models/Chat/etc." Both new tabs are a
+  `List` with defined `Section`s instead, the same fix `MemoryView`
+  already got for an identical complaint.
+- **Mac window now has one consistent minimum size (900×640)** applied
+  once at the app's root, instead of each tab declaring its own,
+  smaller, inconsistent minimum — requested live: "o app no Mac
+  precisa ter um tamanho mínimo de interface pra não quebrar
+  visualmente e exigir o usuário de ajustar o tamanho do app quando
+  ele é instalado." The window can still grow freely for a tab that
+  needs more room (Chat with both side panels open, say), but never
+  has to be manually resized after a fresh install just to see
+  everything laid out correctly on any tab.
+
 ## [0.17.0-credential-sync] - 2026-09-13
 
 ### Added

@@ -9,9 +9,28 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.17.0-credential-sync (Hugging Face and CivitAI Keys Sync via iCloud)
+## Current release: 0.18.0-search-tab-and-background-downloads (A Search Tab, and Downloads That Survive Backgrounding)
 
-Requested live: "vamos criar os campos onde as Keys do Huggs e do
+Three related asks in one message. **Mac**: the Models screen split
+into "Search" (Hugging Face/CivitAI/Draw Things, downloads, results)
+and "Models" (the registered library, same tab, same place) —
+requested live: "vamos separar a busca e download de modelos em uma
+nova aba/menu chamado Search, e os modelos Registrados ficam onde
+estão agora. Igual já temos no iPhone." This also fixed a real,
+reported layout bug: the old combined screen's stacked search
+controls, downloads, results, and library didn't fit the window's old
+minimum size, visibly crowding the app's own tab bar above it — "tem
+menus como Hugging Face/CivitAI etc sobre [os] menus como
+Models/Chat/etc." The whole window also now has one consistent
+minimum size (900×640) instead of each tab's own smaller one, so a
+fresh install never needs manual resizing to look right. **iOS**:
+model downloads now keep transferring through a locked screen or a
+switched-away app via a real background `URLSession` — "vamos no
+iPhone atualizar pra que ele consiga continuar fazendo o download do
+modelo mesmo que a tela bloquear ou trocar de app." See "A Search tab
+on Mac, and downloads that survive backgrounding on iOS" below.
+
+It follows 0.17.0-credential-sync, requested live: "vamos criar os campos onde as Keys do Huggs e do
 Civitai ficam armazenadas e sincronizadas o iCloud assim não preciso
 recadastrar elas depois de feito em um dos dois devices." Both fields
 already existed (Mac's Models tab, iOS's Settings); `HFTokenStore`/
@@ -116,7 +135,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.17.0-credential-sync`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.18.0-search-tab-and-background-downloads`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1383,6 +1402,86 @@ external requirement is each device's own system-wide iCloud Keychain
 setting being on, which it is by default for most users and is outside
 this app's control either way — the same standard mechanism any other
 app relying on `kSecAttrSynchronizable` depends on.
+
+## A Search tab on Mac, and downloads that survive backgrounding on iOS
+
+Three related asks in one message.
+
+**A Search tab on Mac.** Requested live: "vamos separar a busca e
+download de modelos em uma nova aba/menu chamado Search, e os modelos
+Registrados ficam onde estão agora. Igual já temos no iPhone" — iOS
+already drew this line between `ModelSearchView` and `ModelLibraryView`
+(both backed by one shared `ModelsViewModel`); Mac's old
+`ModelManagerView` mixed both into a single screen. Split into
+`ModelSearchView` (Hugging Face/CivitAI/Draw Things search, downloads
+in progress, results, the models-folder setting) and `ModelLibraryView`
+(the registered library, keeping the "Models" name and its place in
+the tab bar), both still backed by the one shared
+`ModelManagerViewModel` — exactly the iOS pattern, mirrored.
+
+This wasn't just a rename: the old combined screen stacked every one of
+those pieces — source picker, search bar, live downloads, a results
+list, the models-folder row, *and* the entire registered library — in
+one plain, unscrollable `VStack`. At the window's old minimum size that
+didn't fit, and reported live as menus visually sitting on top of each
+other: "quando o app abre tem menus como Hugging Face/CivitAI etc sobre
+[os] menus como Models/Chat/etc." Both new tabs are a `List` with
+defined `Section`s instead — every part gets a fixed place and the
+whole thing scrolls internally on its own, the exact fix `MemoryView`
+already got for an identical complaint ("Memory digest: real progress,
+a real scrollbar" above).
+
+**One minimum window size for the whole app.** Requested in the same
+message: "o app no Mac precisa ter um tamanho mínimo de interface pra
+não quebrar visualmente e exigir o usuário de ajustar o tamanho do app
+quando ele é instalado." Every tab used to declare its own
+`.frame(minWidth:minHeight:)` — 480×480 for Chat's content pane,
+560×420 for the old combined Models screen, 520×420 for Profiles, and
+so on — and since `.windowResizability(.contentSize)` derives the
+window's actual resize limits from whichever tab is currently showing,
+the *effective* minimum kept changing (and shrinking) depending on
+which tab was active, which is exactly how the layout bug above could
+happen at all. `RootView` now wraps the whole tab bar + content area in
+one `.frame(minWidth: 900, minHeight: 640)` — comfortably larger than
+any single tab's own minimum — so the window can still grow for a tab
+that needs more room (Chat with both side panels open, say) but can
+never be resized smaller than what every tab needs to render correctly,
+on a fresh install or any time after.
+
+**Downloads that survive backgrounding on iOS.** Requested live:
+"vamos no iPhone atualizar pra que ele consiga continuar fazendo o
+download do modelo mesmo que a tela bloquear ou trocar de app."
+`URLDownloader` (what both `HFRepoDownloader` and `CivitAIDownloader`
+called, on both platforms) used a plain foreground
+`URLSession(configuration: .default, …)` — fine on Mac, which has no
+suspension model to begin with, but on iOS the moment this app's own
+process is suspended (the screen locks, or the user switches away),
+that session's sockets are suspended right along with it, stalling a
+multi-gigabyte GGUF mid-transfer.
+
+New `BackgroundDownloadCoordinator` (iOS-only, gated by `#if
+os(iOS)` — Mac's own path through `URLDownloader` is untouched) routes
+iOS downloads through a real background session
+(`URLSessionConfiguration.background(withIdentifier:)`) instead,
+handing the transfer to the system's own daemon so it keeps moving
+independent of whether this app is suspended, backgrounded, or even
+terminated outright by jetsam — the same mechanism Podcasts/Music/the
+App Store itself use for exactly this kind of long transfer.
+
+The one real wrinkle a background session adds over a foreground one:
+if iOS fully terminates the app mid-transfer, there's no live Swift
+`Task`/continuation left anywhere to resume once it finishes — the
+next thing that runs is a fresh process, reconnecting a session under
+the identical identifier (`reconnectIfNeeded()`, called from
+`AnvilIOSApp.init`, and from a new `AnvilIOSAppDelegate`'s
+`handleEventsForBackgroundURLSession`, the documented hook iOS uses to
+wake an app specifically to hand back exactly this). To finish the job
+with zero reliance on any of that in-memory state surviving, every
+task's own `taskDescription` — a plain string iOS itself persists and
+restores alongside the transfer, not this app's memory — carries the
+one thing actually needed: where the finished file belongs. The
+delegate moves it there directly, whether or not anything is still
+waiting on a continuation for that task when it happens.
 
 ## Architecture
 
