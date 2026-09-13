@@ -594,14 +594,15 @@ struct ChatView: View {
                     get: { chat.isCloudSyncEnabled },
                     set: { chat.setCloudSyncEnabled($0) }
                 ))
+                .disabled(true)
                 if chat.isCloudSyncEnabled, let status = chat.cloudAccountStatus, status != .available {
                     Text(cloudAccountStatusText(status))
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
-                Text("Off by default. Works from anywhere — no Mac reachability needed at all, unlike iPhone Sync above. Encrypted in your own private iCloud account; Apple can't read it, and neither can anyone else's Anvil.")
+                Text("Temporarily disabled on the Mac — this build needs a real Developer ID provisioning profile for iCloud that isn't wired up yet (a raw entitlement without one crashes the app on launch, confirmed the hard way). Already working on iOS.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.orange)
             }
 
             Section("Export") {

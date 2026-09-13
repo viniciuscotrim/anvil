@@ -57,8 +57,20 @@ sed \
   "$ROOT_DIR/Resources/Info.plist" > "$APP_BUNDLE/Contents/Info.plist"
 
 echo "==> Code-signing $APP_NAME.app (hardened runtime)"
+# NOT --entitlements Anvil.entitlements right now: a real, reproduced
+# bug — a Developer-ID-signed (non-App-Store) Mac app declaring the
+# iCloud/CloudKit entitlement needs a matching embedded provisioning
+# profile (Contents/embedded.provisionprofile) for AMFI to allow the
+# process to launch at all; a plain SPM build + codesign --entitlements
+# with no profile gets rejected at process-spawn time ("Launchd job
+# spawn failed") before the app ever shows a single window — not a
+# runtime crash, a hard launch block. Fixing this for real needs an
+# actual Mac Developer ID provisioning profile downloaded from the
+# portal and embedded here; reverted for now so the app can be used at
+# all while that's sorted out. CloudSyncEngine's own code is unaffected
+# either way — it already degrades to "just doesn't sync" without the
+# entitlement, never crashes.
 codesign --force --deep --options runtime --timestamp \
-  --entitlements "$ROOT_DIR/Sources/Anvil/Anvil.entitlements" \
   --sign "$SIGNING_IDENTITY" \
   "$APP_BUNDLE"
 

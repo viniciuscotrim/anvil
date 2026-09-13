@@ -37,7 +37,17 @@ public actor CloudSyncEngine {
     private let threadStore: ChatThreadStore
     private let profileStore: ChatProfileStore
     private let memoryStore: ChatMemoryStore
-    private let container: CKContainer
+    // Deliberately not constructed in `init` — a real, reproduced crash
+    // otherwise: `CKContainer(identifier:)` traps at runtime the moment
+    // the running process isn't actually entitled for that container
+    // (no iCloud entitlement present/valid, or provisioning not yet
+    // sorted), and every one of this type's callers construct it
+    // unconditionally as a stored property — meaning the app crashed on
+    // *every* launch, sync enabled or not, the instant this type
+    // existed at all. Built lazily, only once something actually asks
+    // for it, so a Mac/phone with the feature off (the default) or the
+    // entitlement not yet working never touches CloudKit at all.
+    private var _container: CKContainer?
     private var engine: CKSyncEngine?
     private var delegateRef: EngineDelegate?
 
@@ -49,7 +59,13 @@ public actor CloudSyncEngine {
         self.threadStore = threadStore
         self.profileStore = profileStore
         self.memoryStore = memoryStore
-        self.container = CKContainer(identifier: Self.containerIdentifier)
+    }
+
+    private var container: CKContainer {
+        if let _container { return _container }
+        let created = CKContainer(identifier: Self.containerIdentifier)
+        _container = created
+        return created
     }
 
     /// Checked before ever turning this on — `.available` is required;
