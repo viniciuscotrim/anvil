@@ -4,6 +4,13 @@ import AnvilCore
 /// Auditable local memory: facts and impressions are deliberately shown
 /// with their source, confidence, and Profile scope so inference never
 /// masquerades as something the user explicitly told Anvil.
+///
+/// A real `List`, not a plain `VStack` — a `VStack` doesn't scroll on
+/// its own, and a real digest (`suggestMemoriesFromCurrentThread`) or
+/// a long-lived Memory store can both genuinely overflow this window's
+/// fixed size. Reported live: "preciso de uma barra de rolagem pois
+/// são muitas" (need a scrollbar, there are too many) once a real
+/// multi-batch digest started surfacing dozens of suggestions at once.
 struct MemoryView: View {
     @EnvironmentObject private var chat: ChatViewModel
     @State private var draftText = ""
@@ -13,28 +20,43 @@ struct MemoryView: View {
     @State private var draftConfidence = 0.8
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Memory").font(.headline)
-                    Text("Everything here is local, editable, and removable.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        List {
+            Section {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Memory").font(.headline)
+                        Text("Everything here is local, editable, and removable.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        Task { await chat.suggestMemoriesFromCurrentThread() }
+                    } label: {
+                        Label(suggestButtonLabel, systemImage: "wand.and.stars")
+                    }
+                    .disabled(chat.isSuggestingMemories || chat.messages.isEmpty)
                 }
-                Spacer()
-                Button {
-                    Task { await chat.suggestMemoriesFromCurrentThread() }
-                } label: {
-                    Label(
-                        chat.isSuggestingMemories ? "Analyzing…" : "Suggest from thread",
-                        systemImage: "wand.and.stars"
-                    )
+
+                if let errorMessage = chat.errorMessage {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(errorMessage)
+                        Spacer()
+                        Button {
+                            chat.errorMessage = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.red)
                 }
-                .disabled(chat.isSuggestingMemories || chat.messages.isEmpty)
             }
 
             if !chat.memorySuggestions.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                Section {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Suggestions to review (\(chat.memorySuggestions.count))").font(.headline)
@@ -49,35 +71,12 @@ struct MemoryView: View {
                         .buttonStyle(.borderedProminent)
                     }
                     ForEach(chat.memorySuggestions) { suggestion in
-                        HStack(alignment: .top, spacing: 8) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(suggestion.content)
-                                Text("\(suggestion.kind.label) · \(Int(suggestion.confidence * 100))% · \(suggestion.rationale)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button {
-                                Task { await chat.acceptMemorySuggestion(suggestion) }
-                            } label: {
-                                Image(systemName: "checkmark.circle.fill")
-                            }
-                            .buttonStyle(.borderless)
-                            Button {
-                                chat.dismissMemorySuggestion(suggestion)
-                            } label: {
-                                Image(systemName: "xmark.circle")
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                        .padding(8)
-                        .background(Color.purple.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        suggestionRow(suggestion)
                     }
                 }
             }
 
-            HStack(alignment: .top, spacing: 8) {
+            Section("Add a Memory") {
                 TextField("A fact, preference, date, number, or impression…", text: $draftText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(2...4)
@@ -96,50 +95,87 @@ struct MemoryView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                HStack {
+                    Picker("Type", selection: $draftKind) {
+                        ForEach(ChatMemoryKind.allCases, id: \.self) { kind in
+                            Text(kind.label).tag(kind)
+                        }
+                    }
+                    Picker("Source", selection: $draftSource) {
+                        ForEach(ChatMemorySource.allCases, id: \.self) { source in
+                            Text(source.label).tag(source)
+                        }
+                    }
+                    Picker("Profile", selection: $draftProfileID) {
+                        Text("Global").tag(Optional<UUID>.none)
+                        ForEach(chat.availableProfiles) { profile in
+                            Text(profile.name).tag(Optional(profile.id))
+                        }
+                    }
+                    if draftSource == .inferred {
+                        Text("Confidence")
+                        Slider(value: $draftConfidence, in: 0...1)
+                            .frame(width: 100)
+                        Text(String(format: "%.0f%%", draftConfidence * 100))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
-            HStack {
-                Picker("Type", selection: $draftKind) {
-                    ForEach(ChatMemoryKind.allCases, id: \.self) { kind in
-                        Text(kind.label).tag(kind)
-                    }
-                }
-                Picker("Source", selection: $draftSource) {
-                    ForEach(ChatMemorySource.allCases, id: \.self) { source in
-                        Text(source.label).tag(source)
-                    }
-                }
-                Picker("Profile", selection: $draftProfileID) {
-                    Text("Global").tag(Optional<UUID>.none)
-                    ForEach(chat.availableProfiles) { profile in
-                        Text(profile.name).tag(Optional(profile.id))
-                    }
-                }
-                if draftSource == .inferred {
-                    Text("Confidence")
-                    Slider(value: $draftConfidence, in: 0...1)
-                        .frame(width: 100)
-                    Text(String(format: "%.0f%%", draftConfidence * 100))
-                        .font(.caption)
+            Section("Saved (\(chat.memories.count))") {
+                if chat.memories.isEmpty {
+                    Text("No memories recorded yet.")
                         .foregroundStyle(.secondary)
-                }
-            }
-
-            Divider()
-
-            if chat.memories.isEmpty {
-                Text("No memories recorded yet.")
-                    .foregroundStyle(.secondary)
-                Spacer()
-            } else {
-                List(chat.memories) { memory in
-                    memoryRow(memory)
+                } else {
+                    ForEach(chat.memories) { memory in
+                        memoryRow(memory)
+                    }
                 }
             }
         }
-        .padding()
         .frame(minWidth: 760, minHeight: 520)
         .task { await chat.loadInitialState() }
+    }
+
+    /// Shows which batch is in flight while digesting a whole thread —
+    /// a real digest now makes several sequential model calls, one per
+    /// excerpt (`ChatContextBuilder.batches`), and a plain "Analyzing…"
+    /// with no further detail through several minutes of that looked
+    /// exactly like it had silently failed (reported live).
+    private var suggestButtonLabel: String {
+        guard chat.isSuggestingMemories else { return "Suggest from thread" }
+        guard let progress = chat.memorySuggestionProgress, progress.total > 1 else { return "Analyzing…" }
+        return "Analyzing (\(progress.completed) of \(progress.total))…"
+    }
+
+    private func suggestionRow(_ suggestion: ChatMemorySuggestion) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(suggestion.content)
+                Text("\(suggestion.kind.label) · \(Int(suggestion.confidence * 100))% · \(suggestion.rationale)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                Task { await chat.acceptMemorySuggestion(suggestion) }
+            } label: {
+                Image(systemName: "checkmark.circle.fill")
+            }
+            .buttonStyle(.borderless)
+            Button {
+                chat.dismissMemorySuggestion(suggestion)
+            } label: {
+                Image(systemName: "xmark.circle")
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(Color.purple.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private func memoryRow(_ memory: ChatMemory) -> some View {

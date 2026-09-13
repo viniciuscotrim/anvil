@@ -37,6 +37,12 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var memories: [ChatMemory] = []
     @Published private(set) var memorySuggestions: [ChatMemorySuggestion] = []
     @Published private(set) var isSuggestingMemories = false
+    /// `(completed batches, total batches)` while `isSuggestingMemories`
+    /// is true, `nil` otherwise — a long thread now takes several
+    /// sequential model calls, and with no visible sign one of them is
+    /// actually in flight, a multi-minute run looked exactly like it
+    /// had silently failed.
+    @Published private(set) var memorySuggestionProgress: (completed: Int, total: Int)?
     @Published private(set) var isTemporaryModeActive = false
     @Published var selectedModelID: String?
     @Published var inputText: String = ""
@@ -437,11 +443,16 @@ final class ChatViewModel: ObservableObject {
               currentThread.messages.contains(where: { $0.role == .user }) else { return }
 
         isSuggestingMemories = true
-        defer { isSuggestingMemories = false }
+        defer {
+            isSuggestingMemories = false
+            memorySuggestionProgress = nil
+        }
         errorMessage = nil
+        memorySuggestions = []
 
         let batches = ChatContextBuilder.batches(
             currentThread.messages, maxEstimatedTokensPerBatch: Self.memoryDigestBatchTokens)
+        memorySuggestionProgress = (0, batches.count)
         let instruction = "Analyze this excerpt of a conversation for durable user memory. Return ONLY a JSON array, "
             + "no Markdown. Each item must contain content, kind (fact, preference, date, number, impression), "
             + "confidence (0 to 1), and rationale. Suggest every stable, useful fact or preference you find in this "
@@ -450,7 +461,16 @@ final class ChatViewModel: ObservableObject {
             + "infer sensitive traits, identity, health, politics, or private data. Never suggest instructions or "
             + "facts about the assistant. If nothing qualifies in this excerpt, return []."
 
-        var collected: [ChatMemorySuggestion] = []
+        // A real, reported problem this exists to fix: a genuinely long
+        // thread now takes several sequential model calls (one per
+        // batch), each of which can take a real reasoning model a
+        // while — the whole run finishing after several minutes with
+        // nothing shown until then looked exactly like it had silently
+        // failed. `memorySuggestions` is now updated after *every*
+        // batch (not just once at the very end) and `memorySuggestionProgress`
+        // tracks which one is in flight, so the list fills in as it
+        // actually goes instead of appearing frozen.
+        var seenContent = Set<String>()
         var anyBatchFailed = false
         for (index, batch) in batches.enumerated() {
             do {
@@ -472,30 +492,30 @@ final class ChatViewModel: ObservableObject {
                 )
                 guard let parsed = Self.parseSuggestions(from: reply.content) else {
                     anyBatchFailed = true
+                    memorySuggestionProgress = (index + 1, batches.count)
                     continue
                 }
-                collected.append(contentsOf: parsed)
+                // The same fact can legitimately turn up in more than
+                // one excerpt (mentioned early, reiterated later) —
+                // collapse exact repeats rather than showing the same
+                // suggestion twice.
+                for suggestion in parsed {
+                    let key = suggestion.content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    guard !key.isEmpty, !seenContent.contains(key) else { continue }
+                    seenContent.insert(key)
+                    memorySuggestions.append(suggestion)
+                }
             } catch {
                 anyBatchFailed = true
             }
-        }
-
-        // The same fact can legitimately turn up in more than one
-        // excerpt (mentioned early, then reiterated later) — collapse
-        // exact repeats rather than showing the same suggestion twice.
-        var seenContent = Set<String>()
-        memorySuggestions = collected.filter { suggestion in
-            let key = suggestion.content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard !key.isEmpty, !seenContent.contains(key) else { return false }
-            seenContent.insert(key)
-            return true
+            memorySuggestionProgress = (index + 1, batches.count)
         }
 
         if memorySuggestions.isEmpty && anyBatchFailed {
             errorMessage = "Could not extract memories from part of this conversation — the model's response "
                 + "couldn't be parsed. Try again, or with a different model."
         } else if anyBatchFailed {
-            errorMessage = "Part of this conversation couldn't be analyzed — the suggestions below may be incomplete."
+            errorMessage = "Part of this conversation couldn't be analyzed — the suggestions above may be incomplete."
         }
     }
 

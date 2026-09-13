@@ -42,6 +42,10 @@ final class ChatThreadsViewModel {
     private(set) var memories: [ChatMemory] = []
     private(set) var memorySuggestions: [ChatMemorySuggestion] = []
     private(set) var isSuggestingMemories = false
+    /// `(completed batches, total batches)` while `isSuggestingMemories`
+    /// is true — see Mac's own `ChatViewModel.memorySuggestionProgress`
+    /// doc comment for the real reported problem this fixes.
+    private(set) var memorySuggestionProgress: (completed: Int, total: Int)?
     /// "This iPhone" or a specific Mac — see `ChatSourceSelection`.
     /// Change it via `selectSource(_:)`, not directly, so the switch
     /// actually kicks off (and keeps running) the background merge.
@@ -365,11 +369,16 @@ final class ChatThreadsViewModel {
     ) async {
         guard !isSuggestingMemories, currentThread.messages.contains(where: { $0.role == .user }) else { return }
         isSuggestingMemories = true
-        defer { isSuggestingMemories = false }
+        defer {
+            isSuggestingMemories = false
+            memorySuggestionProgress = nil
+        }
         errorMessage = nil
+        memorySuggestions = []
 
         let batches = ChatContextBuilder.batches(
             currentThread.messages, maxEstimatedTokensPerBatch: Self.memoryDigestBatchTokens)
+        memorySuggestionProgress = (0, batches.count)
         let instruction = "Analyze this excerpt of a conversation for durable user memory. Return ONLY a JSON array, "
             + "no Markdown. Each item must contain content, kind (fact, preference, date, number, impression), "
             + "confidence (0 to 1), and rationale. Suggest every stable, useful fact or preference you find in this "
@@ -378,34 +387,37 @@ final class ChatThreadsViewModel {
             + "infer sensitive traits, identity, health, politics, or private data. Never suggest instructions or "
             + "facts about the assistant. If nothing qualifies in this excerpt, return []."
 
-        var collected: [ChatMemorySuggestion] = []
+        // Updated after *every* batch, not just once at the end — see
+        // Mac's own `ChatViewModel.suggestMemoriesFromCurrentThread`
+        // doc comment for the real reported problem (a multi-minute,
+        // multi-batch run showing nothing until it fully finished
+        // looked exactly like a silent failure).
+        var seenContent = Set<String>()
         var anyBatchFailed = false
-        for batch in batches {
+        for (index, batch) in batches.enumerated() {
             do {
                 let reply = try await respond(instruction, batch)
-                guard let parsed = Self.parseSuggestions(from: reply) else {
+                if let parsed = Self.parseSuggestions(from: reply) {
+                    for suggestion in parsed {
+                        let key = suggestion.content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        guard !key.isEmpty, !seenContent.contains(key) else { continue }
+                        seenContent.insert(key)
+                        memorySuggestions.append(suggestion)
+                    }
+                } else {
                     anyBatchFailed = true
-                    continue
                 }
-                collected.append(contentsOf: parsed)
             } catch {
                 anyBatchFailed = true
             }
-        }
-
-        var seenContent = Set<String>()
-        memorySuggestions = collected.filter { suggestion in
-            let key = suggestion.content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard !key.isEmpty, !seenContent.contains(key) else { return false }
-            seenContent.insert(key)
-            return true
+            memorySuggestionProgress = (index + 1, batches.count)
         }
 
         if memorySuggestions.isEmpty && anyBatchFailed {
             errorMessage = "Could not extract memories from part of this conversation — the model's response "
                 + "couldn't be parsed. Try again, or with a different model."
         } else if anyBatchFailed {
-            errorMessage = "Part of this conversation couldn't be analyzed — the suggestions below may be incomplete."
+            errorMessage = "Part of this conversation couldn't be analyzed — the suggestions above may be incomplete."
         }
     }
 

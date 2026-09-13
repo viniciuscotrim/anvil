@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.13.2] - 2026-09-13
+
+### Fixed
+- **"Suggest from Thread" looked like it silently failed on a real
+  digest**: reported live — after 0.13.0 started analyzing a whole
+  thread in several sequential batches, a genuinely long conversation
+  could take multiple minutes with nothing shown until the very end,
+  which read exactly like a silent failure (confirmed live: unloading
+  the model — an unrelated action — happened to coincide with the run
+  finishing, and every suggestion it had already found appeared at
+  once). Suggestions are now added to the list as each batch finishes,
+  not only once every batch is done, and the button shows real progress
+  ("Analyzing (2 of 5)…") instead of a static "Analyzing…". Mac and
+  iOS both.
+- **Mac's Memory window never showed a failure at all**: `chat
+  .errorMessage` was set correctly on a real failure but nothing in
+  `MemoryView` ever displayed it, so an actual error looked identical
+  to nothing happening. Now shown, dismissible, matching iOS (which
+  already had this).
+- **No way to scroll a long suggestions or memory list on Mac**:
+  reported live — "preciso de uma barra de rolagem pois são muitas"
+  (need a scrollbar, there are too many). `MemoryView`'s body was a
+  plain `VStack`, which doesn't scroll; a real digest or a long-lived
+  Memory store can both overflow the window's fixed size. Rewritten as
+  a real `List` with sections (matching iOS's already-correct layout),
+  which scrolls natively.
+
 ## [0.13.1-ios-delete-fix] - 2026-09-13
 
 ### Fixed

@@ -43,9 +43,7 @@ struct MemoryView: View {
                             }
                         }
                     } label: {
-                        Label(
-                            threads.isSuggestingMemories ? "Analyzing…" : "Suggest from current Chat thread",
-                            systemImage: "wand.and.stars")
+                        Label(suggestButtonLabel, systemImage: "wand.and.stars")
                     }
                     .disabled(threads.isSuggestingMemories || threads.currentThread.messages.isEmpty)
                 }
@@ -106,6 +104,15 @@ struct MemoryView: View {
             .task { await profilesViewModel.load() }
             .dismissKeyboardOnTap()
         }
+    }
+
+    /// Shows which batch is in flight — see Mac's own
+    /// `MemoryView.suggestButtonLabel` doc comment for the real
+    /// reported problem this fixes.
+    private var suggestButtonLabel: String {
+        guard threads.isSuggestingMemories else { return "Suggest from current Chat thread" }
+        guard let progress = threads.memorySuggestionProgress, progress.total > 1 else { return "Analyzing…" }
+        return "Analyzing (\(progress.completed) of \(progress.total))…"
     }
 
     private func suggestionRow(_ suggestion: ChatMemorySuggestion) -> some View {

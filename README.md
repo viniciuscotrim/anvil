@@ -9,22 +9,26 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.13.1-ios-delete-fix (iOS: Deleting a Model Actually Works)
+## Current release: 0.13.2 (Memory Digest: Visible Progress, Scrollable, Errors Shown)
 
-Reported live: deleting a downloaded model on iOS failed outright —
-"Couldn't delete Z-Image because the volume 'User' doesn't have one"
-(a Trash). iOS only supports moving a file to the Trash for a handful
-of volumes that actually implement one; a model's files live inside
-this app's own sandboxed container, which isn't one, so every delete
-failed the same way. Now a direct, permanent delete on iOS — nothing
-on the Mac side changed, so no new `.dmg` for it.
+Three real follow-up bugs from 0.13.0's memory digest, all reported
+live in the same session it shipped: a genuinely long conversation's
+multi-batch analysis showed nothing until it fully finished (looked
+exactly like a silent failure — confirmed live when unloading the
+model, an unrelated action, happened to coincide with the run
+finishing and every suggestion appearing at once); Mac's Memory window
+never displayed an actual failure at all; and there was no way to
+scroll a long suggestions or memory list on Mac ("preciso de uma barra
+de rolagem pois são muitas"). See "Memory digest: real progress, a
+real scrollbar" below for the full writeup. Mac and iOS both.
 
-It follows 0.13.0's real "Suggest from Thread" memory digest (turns a
-conversation's context into durable, global memory before it grows too
-large to keep using, then picks it back up from a fresh thread — see
-"A real memory digest" below), 0.12.2's fix for Chat hanging forever on
-a stalled model, 0.12.1's fix for downloads landing truncated plus a
-GGUF quantization picker on iOS, 0.12.0's GGUF/llama.cpp engine on iOS, a real app icon
+It follows 0.13.1's fix for deleting a model on iOS, 0.13.0's real
+"Suggest from Thread" memory digest (turns a conversation's context
+into durable, global memory before it grows too large to keep using,
+then picks it back up from a fresh thread — see "A real memory digest"
+below), 0.12.2's fix for Chat hanging forever on a stalled model,
+0.12.1's fix for downloads landing truncated plus a GGUF quantization
+picker on iOS, 0.12.0's GGUF/llama.cpp engine on iOS, a real app icon
 on both platforms (Mac `.icns`, iOS `AppIcon.appiconset`), a fix for
 Z-Image/FLUX.2/Krea-2 models loading through mflux's FLUX.1-only
 pipeline at `0.11.1`, and 0.10.0's threads column plus 0.11.0's round
@@ -34,7 +38,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.13.0`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.13.2`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -972,6 +976,47 @@ recoverable Trash on iOS anyway, so a direct, permanent `removeItem` is
 both the fix and the only behavior that made sense here. iOS-only
 change; the Mac app's own Trash-based delete already works correctly
 and is untouched.
+
+## Memory digest: real progress, a real scrollbar
+
+Three follow-up bugs from 0.13.0's memory digest, all reported live
+against a real conversation in the same session it shipped.
+
+**A long digest looked like it silently failed.** 0.13.0 made
+"Suggest from Thread" split a whole conversation into several
+sequential batches — each its own model call, and a real reasoning
+model can genuinely take a while per call. The old code only ever set
+`memorySuggestions` once, after every batch had finished, so a
+multi-minute run showed nothing at all until the very end. Reported
+live in exactly this shape: after clicking the button and waiting,
+nothing appeared — then unloading the model (a completely unrelated
+action, tried out of frustration) happened to coincide with the run
+finally finishing, and every suggestion it had already found appeared
+all at once. Fixed by updating `memorySuggestions` after *every* batch
+instead of only at the end, plus a new `memorySuggestionProgress`
+(`(completed, total)`) the button now shows directly — "Analyzing (2
+of 5)…" instead of a static "Analyzing…" that gives no sense whether
+anything is actually happening.
+
+**Mac's Memory window never showed a failure at all.** `chat
+.suggestMemoriesFromCurrentThread` already set `chat.errorMessage` on
+a genuine failure (a batch's JSON not parsing, a request erroring),
+but `MemoryView` never read it — an actual error and a quiet
+non-event looked identical. Now shown inline, dismissible, matching
+what iOS's own `MemoryView` already did.
+
+**No way to scroll a long list on Mac.** Reported live: "preciso de
+uma barra de rolagem pois são muitas" (need a scrollbar, there are too
+many). `MemoryView`'s body was a plain `VStack` — never scrollable on
+its own — and a real digest producing a few dozen suggestions, or a
+Memory store that's grown over time, can both genuinely overflow the
+window's fixed `520`-point height. Rewritten as a real `List` with
+sections (mirroring the layout iOS's own `MemoryView` already used),
+which scrolls the way any standard list does.
+
+All three fixes are mirrored on iOS's `ChatThreadsViewModel`/
+`MemoryView` (iOS's list already scrolled correctly, so only the
+progress-and-incremental-update half applied there).
 
 ## Architecture
 
