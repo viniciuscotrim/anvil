@@ -54,6 +54,39 @@ public actor ChatProfileStore {
         var profiles = load()
         profiles.removeAll { $0.id == id }
         try persist(profiles)
+        try recordDeletion(id: id)
+    }
+
+    /// See `ChatThreadStore.deletionTimestamps` — same tombstone
+    /// mechanism. This is what actually fixes "I delete a profile and
+    /// it comes right back": `ProfilesViewModel.mergeSync` used to be a
+    /// plain union (whichever side is missing a profile gets it pushed
+    /// back to it), which cannot distinguish "never existed on the
+    /// other side" from "existed, but was just deleted" — every ~3s
+    /// merge tick after a delete would see the profile "missing" here
+    /// and immediately restore it from whichever device still had it.
+    public func deletionTimestamps() -> [UUID: Date] {
+        loadTombstones()
+    }
+
+    private var tombstoneFileURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("profiles_deleted.json")
+    }
+
+    private func recordDeletion(id: UUID) throws {
+        var tombstones = loadTombstones()
+        tombstones[id] = Date()
+        try persistTombstones(tombstones)
+    }
+
+    private func loadTombstones() -> [UUID: Date] {
+        guard let data = try? Data(contentsOf: tombstoneFileURL) else { return [:] }
+        return (try? JSONDecoder.anvil.decode([UUID: Date].self, from: data)) ?? [:]
+    }
+
+    private func persistTombstones(_ tombstones: [UUID: Date]) throws {
+        let data = try JSONEncoder.anvil.encode(tombstones)
+        try data.write(to: tombstoneFileURL, options: .atomic)
     }
 
     private func load() -> [ChatProfile] {

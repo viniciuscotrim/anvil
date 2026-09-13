@@ -135,24 +135,67 @@ public actor ChatMemoryStore {
         load().sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    /// Local-edit entry point — stamps `updatedAt` to now. See
+    /// `ChatThreadStore.upsert`/`upsertPreservingTimestamp` for why a
+    /// sync/merge write must use the other method below instead.
     @discardableResult
     public func upsert(_ memory: ChatMemory) throws -> ChatMemory {
-        var memories = load()
         var updated = memory
         updated.updatedAt = Date()
+        return try store(updated)
+    }
+
+    /// Sync/merge entry point — keeps the caller-supplied `updatedAt`
+    /// exactly as given. See `ChatThreadStore.upsertPreservingTimestamp`
+    /// for the full story of the bug this avoids.
+    @discardableResult
+    public func upsertPreservingTimestamp(_ memory: ChatMemory) throws -> ChatMemory {
+        try store(memory)
+    }
+
+    private func store(_ memory: ChatMemory) throws -> ChatMemory {
+        var memories = load()
         if let index = memories.firstIndex(where: { $0.id == memory.id }) {
-            memories[index] = updated
+            memories[index] = memory
         } else {
-            memories.append(updated)
+            memories.append(memory)
         }
         try persist(memories)
-        return updated
+        return memory
     }
 
     public func delete(id: UUID) throws {
         var memories = load()
         memories.removeAll { $0.id == id }
         try persist(memories)
+        try recordDeletion(id: id)
+    }
+
+    /// See `ChatThreadStore.deletionTimestamps` — same tombstone
+    /// mechanism, same reason: without it, a periodic union-style merge
+    /// resurrects a deliberately-deleted memory.
+    public func deletionTimestamps() -> [UUID: Date] {
+        loadTombstones()
+    }
+
+    private var tombstoneFileURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("memories_deleted.json")
+    }
+
+    private func recordDeletion(id: UUID) throws {
+        var tombstones = loadTombstones()
+        tombstones[id] = Date()
+        try persistTombstones(tombstones)
+    }
+
+    private func loadTombstones() -> [UUID: Date] {
+        guard let data = try? Data(contentsOf: tombstoneFileURL) else { return [:] }
+        return (try? JSONDecoder.anvil.decode([UUID: Date].self, from: data)) ?? [:]
+    }
+
+    private func persistTombstones(_ tombstones: [UUID: Date]) throws {
+        let data = try JSONEncoder.anvil.encode(tombstones)
+        try data.write(to: tombstoneFileURL, options: .atomic)
     }
 
     private func load() -> [ChatMemory] {

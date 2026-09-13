@@ -37,6 +37,13 @@ struct AnvilSyncClient {
         try await delete(host: host, path: "threads/\(id.uuidString)")
     }
 
+    /// Which thread IDs the Mac has deleted, and when — see
+    /// `mergeThreads`'s doc comment for why a periodic union merge
+    /// needs this to avoid resurrecting a deliberate delete.
+    func deletedThreadIDs(host: String) async throws -> [UUID: Date] {
+        try await get([UUID: Date].self, host: host, path: "threads/deleted")
+    }
+
     // MARK: - Profiles
 
     func profiles(host: String) async throws -> [ChatProfile] {
@@ -52,6 +59,10 @@ struct AnvilSyncClient {
         try await delete(host: host, path: "profiles/\(id.uuidString)")
     }
 
+    func deletedProfileIDs(host: String) async throws -> [UUID: Date] {
+        try await get([UUID: Date].self, host: host, path: "profiles/deleted")
+    }
+
     // MARK: - Memories
 
     func memories(host: String) async throws -> [ChatMemory] {
@@ -65,6 +76,10 @@ struct AnvilSyncClient {
 
     func deleteMemory(id: UUID, host: String) async throws {
         try await delete(host: host, path: "memories/\(id.uuidString)")
+    }
+
+    func deletedMemoryIDs(host: String) async throws -> [UUID: Date] {
+        try await get([UUID: Date].self, host: host, path: "memories/deleted")
     }
 
     // MARK: - Model management

@@ -80,4 +80,62 @@ struct ChatThreadStoreTests {
         #expect(reopened?.title == "Persisted")
         #expect(reopened?.messages == saved.messages)
     }
+
+    /// A real, reproduced bug this guards against: `ChatViewModel` and
+    /// `AnvilSyncServer` each hold their own long-lived `ChatThreadStore`
+    /// instance pointed at the same file. The old implementation loaded
+    /// the file once and cached it in memory forever, so a write made
+    /// through one already-loaded instance was invisible to another
+    /// already-loaded instance for the rest of the app session — an
+    /// assistant reply the Mac had just saved through its own store
+    /// never showed up in a `GET /threads` served from the sync
+    /// server's separate, stale copy. This is the two-already-loaded-
+    /// instances case `persistsAcrossSeparateStoreInstances` above
+    /// doesn't cover (that one only re-opens a fresh instance *after*
+    /// the write, which happened to work even with the old caching
+    /// bug).
+    @Test
+    func aWriteThroughOneInstanceIsVisibleToAnotherAlreadyLoadedInstance() async throws {
+        let fileURL = tempStoreFile()
+        let writer = ChatThreadStore(fileURL: fileURL)
+        let reader = ChatThreadStore(fileURL: fileURL)
+
+        // Load both instances first — this is what used to poison the
+        // cache; without it, the (bugged) lazy-load-once path would
+        // coincidentally succeed just because `reader` hadn't cached
+        // anything yet.
+        _ = await writer.all()
+        _ = await reader.all()
+
+        let saved = try await writer.upsert(ChatThread(title: "From writer"))
+
+        #expect(await reader.get(id: saved.id)?.title == "From writer")
+        #expect(await reader.all().map(\.id) == [saved.id])
+    }
+
+    @Test
+    func upsertStampsUpdatedAtToNowButPreservingVariantDoesNot() async throws {
+        let store = ChatThreadStore(fileURL: tempStoreFile())
+        let old = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let stamped = try await store.upsert(ChatThread(title: "A", updatedAt: old))
+        #expect(stamped.updatedAt != old)
+
+        let preserved = try await store.upsertPreservingTimestamp(ChatThread(title: "B", updatedAt: old))
+        #expect(preserved.updatedAt == old)
+    }
+
+    /// The fix for "I delete a conversation and it comes back a few
+    /// seconds later" (LAN sync's periodic merge is a plain union that
+    /// can't otherwise tell "never existed on the other device" apart
+    /// from "existed, but I just deleted it").
+    @Test
+    func deleteRecordsATombstone() async throws {
+        let store = ChatThreadStore(fileURL: tempStoreFile())
+        let thread = try await store.upsert(ChatThread(title: "Test"))
+
+        try await store.delete(id: thread.id)
+
+        #expect(await store.deletionTimestamps()[thread.id] != nil)
+    }
 }

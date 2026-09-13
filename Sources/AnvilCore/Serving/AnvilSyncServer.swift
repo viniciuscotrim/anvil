@@ -174,9 +174,23 @@ public actor AnvilSyncServer {
         switch (request.method, collection, idSegment) {
         case ("GET", "threads", nil):
             return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await threadStore.all()))
+        case ("GET", "threads", .some("deleted")):
+            return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await threadStore.deletionTimestamps()))
         case ("PUT", "threads", nil):
+            // `upsertPreservingTimestamp`, not `upsert`: this is a
+            // replicated write, not a local edit — the incoming
+            // `updatedAt` is the actual moment that content was
+            // created, on whichever device sent it. Restamping it to
+            // "now" here is exactly the bug that let a stale copy look
+            // newer than genuinely newer content on a later comparison
+            // — see `ChatThreadStore.upsertPreservingTimestamp`'s doc
+            // comment. A recency guard on top: don't let an
+            // out-of-order/stale PUT regress content we already have.
             let thread = try JSONDecoder.anvil.decode(ChatThread.self, from: request.body)
-            let saved = try await threadStore.upsert(thread)
+            if let existing = await threadStore.get(id: thread.id), existing.updatedAt >= thread.updatedAt {
+                return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(existing))
+            }
+            let saved = try await threadStore.upsertPreservingTimestamp(thread)
             return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(saved))
         case ("DELETE", "threads", .some(let idString)):
             guard let id = UUID(uuidString: idString) else { return RouteResponse(status: 400, body: nil) }
@@ -185,7 +199,14 @@ public actor AnvilSyncServer {
 
         case ("GET", "profiles", nil):
             return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await profileStore.all()))
+        case ("GET", "profiles", .some("deleted")):
+            return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await profileStore.deletionTimestamps()))
         case ("PUT", "profiles", nil):
+            // No recency guard here: `ChatProfile` carries no
+            // `updatedAt` to arbitrate a same-ID edit conflict with
+            // (see `ProfilesViewModel.mergeSync`'s own doc comment) —
+            // a genuinely rare case for something usually created once,
+            // not repeatedly edited from two devices at once.
             let profile = try JSONDecoder.anvil.decode(ChatProfile.self, from: request.body)
             let saved = try await profileStore.upsert(profile)
             return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(saved))
@@ -196,9 +217,14 @@ public actor AnvilSyncServer {
 
         case ("GET", "memories", nil):
             return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await memoryStore.all()))
+        case ("GET", "memories", .some("deleted")):
+            return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await memoryStore.deletionTimestamps()))
         case ("PUT", "memories", nil):
             let memory = try JSONDecoder.anvil.decode(ChatMemory.self, from: request.body)
-            let saved = try await memoryStore.upsert(memory)
+            if let existing = await memoryStore.all().first(where: { $0.id == memory.id }), existing.updatedAt >= memory.updatedAt {
+                return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(existing))
+            }
+            let saved = try await memoryStore.upsertPreservingTimestamp(memory)
             return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(saved))
         case ("DELETE", "memories", .some(let idString)):
             guard let id = UUID(uuidString: idString) else { return RouteResponse(status: 400, body: nil) }

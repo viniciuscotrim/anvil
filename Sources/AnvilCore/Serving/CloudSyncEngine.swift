@@ -304,7 +304,10 @@ public actor CloudSyncEngine {
         case RecordKind.thread.rawValue:
             guard let remote = Self.thread(from: record) else { return }
             if let local = await threadStore.get(id: remote.id), local.updatedAt >= remote.updatedAt { return }
-            _ = try? await threadStore.upsert(remote)
+            // Preserving, not stamping "now": this is a replicated
+            // write, not a local edit — see
+            // `ChatThreadStore.upsertPreservingTimestamp`'s doc comment.
+            _ = try? await threadStore.upsertPreservingTimestamp(remote)
         case RecordKind.profile.rawValue:
             guard let remote = Self.profile(from: record) else { return }
             _ = try? await profileStore.upsert(remote)
@@ -312,7 +315,7 @@ public actor CloudSyncEngine {
             guard let remote = Self.memory(from: record) else { return }
             let localAll = await memoryStore.all()
             if let local = localAll.first(where: { $0.id == remote.id }), local.updatedAt >= remote.updatedAt { return }
-            _ = try? await memoryStore.upsert(remote)
+            _ = try? await memoryStore.upsertPreservingTimestamp(remote)
         default:
             break
         }

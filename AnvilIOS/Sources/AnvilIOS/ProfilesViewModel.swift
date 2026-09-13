@@ -60,19 +60,37 @@ final class ProfilesViewModel {
     /// identical (profiles don't carry an `updatedAt` to arbitrate a
     /// same-ID edit conflict — a genuinely rare case for something
     /// that's usually created once, not repeatedly edited from two
-    /// devices at once); everything else is a plain union: whichever
-    /// side is missing a profile gets it pushed to it.
+    /// devices at once); everything else used to be a plain union —
+    /// whichever side is missing a profile gets it pushed to it — which
+    /// is exactly the real, reported bug: delete a profile and it comes
+    /// right back within a few seconds, because the very next merge
+    /// tick sees it "missing" here and restores it from whichever
+    /// device still had it, with no way to tell that apart from a
+    /// profile that's simply new. A tombstone (recorded by
+    /// `ChatProfileStore.delete`) is the fix — its mere presence is
+    /// enough to arbitrate, since IDs are UUIDs that are never reused
+    /// after a delete.
     func mergeSync(host: String) async {
         guard let remoteProfiles = try? await syncClient.profiles(host: host) else { return }
         let localAll = await store.all()
         let localIDs = Set(localAll.map(\.id))
         let remoteIDs = Set(remoteProfiles.map(\.id))
+        let localTombstones = await store.deletionTimestamps()
+        let remoteTombstones = (try? await syncClient.deletedProfileIDs(host: host)) ?? [:]
 
         for profile in remoteProfiles where !localIDs.contains(profile.id) {
-            _ = try? await store.upsert(profile)
+            if localTombstones[profile.id] != nil {
+                try? await syncClient.deleteProfile(id: profile.id, host: host)
+            } else {
+                _ = try? await store.upsert(profile)
+            }
         }
         for profile in localAll where !remoteIDs.contains(profile.id) {
-            _ = try? await syncClient.upsertProfile(profile, host: host)
+            if remoteTombstones[profile.id] != nil {
+                try? await store.delete(id: profile.id)
+            } else {
+                _ = try? await syncClient.upsertProfile(profile, host: host)
+            }
         }
         await load()
     }

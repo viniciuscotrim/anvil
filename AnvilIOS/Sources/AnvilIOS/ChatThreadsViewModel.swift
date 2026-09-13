@@ -216,46 +216,79 @@ final class ChatThreadsViewModel {
         }
     }
 
+    /// A real, reproduced bug this fixes: this used to be a plain union
+    /// (whichever side is missing a thread gets it pushed to it), which
+    /// cannot tell "never existed on the other side yet" apart from
+    /// "existed, but was just deleted" — every ~3s merge tick after a
+    /// delete would see the thread "missing" here and immediately
+    /// restore it from whichever device still had it. IDs are UUIDs
+    /// that are never reused, so a tombstone's mere presence (no
+    /// timestamp arbitration needed) safely distinguishes the two
+    /// cases. Pulls/pushes that DO carry real content now go through
+    /// `upsertPreservingTimestamp` rather than `upsert` — seee
+    /// `ChatThreadStore`'s own doc comment for why stamping "now" on a
+    /// replicated write breaks every future recency comparison.
     private static func mergeThreads(local: ChatThreadStore, remote: AnvilSyncClient, host: String) async throws {
         let localAll = await local.all()
         let remoteAll = try await remote.threads(host: host)
         let localByID = Dictionary(uniqueKeysWithValues: localAll.map { ($0.id, $0) })
         let remoteByID = Dictionary(uniqueKeysWithValues: remoteAll.map { ($0.id, $0) })
+        let localTombstones = await local.deletionTimestamps()
+        let remoteTombstones = (try? await remote.deletedThreadIDs(host: host)) ?? [:]
         for id in Set(localByID.keys).union(remoteByID.keys) {
             switch (localByID[id], remoteByID[id]) {
             case let (l?, r?) where l.updatedAt > r.updatedAt:
                 _ = try? await remote.upsertThread(l, host: host)
             case let (l?, r?) where r.updatedAt > l.updatedAt:
-                _ = try? await local.upsert(r)
+                _ = try? await local.upsertPreservingTimestamp(r)
             case (.some, .some):
                 break // identical timestamps — already in sync
             case let (l?, nil):
-                _ = try? await remote.upsertThread(l, host: host)
+                if remoteTombstones[id] != nil {
+                    try? await local.delete(id: id)
+                } else {
+                    _ = try? await remote.upsertThread(l, host: host)
+                }
             case let (nil, r?):
-                _ = try? await local.upsert(r)
+                if localTombstones[id] != nil {
+                    try? await remote.deleteThread(id: id, host: host)
+                } else {
+                    _ = try? await local.upsertPreservingTimestamp(r)
+                }
             case (nil, nil):
                 break
             }
         }
     }
 
+    /// Same real bug, same fix — see `mergeThreads`'s doc comment.
     private static func mergeMemories(local: ChatMemoryStore, remote: AnvilSyncClient, host: String) async throws {
         let localAll = await local.all()
         let remoteAll = try await remote.memories(host: host)
         let localByID = Dictionary(uniqueKeysWithValues: localAll.map { ($0.id, $0) })
         let remoteByID = Dictionary(uniqueKeysWithValues: remoteAll.map { ($0.id, $0) })
+        let localTombstones = await local.deletionTimestamps()
+        let remoteTombstones = (try? await remote.deletedMemoryIDs(host: host)) ?? [:]
         for id in Set(localByID.keys).union(remoteByID.keys) {
             switch (localByID[id], remoteByID[id]) {
             case let (l?, r?) where l.updatedAt > r.updatedAt:
                 _ = try? await remote.upsertMemory(l, host: host)
             case let (l?, r?) where r.updatedAt > l.updatedAt:
-                _ = try? await local.upsert(r)
+                _ = try? await local.upsertPreservingTimestamp(r)
             case (.some, .some):
                 break
             case let (l?, nil):
-                _ = try? await remote.upsertMemory(l, host: host)
+                if remoteTombstones[id] != nil {
+                    try? await local.delete(id: id)
+                } else {
+                    _ = try? await remote.upsertMemory(l, host: host)
+                }
             case let (nil, r?):
-                _ = try? await local.upsert(r)
+                if localTombstones[id] != nil {
+                    try? await remote.deleteMemory(id: id, host: host)
+                } else {
+                    _ = try? await local.upsertPreservingTimestamp(r)
+                }
             case (nil, nil):
                 break
             }

@@ -131,6 +131,7 @@ final class ChatViewModel: ObservableObject {
         self.macSyncAccess = appSettings.macSyncAccess
         self.isCloudSyncEnabled = appSettings.isCloudSyncEnabled
         self.syncServer = AnvilSyncServer(
+            threadStore: threadStore, profileStore: profileStore, memoryStore: memoryStore,
             modelRegistry: modelRegistry, sessions: sessions, imageSessions: imageSessions, requirements: requirements)
         self.cloudSync = CloudSyncEngine(threadStore: threadStore, profileStore: profileStore, memoryStore: memoryStore)
     }
