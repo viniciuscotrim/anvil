@@ -37,6 +37,7 @@ public actor CloudSyncEngine {
     private let threadStore: ChatThreadStore
     private let profileStore: ChatProfileStore
     private let memoryStore: ChatMemoryStore
+    private let suggestionStore: ChatMemorySuggestionStore
     // Deliberately not constructed in `init` — a real, reproduced crash
     // otherwise: `CKContainer(identifier:)` traps at runtime the moment
     // the running process isn't actually entitled for that container
@@ -54,11 +55,13 @@ public actor CloudSyncEngine {
     public init(
         threadStore: ChatThreadStore = ChatThreadStore(),
         profileStore: ChatProfileStore = ChatProfileStore(),
-        memoryStore: ChatMemoryStore = ChatMemoryStore()
+        memoryStore: ChatMemoryStore = ChatMemoryStore(),
+        suggestionStore: ChatMemorySuggestionStore = ChatMemorySuggestionStore()
     ) {
         self.threadStore = threadStore
         self.profileStore = profileStore
         self.memoryStore = memoryStore
+        self.suggestionStore = suggestionStore
     }
 
     private var container: CKContainer {
@@ -160,6 +163,14 @@ public actor CloudSyncEngine {
         engine?.state.add(pendingRecordZoneChanges: [.deleteRecord(Self.recordID(kind: .memory, id: id))])
     }
 
+    public func markSuggestionChanged(_ suggestion: ChatMemorySuggestion) {
+        engine?.state.add(pendingRecordZoneChanges: [.saveRecord(Self.recordID(kind: .suggestion, id: suggestion.id))])
+    }
+
+    public func markSuggestionDeleted(id: UUID) {
+        engine?.state.add(pendingRecordZoneChanges: [.deleteRecord(Self.recordID(kind: .suggestion, id: id))])
+    }
+
     /// Nudges a send/fetch cycle right away instead of waiting for
     /// `CKSyncEngine`'s own scheduling — used right after a local edit
     /// so a change reaches other devices in seconds, not whenever the
@@ -175,6 +186,7 @@ public actor CloudSyncEngine {
         case thread = "ChatThread"
         case profile = "ChatProfile"
         case memory = "ChatMemory"
+        case suggestion = "ChatMemorySuggestion"
     }
 
     private static func recordID(kind: RecordKind, id: UUID) -> CKRecord.ID {
@@ -187,7 +199,7 @@ public actor CloudSyncEngine {
     /// read a `recordType` from.
     private static func parse(_ recordID: CKRecord.ID) -> (RecordKind, UUID)? {
         let name = recordID.recordName
-        for kind in [RecordKind.thread, .profile, .memory] {
+        for kind in [RecordKind.thread, .profile, .memory, .suggestion] {
             let prefix = "\(kind.rawValue)-"
             if name.hasPrefix(prefix), let id = UUID(uuidString: String(name.dropFirst(prefix.count))) {
                 return (kind, id)
@@ -210,6 +222,9 @@ public actor CloudSyncEngine {
         case .memory:
             guard let memory = (await memoryStore.all()).first(where: { $0.id == id }) else { return nil }
             return Self.makeRecord(from: memory, recordID: pendingChange)
+        case .suggestion:
+            guard let suggestion = (await suggestionStore.all()).first(where: { $0.id == id }) else { return nil }
+            return Self.makeRecord(from: suggestion, recordID: pendingChange)
         }
     }
 
@@ -247,6 +262,20 @@ public actor CloudSyncEngine {
         if let profileID = memory.profileID { record["profileID"] = profileID.uuidString as CKRecordValue }
         if let origin = memory.originDeviceName { record["originDeviceName"] = origin as CKRecordValue }
         if let sourceMessageID = memory.createdFromMessageID { record["createdFromMessageID"] = sourceMessageID.uuidString as CKRecordValue }
+        return record
+    }
+
+    private static func makeRecord(from suggestion: ChatMemorySuggestion, recordID: CKRecord.ID) -> CKRecord {
+        let record = CKRecord(recordType: RecordKind.suggestion.rawValue, recordID: recordID)
+        record["content"] = suggestion.content as CKRecordValue
+        record["kind"] = suggestion.kind.rawValue as CKRecordValue
+        record["confidence"] = suggestion.confidence as CKRecordValue
+        record["rationale"] = suggestion.rationale as CKRecordValue
+        record["createdAt"] = suggestion.createdAt as CKRecordValue
+        record["updatedAt"] = suggestion.updatedAt as CKRecordValue
+        if let origin = suggestion.originDeviceName { record["originDeviceName"] = origin as CKRecordValue }
+        if let sourceThreadID = suggestion.sourceThreadID { record["sourceThreadID"] = sourceThreadID.uuidString as CKRecordValue }
+        if let sourceMessageID = suggestion.createdFromMessageID { record["createdFromMessageID"] = sourceMessageID.uuidString as CKRecordValue }
         return record
     }
 
@@ -297,6 +326,24 @@ public actor CloudSyncEngine {
             originDeviceName: record["originDeviceName"] as? String, createdFromMessageID: createdFromMessageID)
     }
 
+    private static func suggestion(from record: CKRecord) -> ChatMemorySuggestion? {
+        guard let (_, id) = parse(record.recordID) else { return nil }
+        guard let content = record["content"] as? String,
+            let kindRaw = record["kind"] as? String, let kind = ChatMemoryKind(rawValue: kindRaw),
+            let confidence = record["confidence"] as? Double,
+            let rationale = record["rationale"] as? String,
+            let createdAt = record["createdAt"] as? Date,
+            let updatedAt = record["updatedAt"] as? Date
+        else { return nil }
+        let sourceThreadID = (record["sourceThreadID"] as? String).flatMap(UUID.init(uuidString:))
+        let createdFromMessageID = (record["createdFromMessageID"] as? String).flatMap(UUID.init(uuidString:))
+        return ChatMemorySuggestion(
+            id: id, content: content, kind: kind, confidence: confidence, rationale: rationale,
+            createdAt: createdAt, updatedAt: updatedAt,
+            originDeviceName: record["originDeviceName"] as? String,
+            sourceThreadID: sourceThreadID, createdFromMessageID: createdFromMessageID)
+    }
+
     // MARK: - Applying remote changes locally
 
     /// Last-write-wins by `updatedAt`, same rule the local-network merge
@@ -320,6 +367,11 @@ public actor CloudSyncEngine {
             let localAll = await memoryStore.all()
             if let local = localAll.first(where: { $0.id == remote.id }), local.updatedAt >= remote.updatedAt { return }
             _ = try? await memoryStore.upsertPreservingTimestamp(remote)
+        case RecordKind.suggestion.rawValue:
+            guard let remote = Self.suggestion(from: record) else { return }
+            let localAll = await suggestionStore.all()
+            if let local = localAll.first(where: { $0.id == remote.id }), local.updatedAt >= remote.updatedAt { return }
+            _ = try? await suggestionStore.upsertPreservingTimestamp(remote)
         default:
             break
         }
@@ -331,6 +383,7 @@ public actor CloudSyncEngine {
         case .thread: try? await threadStore.delete(id: id)
         case .profile: try? await profileStore.delete(id: id)
         case .memory: try? await memoryStore.delete(id: id)
+        case .suggestion: try? await suggestionStore.delete(id: id)
         }
     }
 

@@ -9,18 +9,33 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.13.2 (Memory Digest: Visible Progress, Scrollable, Errors Shown)
+## Current release: 0.14.0-suggestion-sync (Suggested Memories Sync Across Devices)
 
-Three real follow-up bugs from 0.13.0's memory digest, all reported
-live in the same session it shipped: a genuinely long conversation's
-multi-batch analysis showed nothing until it fully finished (looked
-exactly like a silent failure — confirmed live when unloading the
-model, an unrelated action, happened to coincide with the run
-finishing and every suggestion appearing at once); Mac's Memory window
-never displayed an actual failure at all; and there was no way to
-scroll a long suggestions or memory list on Mac ("preciso de uma barra
-de rolagem pois são muitas"). See "Memory digest: real progress, a
-real scrollbar" below for the full writeup. Mac and iOS both.
+Requested live: "as memórias geradas podem já subir pro iCloud, assim
+eu posso aprová-las ou não no iPhone ou Mac, independente de onde
+foram geradas" (generated memories should already go up to iCloud, so
+I can approve them or not on iPhone or Mac, wherever they were
+generated) — "uma coisa é ela existir e outra é eu escolher que ela
+pode ser usada pela IA" (one thing is for it to exist, another is for
+me to choose it can be used by the AI). A "Suggest from Thread" run
+used to live only in the app that ran it; now every suggestion is
+persisted (`ChatMemorySuggestionStore`) and synced as a fourth
+`CloudSyncEngine` record kind, so it can be triaged — accepted or
+dismissed — from either device, with the removal itself syncing back
+so nothing gets reviewed twice. Mac and iOS both.
+
+It follows 0.13.2's fixes for the memory digest's visible progress,
+scrollable Mac Memory window, and shown errors (three real follow-up
+bugs from 0.13.0, all reported live in the same session it shipped: a
+genuinely long conversation's multi-batch analysis showed nothing
+until it fully finished — looked exactly like a silent failure,
+confirmed live when unloading the model, an unrelated action,
+happened to coincide with the run finishing and every suggestion
+appearing at once; Mac's Memory window never displayed an actual
+failure at all; and there was no way to scroll a long suggestions or
+memory list on Mac, "preciso de uma barra de rolagem pois são
+muitas"). See "Memory digest: real progress, a real scrollbar" below
+for that writeup.
 
 It follows 0.13.1's fix for deleting a model on iOS, 0.13.0's real
 "Suggest from Thread" memory digest (turns a conversation's context
@@ -38,7 +53,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.13.2`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.14.0-suggestion-sync`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1017,6 +1032,64 @@ which scrolls the way any standard list does.
 All three fixes are mirrored on iOS's `ChatThreadsViewModel`/
 `MemoryView` (iOS's list already scrolled correctly, so only the
 progress-and-incremental-update half applied there).
+
+## Suggested memories sync across devices
+
+Requested live: "as memórias geradas podem já subir pro iCloud, assim
+eu posso aprová-las ou não no iPhone ou Mac, independente de onde
+foram geradas" — generated memories should already go up to iCloud,
+so they can be approved or not on either device, regardless of where
+they were generated. "Uma coisa é ela existir e outra é eu escolher
+que ela pode ser usada pela IA" — one thing is for a suggestion to
+exist, another is choosing that it can actually be used by the AI.
+
+Before this, a "Suggest from Thread" run only ever produced an
+in-memory `memorySuggestions` list local to whichever app ran it —
+run it on the Mac and the iPhone had no idea it happened, so there was
+no way to review or approve a suggestion anywhere but the device that
+generated it, even though both devices already shared *approved*
+memories via `CloudSyncEngine`.
+
+Fixed by promoting `ChatMemorySuggestion` from "held only in a
+view model's published property" to "persisted and synced" — the
+exact same treatment threads, profiles, and memories already got:
+
+- A new `ChatMemorySuggestionStore` actor (`Sources/AnvilCore/Serving/
+  ChatMemory.swift`), file-backed with tombstone-tracked deletions,
+  identical in shape to the existing `ChatMemoryStore`.
+- `ChatMemorySuggestion` gained `createdAt`/`updatedAt` (for
+  last-write-wins merge), `originDeviceName` (so a suggestion's Memory
+  row can show which device generated it, even when reviewed on the
+  other one), `sourceThreadID` (which thread it came from — captured
+  at generation time, not read from "whatever's open" at accept time,
+  since that could be a different thread entirely once suggestions
+  sync across devices), and `createdFromMessageID` (carried through to
+  the resulting `ChatMemory` on accept, so deleting the source
+  conversation still cascades to a memory that only exists because of
+  it — even one accepted well after the fact, on a different device).
+- `CloudSyncEngine` gained a fourth synced record kind
+  (`"ChatMemorySuggestion"`), full `CKRecord` encode/decode, and
+  `markSuggestionChanged`/`markSuggestionDeleted` — wired into the
+  same `pendingChange`/`applyRemote`/`applyRemoteDeletion` switches
+  the other three kinds already use.
+- `suggestMemoriesFromCurrentThread` now persists (and syncs) each
+  suggestion as soon as its batch finishes, rather than only keeping
+  it in memory — clearing any stale suggestions from a prior run on
+  the same thread first, so re-running the digest doesn't leave
+  duplicates behind.
+- Accepting or dismissing a suggestion — on *either* device — deletes
+  it from the shared store and syncs that tombstone immediately, so
+  the same suggestion is never triaged twice from two different
+  places. Accepting now threads the suggestion's own
+  `createdFromMessageID` through to the new memory (not whatever
+  happens to be `currentThread` at accept time, which may not even be
+  the thread the suggestion came from once it's reviewed elsewhere).
+
+Mac and iOS both, mirroring the same architecture on each side
+(`ChatViewModel`/`ChatThreadsViewModel`); requires iCloud Sync turned
+on in Settings on both devices, exactly like thread and memory sync
+already did — with it off, suggestions behave exactly as before,
+local to whichever device generated them.
 
 ## Architecture
 

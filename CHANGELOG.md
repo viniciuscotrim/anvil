@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.14.0-suggestion-sync] - 2026-09-13
+
+### Added
+- **Suggested memories now sync across devices via iCloud, before
+  they're ever approved**: requested live — "as memórias geradas podem
+  já subir pro iCloud, assim eu posso aprová-las ou não no iPhone ou
+  Mac, independente de onde foram geradas. Uma coisa é ela existir e
+  outra é eu escolher que ela pode ser usada pela IA" (generated
+  memories should already go up to iCloud, so I can approve them or
+  not on iPhone or Mac, wherever they were generated — one thing is
+  for it to exist, another is for me to choose it can be used by the
+  AI). Until now, a "Suggest from Thread" run only ever lived in that
+  one app's own in-memory list: run it on the Mac and the iPhone never
+  saw those suggestions at all, let alone got a chance to approve or
+  dismiss them. `ChatMemorySuggestion` is now itself persisted (a new
+  `ChatMemorySuggestionStore`, same file-backed/tombstone-deletion
+  pattern as threads/profiles/memories) and synced as a fourth
+  `CloudSyncEngine` record kind, with `sourceThreadID`,
+  `createdFromMessageID`, and `originDeviceName` carried along so an
+  accepted suggestion still cascades correctly (deleting the source
+  conversation removes a memory that came from it) and the Memory
+  screen can show where a suggestion came from — even when it's being
+  reviewed on the *other* device from the one that generated it.
+  Accepting or dismissing a suggestion on either device removes it
+  from the shared store (and syncs that removal) so the same
+  suggestion never has to be triaged twice. Mac and iOS both; requires
+  iCloud Sync turned on (Settings) on both devices, same as thread and
+  memory sync already did.
+
 ## [0.13.2] - 2026-09-13
 
 ### Fixed

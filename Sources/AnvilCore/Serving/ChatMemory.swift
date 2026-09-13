@@ -98,25 +98,175 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+/// A not-yet-approved candidate from "Suggest from Thread" — existing
+/// (persisted, synced) is deliberately a separate fact from being
+/// usable by the AI (only a real `ChatMemory`, created by explicitly
+/// accepting one of these, is ever read into a chat request). Synced
+/// like `ChatThread`/`ChatProfile`/`ChatMemory` via
+/// `ChatMemorySuggestionStore`/`CloudSyncEngine` so a suggestion
+/// generated on one device can be reviewed — accepted or dismissed —
+/// from any other, not just the one that ran the analysis.
 public struct ChatMemorySuggestion: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public var content: String
     public var kind: ChatMemoryKind
     public var confidence: Double
     public var rationale: String
+    public var createdAt: Date
+    public var updatedAt: Date
+    /// Which device generated this suggestion — see
+    /// `ChatThread.originDeviceName`'s doc comment for the same purpose.
+    public var originDeviceName: String?
+    /// The thread this was extracted from, captured at generation
+    /// time — not "whichever thread happens to be open" at accept
+    /// time, which could be a different one entirely once suggestions
+    /// sync across devices and get reviewed somewhere else.
+    public var sourceThreadID: UUID?
+    /// Carried straight through to the resulting `ChatMemory` on
+    /// accept, exactly like `ChatMemory.createdFromMessageID` — lets
+    /// deleting the source conversation cascade to a memory that only
+    /// exists because of it, even for one accepted well after the fact
+    /// on a different device.
+    public var createdFromMessageID: UUID?
 
     public init(
         id: UUID = UUID(),
         content: String,
         kind: ChatMemoryKind,
         confidence: Double,
-        rationale: String
+        rationale: String,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        originDeviceName: String? = nil,
+        sourceThreadID: UUID? = nil,
+        createdFromMessageID: UUID? = nil
     ) {
         self.id = id
         self.content = content
         self.kind = kind
         self.confidence = confidence
         self.rationale = rationale
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.originDeviceName = originDeviceName
+        self.sourceThreadID = sourceThreadID
+        self.createdFromMessageID = createdFromMessageID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, content, kind, confidence, rationale, createdAt, updatedAt
+        case originDeviceName, sourceThreadID, createdFromMessageID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        content = try container.decode(String.self, forKey: .content)
+        kind = try container.decode(ChatMemoryKind.self, forKey: .kind)
+        confidence = try container.decode(Double.self, forKey: .confidence)
+        rationale = try container.decode(String.self, forKey: .rationale)
+        // Both default to "now" — absent only on a suggestion created
+        // before this field existed (a brief in-memory-only window
+        // this same change closes), never on one actually persisted
+        // by this version of the store.
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        originDeviceName = try container.decodeIfPresent(String.self, forKey: .originDeviceName)
+        sourceThreadID = try container.decodeIfPresent(UUID.self, forKey: .sourceThreadID)
+        createdFromMessageID = try container.decodeIfPresent(UUID.self, forKey: .createdFromMessageID)
+    }
+}
+
+public actor ChatMemorySuggestionStore {
+    private let fileURL: URL
+
+    public init(
+        fileURL: URL = RuntimePaths.applicationSupportDirectory
+            .appendingPathComponent("chats", isDirectory: true)
+            .appendingPathComponent("memory_suggestions.json")
+    ) {
+        self.fileURL = fileURL
+    }
+
+    public func all() -> [ChatMemorySuggestion] {
+        load().sorted { $0.createdAt > $1.createdAt }
+    }
+
+    /// Local-generation entry point — stamps `updatedAt` to now. See
+    /// `ChatThreadStore.upsert`/`upsertPreservingTimestamp` for why a
+    /// sync/merge write must use the other method below instead.
+    @discardableResult
+    public func upsert(_ suggestion: ChatMemorySuggestion) throws -> ChatMemorySuggestion {
+        var updated = suggestion
+        updated.updatedAt = Date()
+        return try store(updated)
+    }
+
+    /// Sync/merge entry point — keeps the caller-supplied `updatedAt`
+    /// exactly as given.
+    @discardableResult
+    public func upsertPreservingTimestamp(_ suggestion: ChatMemorySuggestion) throws -> ChatMemorySuggestion {
+        try store(suggestion)
+    }
+
+    private func store(_ suggestion: ChatMemorySuggestion) throws -> ChatMemorySuggestion {
+        var suggestions = load()
+        if let index = suggestions.firstIndex(where: { $0.id == suggestion.id }) {
+            suggestions[index] = suggestion
+        } else {
+            suggestions.append(suggestion)
+        }
+        try persist(suggestions)
+        return suggestion
+    }
+
+    public func delete(id: UUID) throws {
+        var suggestions = load()
+        suggestions.removeAll { $0.id == id }
+        try persist(suggestions)
+        try recordDeletion(id: id)
+    }
+
+    /// See `ChatThreadStore.deletionTimestamps` — same tombstone
+    /// mechanism: without it, accepting or dismissing a suggestion on
+    /// one device would have it silently resurface from another
+    /// device's next periodic sync/merge.
+    public func deletionTimestamps() -> [UUID: Date] {
+        loadTombstones()
+    }
+
+    private var tombstoneFileURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("memory_suggestions_deleted.json")
+    }
+
+    private func recordDeletion(id: UUID) throws {
+        var tombstones = loadTombstones()
+        tombstones[id] = Date()
+        try persistTombstones(tombstones)
+    }
+
+    private func loadTombstones() -> [UUID: Date] {
+        guard let data = try? Data(contentsOf: tombstoneFileURL) else { return [:] }
+        return (try? JSONDecoder.anvil.decode([UUID: Date].self, from: data)) ?? [:]
+    }
+
+    private func persistTombstones(_ tombstones: [UUID: Date]) throws {
+        let data = try JSONEncoder.anvil.encode(tombstones)
+        try data.write(to: tombstoneFileURL, options: .atomic)
+    }
+
+    private func load() -> [ChatMemorySuggestion] {
+        guard let data = try? Data(contentsOf: fileURL) else { return [] }
+        return (try? JSONDecoder.anvil.decode([ChatMemorySuggestion].self, from: data)) ?? []
+    }
+
+    private func persist(_ suggestions: [ChatMemorySuggestion]) throws {
+        let directory = fileURL.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let data = try JSONEncoder.anvil.encode(suggestions)
+        try data.write(to: fileURL, options: .atomic)
     }
 }
 

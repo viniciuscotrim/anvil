@@ -94,6 +94,7 @@ final class ChatViewModel: ObservableObject {
     private let generatedImageStore: GeneratedImageStore
     private let profileStore: ChatProfileStore
     private let memoryStore: ChatMemoryStore
+    private let suggestionStore: ChatMemorySuggestionStore
     private let modelRegistry: ModelRegistry
     private let requirements: RequirementsManager
     private let client = ChatClient()
@@ -128,6 +129,7 @@ final class ChatViewModel: ObservableObject {
         generatedImageStore: GeneratedImageStore,
         profileStore: ChatProfileStore,
         memoryStore: ChatMemoryStore,
+        suggestionStore: ChatMemorySuggestionStore = ChatMemorySuggestionStore(),
         modelRegistry: ModelRegistry,
         requirements: RequirementsManager
     ) {
@@ -137,6 +139,7 @@ final class ChatViewModel: ObservableObject {
         self.generatedImageStore = generatedImageStore
         self.profileStore = profileStore
         self.memoryStore = memoryStore
+        self.suggestionStore = suggestionStore
         self.modelRegistry = modelRegistry
         self.requirements = requirements
         self.currentThread = ChatThread(originDeviceName: DeviceIdentity.currentName)
@@ -150,7 +153,9 @@ final class ChatViewModel: ObservableObject {
         self.syncServer = AnvilSyncServer(
             threadStore: threadStore, profileStore: profileStore, memoryStore: memoryStore,
             modelRegistry: modelRegistry, sessions: sessions, imageSessions: imageSessions, requirements: requirements)
-        self.cloudSync = CloudSyncEngine(threadStore: threadStore, profileStore: profileStore, memoryStore: memoryStore)
+        self.cloudSync = CloudSyncEngine(
+            threadStore: threadStore, profileStore: profileStore, memoryStore: memoryStore,
+            suggestionStore: suggestionStore)
     }
 
     // MARK: - iCloud sync
@@ -239,6 +244,15 @@ final class ChatViewModel: ObservableObject {
                 allThreads = await threadStore.all()
                 availableProfiles = await profileStore.all()
                 memories = await memoryStore.all()
+                // Same reasoning as the others: a suggestion generated
+                // on another device syncs into this store in the
+                // background, and this is what makes it show up here
+                // without restarting the app — skipped while this
+                // device's own analysis is actively appending to the
+                // same array (see `loadInitialState`'s matching guard).
+                if !isSuggestingMemories {
+                    memorySuggestions = await suggestionStore.all()
+                }
                 if !isSending, !isTemporaryModeActive,
                     let refreshed = allThreads.first(where: { $0.id == currentThread.id }),
                     refreshed.updatedAt > currentThread.updatedAt {
@@ -287,6 +301,16 @@ final class ChatViewModel: ObservableObject {
         allThreads = temporary + savedThreads.filter { temporaryThreads[$0.id] == nil }
         availableProfiles = await profileStore.all()
         memories = await memoryStore.all()
+        // Loaded here (not just after this device's own "Suggest from
+        // Thread" run) so a suggestion synced in from another device —
+        // the whole point of persisting/syncing these at all — is
+        // already visible without needing to trigger a new analysis
+        // locally first. Only while nothing is actively being analyzed
+        // right now: a mid-run refresh would otherwise stomp on
+        // suggestions this device's own loop is still appending.
+        if !isSuggestingMemories {
+            memorySuggestions = await suggestionStore.all()
+        }
         if !hasLoadedInitialState {
             currentThread = allThreads.first ?? ChatThread(originDeviceName: DeviceIdentity.currentName)
             hasLoadedInitialState = true
@@ -450,6 +474,22 @@ final class ChatViewModel: ObservableObject {
         errorMessage = nil
         memorySuggestions = []
 
+        // A fresh run for this thread supersedes whatever it last
+        // suggested — without clearing these first, re-running "Suggest
+        // from Thread" on the same conversation would pile up a second,
+        // near-duplicate copy of everything already sitting unreviewed
+        // from a previous run (dedup below only ever compares *within*
+        // this run, not against what's already persisted). Suggestions
+        // from other threads, or synced in from another device, are
+        // untouched.
+        let staleSuggestionIDs = await suggestionStore.all()
+            .filter { $0.sourceThreadID == currentThread.id }
+            .map(\.id)
+        for staleID in staleSuggestionIDs {
+            try? await suggestionStore.delete(id: staleID)
+            if isCloudSyncEnabled { await cloudSync.markSuggestionDeleted(id: staleID) }
+        }
+
         let batches = ChatContextBuilder.batches(
             currentThread.messages, maxEstimatedTokensPerBatch: Self.memoryDigestBatchTokens)
         memorySuggestionProgress = (0, batches.count)
@@ -499,12 +539,26 @@ final class ChatViewModel: ObservableObject {
                 // one excerpt (mentioned early, reiterated later) —
                 // collapse exact repeats rather than showing the same
                 // suggestion twice.
-                for suggestion in parsed {
+                for var suggestion in parsed {
                     let key = suggestion.content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                     guard !key.isEmpty, !seenContent.contains(key) else { continue }
                     seenContent.insert(key)
+                    // Persisted (and, if enabled, synced) immediately,
+                    // not just held in this in-memory array — the whole
+                    // point of a suggestion existing is to be reviewable
+                    // from any device, on either side of an app
+                    // relaunch, not only for as long as this one run's
+                    // Task stays alive.
+                    suggestion.sourceThreadID = currentThread.id
+                    suggestion.createdFromMessageID = currentThread.messages.last?.id
+                    suggestion.originDeviceName = DeviceIdentity.currentName
+                    if let saved = try? await suggestionStore.upsert(suggestion) {
+                        suggestion = saved
+                    }
                     memorySuggestions.append(suggestion)
+                    if isCloudSyncEnabled { await cloudSync.markSuggestionChanged(suggestion) }
                 }
+                if isCloudSyncEnabled { await cloudSync.syncNow() }
             } catch {
                 anyBatchFailed = true
             }
@@ -560,9 +614,28 @@ final class ChatViewModel: ObservableObject {
             source: .inferred,
             confidence: suggestion.confidence,
             profileID: nil,
-            createdFromMessageID: currentThread.messages.last?.id
+            // The suggestion's own origin, captured when it was first
+            // generated — not `currentThread`, which could be a
+            // different conversation entirely by the time this
+            // suggestion is actually reviewed (possibly on another
+            // device, once suggestions sync).
+            createdFromMessageID: suggestion.createdFromMessageID
         )
-        memorySuggestions.removeAll { $0.id == suggestion.id }
+        await removeSuggestion(suggestion.id)
+    }
+
+    /// Deletes a suggestion from the persisted/synced store, not just
+    /// the in-memory list — reviewed (accepted or dismissed) is meant
+    /// to stick everywhere, the same way accepting or dismissing it on
+    /// one device shouldn't leave it sitting there to review all over
+    /// again on another.
+    private func removeSuggestion(_ id: UUID) async {
+        memorySuggestions.removeAll { $0.id == id }
+        try? await suggestionStore.delete(id: id)
+        if isCloudSyncEnabled {
+            await cloudSync.markSuggestionDeleted(id: id)
+            await cloudSync.syncNow()
+        }
     }
 
     /// Saves every current suggestion at once — a proper digest of a
@@ -616,7 +689,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func dismissMemorySuggestion(_ suggestion: ChatMemorySuggestion) {
-        memorySuggestions.removeAll { $0.id == suggestion.id }
+        Task { await removeSuggestion(suggestion.id) }
     }
 
     private static func extractJSONArray(from text: String) -> String {

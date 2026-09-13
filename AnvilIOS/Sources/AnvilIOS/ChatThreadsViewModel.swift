@@ -89,6 +89,7 @@ final class ChatThreadsViewModel {
 
     private let store = ChatThreadStore()
     private let memoryStore = ChatMemoryStore()
+    private let suggestionStore = ChatMemorySuggestionStore()
     private let syncClient = AnvilSyncClient()
     private var syncLoopTask: Task<Void, Never>?
     private let cloudSync = CloudSyncEngine()
@@ -133,6 +134,9 @@ final class ChatThreadsViewModel {
     func loadInitialState() async {
         allThreads = await store.all()
         memories = await memoryStore.all()
+        if !isSuggestingMemories {
+            memorySuggestions = await suggestionStore.all()
+        }
         if !hasLoadedInitialState {
             currentThread = allThreads.first ?? ChatThread(originDeviceName: DeviceIdentity.currentName)
             hasLoadedInitialState = true
@@ -376,6 +380,16 @@ final class ChatThreadsViewModel {
         errorMessage = nil
         memorySuggestions = []
 
+        // Clear stale suggestions from a prior run on this same thread
+        // before starting fresh — see Mac's own
+        // `ChatViewModel.suggestMemoriesFromCurrentThread` doc comment.
+        let staleSuggestionIDs = await suggestionStore.all()
+            .filter { $0.sourceThreadID == currentThread.id }.map(\.id)
+        for staleID in staleSuggestionIDs {
+            try? await suggestionStore.delete(id: staleID)
+            if isCloudSyncEnabled { await cloudSync.markSuggestionDeleted(id: staleID) }
+        }
+
         let batches = ChatContextBuilder.batches(
             currentThread.messages, maxEstimatedTokensPerBatch: Self.memoryDigestBatchTokens)
         memorySuggestionProgress = (0, batches.count)
@@ -398,12 +412,18 @@ final class ChatThreadsViewModel {
             do {
                 let reply = try await respond(instruction, batch)
                 if let parsed = Self.parseSuggestions(from: reply) {
-                    for suggestion in parsed {
+                    for var suggestion in parsed {
                         let key = suggestion.content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                         guard !key.isEmpty, !seenContent.contains(key) else { continue }
                         seenContent.insert(key)
+                        suggestion.sourceThreadID = currentThread.id
+                        suggestion.createdFromMessageID = currentThread.messages.last?.id
+                        suggestion.originDeviceName = DeviceIdentity.currentName
+                        if let saved = try? await suggestionStore.upsert(suggestion) { suggestion = saved }
                         memorySuggestions.append(suggestion)
+                        if isCloudSyncEnabled { await cloudSync.markSuggestionChanged(suggestion) }
                     }
+                    if isCloudSyncEnabled { await cloudSync.syncNow() }
                 } else {
                     anyBatchFailed = true
                 }
@@ -448,8 +468,22 @@ final class ChatThreadsViewModel {
         await addMemory(
             suggestion.content, kind: suggestion.kind, source: .inferred,
             confidence: suggestion.confidence, profileID: nil,
-            createdFromMessageID: currentThread.messages.last?.id)
-        memorySuggestions.removeAll { $0.id == suggestion.id }
+            createdFromMessageID: suggestion.createdFromMessageID ?? currentThread.messages.last?.id)
+        await removeSuggestion(suggestion.id)
+    }
+
+    /// Deletes a suggestion from the shared store (and syncs the
+    /// tombstone) whether it's being accepted or dismissed — one
+    /// thing existing, another being approved for the AI to use; once
+    /// either decision is made on any device, the suggestion itself
+    /// should disappear everywhere.
+    private func removeSuggestion(_ id: UUID) async {
+        memorySuggestions.removeAll { $0.id == id }
+        try? await suggestionStore.delete(id: id)
+        if isCloudSyncEnabled {
+            await cloudSync.markSuggestionDeleted(id: id)
+            await cloudSync.syncNow()
+        }
     }
 
     /// Saves every current suggestion at once — see Mac's own
@@ -502,7 +536,7 @@ final class ChatThreadsViewModel {
     }
 
     func dismissMemorySuggestion(_ suggestion: ChatMemorySuggestion) {
-        memorySuggestions.removeAll { $0.id == suggestion.id }
+        Task { await removeSuggestion(suggestion.id) }
     }
 
     private static func extractJSONArray(from text: String) -> String {
