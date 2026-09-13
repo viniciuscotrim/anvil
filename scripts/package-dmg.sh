@@ -56,21 +56,23 @@ sed \
   -e "s/__BUILD__/$BUILD_NUMBER/" \
   "$ROOT_DIR/Resources/Info.plist" > "$APP_BUNDLE/Contents/Info.plist"
 
+# Embed the real Developer ID provisioning profile (downloaded from the
+# portal for the macOS App ID com.viniciuscotrim.anvil, iCloud/CloudKit
+# container iCloud.com.viniciuscotrim.anvil already associated to it).
+# Without this file present, codesign --entitlements below produces a
+# binary AMFI refuses to even launch ("Launchd job spawn failed") —
+# this was reproduced and is why --entitlements was reverted for a
+# while; this profile is what makes it safe to bring back.
+PROVISION_PROFILE="$ROOT_DIR/Resources/embedded.provisionprofile"
+if [ ! -f "$PROVISION_PROFILE" ]; then
+  echo "error: missing $PROVISION_PROFILE — download the Developer ID profile for com.viniciuscotrim.anvil (macOS) from the portal first" >&2
+  exit 1
+fi
+cp "$PROVISION_PROFILE" "$APP_BUNDLE/Contents/embedded.provisionprofile"
+
 echo "==> Code-signing $APP_NAME.app (hardened runtime)"
-# NOT --entitlements Anvil.entitlements right now: a real, reproduced
-# bug — a Developer-ID-signed (non-App-Store) Mac app declaring the
-# iCloud/CloudKit entitlement needs a matching embedded provisioning
-# profile (Contents/embedded.provisionprofile) for AMFI to allow the
-# process to launch at all; a plain SPM build + codesign --entitlements
-# with no profile gets rejected at process-spawn time ("Launchd job
-# spawn failed") before the app ever shows a single window — not a
-# runtime crash, a hard launch block. Fixing this for real needs an
-# actual Mac Developer ID provisioning profile downloaded from the
-# portal and embedded here; reverted for now so the app can be used at
-# all while that's sorted out. CloudSyncEngine's own code is unaffected
-# either way — it already degrades to "just doesn't sync" without the
-# entitlement, never crashes.
 codesign --force --deep --options runtime --timestamp \
+  --entitlements "$ROOT_DIR/Sources/Anvil/Anvil.entitlements" \
   --sign "$SIGNING_IDENTITY" \
   "$APP_BUNDLE"
 
