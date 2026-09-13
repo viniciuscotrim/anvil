@@ -68,6 +68,39 @@ public actor CloudSyncEngine {
         return created
     }
 
+    // MARK: - Persisting engine state across launches
+
+    /// A real, reproduced bug this fixes: `CKSyncEngine` is always
+    /// constructed fresh (one per `start()` call, matching this app's
+    /// launch/quit lifecycle), and without this, `Configuration` was
+    /// always given `stateSerialization: nil`. That throws away not
+    /// just sync tokens (making every launch re-fetch everything, just
+    /// inefficient) but — far worse — any local change that had been
+    /// queued via `markThreadChanged`/etc. but hadn't *finished*
+    /// uploading yet when the app quit. `CKSyncEngine` reports its
+    /// current state via the `.stateUpdate` event specifically so the
+    /// delegate can persist it; skipping that (previously a silent
+    /// `default: break` in `handleEvent`) is what let a just-sent
+    /// assistant reply vanish permanently after an app relaunch — the
+    /// new engine started with no memory the change was ever pending,
+    /// so it never got resent, even though the local disk copy had it
+    /// all along.
+    private static var stateFileURL: URL {
+        RuntimePaths.applicationSupportDirectory.appendingPathComponent("cloud_sync_state.json")
+    }
+
+    private func loadPersistedState() -> CKSyncEngine.State.Serialization? {
+        guard let data = try? Data(contentsOf: Self.stateFileURL) else { return nil }
+        return try? JSONDecoder().decode(CKSyncEngine.State.Serialization.self, from: data)
+    }
+
+    private func persistState(_ serialization: CKSyncEngine.State.Serialization) {
+        guard let data = try? JSONEncoder().encode(serialization) else { return }
+        try? FileManager.default.createDirectory(
+            at: RuntimePaths.applicationSupportDirectory, withIntermediateDirectories: true)
+        try? data.write(to: Self.stateFileURL, options: .atomic)
+    }
+
     /// Checked before ever turning this on — `.available` is required;
     /// anything else (not signed in, restricted, etc.) means the
     /// feature stays off with a clear reason shown, never a silent
@@ -86,7 +119,7 @@ public actor CloudSyncEngine {
         self.delegateRef = delegate
         let configuration = CKSyncEngine.Configuration(
             database: container.privateCloudDatabase,
-            stateSerialization: nil,
+            stateSerialization: loadPersistedState(),
             delegate: delegate
         )
         let newEngine = CKSyncEngine(configuration)
@@ -306,6 +339,8 @@ public actor CloudSyncEngine {
 
         func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
             switch event {
+            case .stateUpdate(let update):
+                await owner.persistState(update.stateSerialization)
             case .fetchedRecordZoneChanges(let changes):
                 for modification in changes.modifications {
                     await owner.applyRemote(modification.record)

@@ -75,3 +75,26 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+schemes:
+  # A real gap found while validating this round's fix: xcodegen 2.46
+  # wasn't auto-generating a shared scheme for this target the way
+  # earlier rounds relied on (`xcodebuild -scheme AnvilIOS ...` used to
+  # just work) — `xcshareddata/xcschemes` came out empty after a fresh
+  # `xcodegen generate`, leaving only the incidental schemes for the
+  # local AnvilCore/Anvil package dependency. Declared explicitly here
+  # so the scheme this project's own build/verify steps expect always
+  # exists, regardless of xcodegen's current auto-generation defaults.
+  AnvilIOS:
+    build:
+      targets:
+        AnvilIOS: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

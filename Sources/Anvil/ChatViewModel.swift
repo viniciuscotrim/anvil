@@ -513,6 +513,10 @@ final class ChatViewModel: ObservableObject {
     func deleteThread(_ thread: ChatThread) async {
         if isSending, currentThread.id == thread.id { return }
         try? await threadStore.delete(id: thread.id)
+        if isCloudSyncEnabled {
+            await cloudSync.markThreadDeleted(id: thread.id)
+            await cloudSync.syncNow()
+        }
         allThreads.removeAll { $0.id == thread.id }
         lastImageGenerationByThread.removeValue(forKey: thread.id)
         temporaryThreads.removeValue(forKey: thread.id)
