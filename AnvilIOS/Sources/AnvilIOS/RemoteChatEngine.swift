@@ -109,7 +109,16 @@ final class RemoteChatEngine: ObservableObject {
         if threads.currentThread.title == "New Chat", threads.currentThread.messages.count == 1 {
             threads.currentThread.title = String(trimmed.prefix(48))
         }
-        threads.persistCurrentThreadForDurability()
+        // For the Mac-driven path, `runMacDrivenGeneration` does its own
+        // *awaited* push before ever calling /generate — deliberately
+        // not this fire-and-forget one, which raced against it (see
+        // that method's own comment for the real, reproduced bug this
+        // avoids). The direct-streaming path still wants this: it's the
+        // only thing that saves the user's message before a possibly
+        // long-running reply, independent of the request that follows.
+        if !preferMacDrivenGeneration {
+            threads.persistCurrentThreadForDurability()
+        }
 
         let tools: [ChatTool] = imageConnection != nil ? [.generateImage] : []
         let contextBuilder = ChatContextBuilder(
@@ -174,6 +183,19 @@ final class RemoteChatEngine: ObservableObject {
     /// doesn't need to stay around for the answer to keep coming.
     private func runMacDrivenGeneration(threads: ChatThreadsViewModel, connection: RemoteMacConnection) async {
         do {
+            // Must land on the Mac *before* /generate is called — that
+            // route reads the thread straight off the Mac's own disk,
+            // completely independent of whatever `send()`'s own
+            // fire-and-forget `persistCurrentThreadForDurability()` is
+            // doing concurrently. A real, reproduced bug: without this
+            // explicit, awaited push first, /generate could (and did)
+            // win the race and read a snapshot from *before* this
+            // message was appended — the user's own new question
+            // silently missing from what the model was ever asked to
+            // reply to, appending its response placeholder right after
+            // the *previous* turn instead. Awaiting this first makes
+            // the ordering impossible to get wrong.
+            await threads.persistCurrentThread()
             let sessions = try await syncClient.sessions(host: connection.host)
             guard let session = sessions.first(where: { $0.port == connection.port }) else {
                 throw AnvilSyncClientError.requestFailed(
