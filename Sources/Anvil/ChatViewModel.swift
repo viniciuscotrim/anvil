@@ -345,22 +345,36 @@ final class ChatViewModel: ObservableObject {
             currentThread = allThreads.first ?? ChatThread(originDeviceName: DeviceIdentity.currentName)
             hasLoadedInitialState = true
         }
-        syncSelectedModel()
-        // Every registered text model, loaded or not — the memory
-        // digest picker (unlike the live-chat one) can name a model
-        // that isn't resident right now, so it needs the full registry,
-        // not just `sessions.readySessions`.
+        // Every registered text model, loaded or not — both this
+        // picker and the memory digest's own can name a model that
+        // isn't resident right now, so this needs the full registry,
+        // not just `sessions.readySessions`. Populated before
+        // `syncSelectedModel()` below, which falls back to it.
         availableTextModels = await modelRegistry.all().filter { $0.kind == .text }
+        syncSelectedModel()
     }
 
     /// Keeps the selection pointed at a loaded model — called on
     /// appear and whenever the set of loaded models changes.
     func syncSelectedModel() {
-        if let id = selectedModelID, sessions.isLoaded(modelID: id) {
+        // A selection no longer needs to *stay* loaded to stay valid —
+        // requested live: picking a model that isn't currently
+        // resident is now a perfectly good choice (`send()` loads it
+        // on demand), so this used to undo exactly that the moment any
+        // session's status changed (this is called from `ChatView`'s
+        // `.onChange(of: sessions.sessions)`), snapping the picker back
+        // to whatever was already loaded. Only fills in a default —
+        // the first ready session, same as before — when nothing at
+        // all has been picked yet.
+        if let id = selectedModelID {
             applyDefaultProfileIfNeeded(forModelID: id)
             return
         }
-        selectedModelID = sessions.readySessions.first?.id
+        // Prefer an already-loaded model when defaulting (no load
+        // needed to start chatting immediately), but fall back to any
+        // registered one so a brand-new thread's picker isn't just
+        // empty when nothing happens to be resident yet.
+        selectedModelID = sessions.readySessions.first?.id ?? availableTextModels.first?.id
         if let id = selectedModelID {
             applyDefaultProfileIfNeeded(forModelID: id)
         }
@@ -623,6 +637,47 @@ final class ChatViewModel: ObservableObject {
         } else if anyBatchFailed {
             errorMessage = "Part of this conversation couldn't be analyzed — the suggestions above may be incomplete."
         }
+    }
+
+    /// Loads `modelID` on demand for `send()` if it isn't already
+    /// resident, unloading every other currently-loaded model (text
+    /// and image both — they share one `ResidencyPlanner` budget)
+    /// first if that's what it takes to fit. Requested live: once the
+    /// header's model picker started offering every registered model
+    /// rather than just an already-loaded one, sending had to be able
+    /// to bring the chosen one up itself. Unlike
+    /// `ensureModelLoadedForSuggestions` below, this never asks first —
+    /// the user picked this model to chat with, same as picking an
+    /// already-loaded one always implied "just use it," so swapping
+    /// what's resident to honor that should just happen. Returns
+    /// `false` (setting `errorMessage`) when the model still isn't
+    /// usable afterward.
+    private func ensureModelLoadedForSending(_ modelID: String) async -> Bool {
+        if sessions.isLoaded(modelID: modelID) { return true }
+        guard let entry = await modelRegistry.all().first(where: { $0.id == modelID }) else {
+            errorMessage = "That model is no longer registered."
+            return false
+        }
+        if await sessions.load(entry, requirements: requirements) { return true }
+
+        guard case .failed(let reason)? = sessions.session(for: modelID)?.status,
+              reason.contains("Not enough unified memory") else {
+            errorMessage = "Could not load \(entry.displayName)."
+            return false
+        }
+
+        for session in sessions.readySessions { await sessions.unload(modelID: session.id) }
+        for session in imageSessions.readySessions { await imageSessions.unload(modelID: session.id) }
+
+        guard await sessions.load(entry, requirements: requirements) else {
+            if case .failed(let retryReason)? = sessions.session(for: modelID)?.status {
+                errorMessage = retryReason
+            } else {
+                errorMessage = "Could not load \(entry.displayName)."
+            }
+            return false
+        }
+        return true
     }
 
     /// Loads `modelID` on demand if it isn't already resident — the
@@ -985,9 +1040,8 @@ final class ChatViewModel: ObservableObject {
 
     func send() async {
         cancelBufferedSend()
-          guard let id = selectedModelID,
-              let endpoint = sessions.gatewayEndpoint(for: id) ?? sessions.chatEndpoint(for: id) else {
-            errorMessage = "Pick a loaded model first"
+        guard let id = selectedModelID else {
+            errorMessage = "Pick a model first."
             return
         }
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1003,8 +1057,27 @@ final class ChatViewModel: ObservableObject {
             errorMessage = "You just sent this — give it a moment before sending it again."
             return
         }
-        inputText = ""
+
+        isSending = true
+        generationPhase = .preparing
         errorMessage = nil
+        // Loads the selected model on demand — requested live: since
+        // the picker now offers every registered model, not just an
+        // already-loaded one, sending has to be able to bring the
+        // chosen one up itself, unloading whatever's currently running
+        // first if that's what it takes to fit. Never asks first —
+        // see `ensureModelLoadedForSending`'s own doc comment for how
+        // this differs from the memory digest's own, confirming
+        // version of the same idea.
+        guard await ensureModelLoadedForSending(id),
+              let endpoint = sessions.gatewayEndpoint(for: id) ?? sessions.chatEndpoint(for: id) else {
+            isSending = false
+            generationPhase = .idle
+            if errorMessage == nil { errorMessage = "That model isn't ready." }
+            return
+        }
+
+        inputText = ""
 
         currentThread.messages.append(ChatMessage(role: .user, content: text))
         // Saved right away — not just after the full round trip
@@ -1041,8 +1114,6 @@ final class ChatViewModel: ObservableObject {
         let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty, memoryPrompt: context.memoryPrompt)
         let responderName = activeProfile?.name
 
-        isSending = true
-        generationPhase = .preparing
         generationTask = Task { [weak self] in
             await self?.runChatLoop(
                 endpoint: endpoint,

@@ -68,7 +68,10 @@ struct NativeChatView: View {
 
     private var canSend: Bool {
         switch source {
-        case .local: return engine.isLoaded
+        // A model no longer needs to already be loaded to send — just
+        // picked (typed or chosen from the menu). `sendLocal` loads
+        // (or swaps to) it on demand.
+        case .local: return !modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .mac: return true
         }
     }
@@ -505,14 +508,22 @@ struct NativeChatView: View {
 
     private var localModelControls: some View {
         HStack {
+            // Editable (and the picker menu below available) regardless
+            // of whether something's already loaded — requested live:
+            // the model has to be changeable mid-conversation, not
+            // locked until an explicit Unload. Sending auto-loads (or
+            // swaps to) whatever's picked here; `NativeChatEngine.load`
+            // already replaces whatever was previously resident on its
+            // own, since this phone only ever keeps one model loaded at
+            // a time.
             TextField("mlx-community/…", text: $modelID)
                 .textFieldStyle(.roundedBorder)
-                .disabled(engine.isLoading || engine.isLoaded)
+                .disabled(engine.isLoading)
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
                 .frame(maxWidth: 160)
 
-            if !engine.isLoaded && !engine.isLoading {
+            if !engine.isLoading {
                 Menu {
                     let textModels = modelsViewModel.registeredModels.filter { $0.kind == .text }
                     if textModels.isEmpty {
@@ -527,14 +538,14 @@ struct NativeChatView: View {
                 }
             }
 
-            if engine.isLoaded {
-                Button("Unload") { engine.unload() }
-            } else if engine.isLoading {
+            if engine.isLoading {
                 if let progress = engine.loadProgress {
                     ProgressView(value: progress).frame(width: 80)
                 } else {
                     ProgressView().controlSize(.small)
                 }
+            } else if engine.isLoaded && engine.loadedModelID == modelID {
+                Button("Unload") { engine.unload() }
             } else {
                 Button("Load") { Task { await load() } }
             }
@@ -684,7 +695,7 @@ struct NativeChatView: View {
     private func send() {
         switch source {
         case .local:
-            sendLocal()
+            Task { await sendLocal() }
         case .mac(let connection):
             remoteEngine.send(
                 text: inputText,
@@ -705,17 +716,30 @@ struct NativeChatView: View {
         }
     }
 
-    private func sendLocal() {
+    private func sendLocal() async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, engine.isLoaded, !isLocalGenerating else { return }
+        guard !text.isEmpty, !isLocalGenerating else { return }
         // Same guard as the remote path — see its own comment for why:
         // block an exact repeat of the last thing the user just asked.
         if threads.currentThread.messages.last(where: { $0.role == .user })?.content == text {
             engine.errorMessage = "You just sent this — give it a moment before sending it again."
             return
         }
-        inputText = ""
         isLocalGenerating = true
+        // Loads (or swaps to) the selected model on demand — requested
+        // live: picking a different model no longer requires pressing
+        // Load first. No separate "not enough memory, unload something
+        // first" step is needed here the way Mac's several-processes-
+        // at-once design does: `NativeChatEngine.load` already replaces
+        // whatever was previously resident on its own.
+        if !engine.isLoaded || engine.loadedModelID != modelID {
+            await load()
+            guard engine.isLoaded, engine.loadedModelID == modelID else {
+                isLocalGenerating = false
+                return
+            }
+        }
+        inputText = ""
 
         threads.currentThread.messages.append(ChatMessage(role: .user, content: text))
         if threads.currentThread.title == "New Chat", threads.currentThread.messages.count == 1 {

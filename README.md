@@ -9,9 +9,29 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.15.1-history-without-model (Read Chat History Without a Model Loaded)
+## Current release: 0.16.0-chat-model-profile-picker (Model and Profile, Chosen Right in Chat)
 
-Requested live: "faça o histórico das conversas estar disponível pra
+Requested/reported live: "você tirou a seleção do modelo pra
+conversa" — the previous fix for reading history without a loaded
+model had an unintended side effect: the header's model picker only
+ever listed already-*loaded* models, so once nothing was loaded there
+was no picker at all. Fixed together with the rest of what was asked
+in the same message: "dentro da janela do chat tem que ter o modelo
+utilizado e podendo mudá-lo mesmo durante a conversa. O mesmo para o
+Profile, tem que ser chat-based e não system wide. E quando eu for
+criar um novo chat estes campos tem que aparecer pra eu selecionar
+antes de mandar a primeira mensagem. Se o modelo selecionado não
+estiver carregado, ao mandar uma mensagem ele se carrega
+automaticmente. Se não houver memória ele descarrega os modelos ativos
+antes de carregar o necessário." Mac's header now lists every
+registered model (loaded or not) and shows Profile right next to it
+instead of hidden in the settings sidebar; sending loads whichever
+model is picked on demand, unloading other loaded models automatically
+if that's what it takes to fit. iOS's model field/menu are no longer
+locked once something's loaded. See "Model and Profile, chosen right
+in the chat window" below.
+
+It follows 0.15.1-history-without-model, requested live: "faça o histórico das conversas estar disponível pra
 ler e navegar mesmo sem um modelo carregado, hoje sou obrigado, mas
 com o histórico na núvem não faz sentido" (make chat history readable
 and navigable even without a model loaded — today I'm forced to, but
@@ -82,7 +102,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.15.1-history-without-model`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.16.0-chat-model-profile-picker`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1223,6 +1243,70 @@ message still correctly requires a loaded model: the input bar's own
 and needed no change. iOS's `NativeChatView` already rendered
 `threads.currentThread.messages` unconditionally, so it never had this
 problem in the first place.
+
+## Model and Profile, chosen right in the chat window
+
+Reported/requested live, right after the fix above shipped: "você
+tirou a seleção do modelo pra conversa" (you removed the model
+selection for the conversation) — an unintended side effect of that
+same fix, since the header's model picker had always been conditioned
+on `sessions.readySessions` (already-*loaded* models) being non-empty;
+once nothing was loaded to make history readable without it, there was
+no picker at all any more.
+
+Fixed together with the rest of what came in the same message: "dentro
+da janela do chat tem que ter o modelo utilizado e podendo mudá-lo
+mesmo durante a conversa. O mesmo para o Profile, tem que ser
+chat-based e não system wide. E quando eu for criar um novo chat estes
+campos tem que aparecer pra eu selecionar antes de mandar a primeira
+mensagem. Se o modelo selecionado não estiver carregado, ao mandar uma
+mensagem ele se carrega automaticamente. Se não houver memória ele
+descarrega os modelos ativos antes de carregar o necessário."
+
+**Mac.** `ChatView`'s header `modelPicker` now lists every registered
+text model from `ModelRegistry.all()` — loaded or not — with a filled
+vs. hollow dot marking which ones already are, and stays live for the
+whole conversation (unlike before, switching mid-thread was already
+technically possible when a picker was visible at all; now it always
+is). `profilePicker` moved out of the collapsible settings sidebar
+(where it was easy to never notice) into the header right next to it —
+same per-thread `ChatThread.profileID` storage as always (this was
+already "chat-based" at the data layer), just no longer hidden behind
+a panel toggle most people never open. It still locks after the first
+message (`canChangeProfile`), since a profile shapes the system prompt
+from the first turn; unlike the model, there's no sensible "swap
+mid-conversation" for it. Creating a new thread (`newThread()`) resets
+`profileID` to none, so both pickers are immediately there to fill in
+before the first message goes out, exactly as asked.
+
+Sending now loads whichever model is selected if it isn't already
+resident (`ChatViewModel.ensureModelLoadedForSending`), the literal "se
+o modelo selecionado não estiver carregado, ao mandar uma mensagem ele
+se carrega automaticamente." If that doesn't fit the remaining unified-
+memory budget, every other currently-loaded model — text and image,
+since they share one `ResidencyPlanner` budget — is unloaded first,
+automatically: "se não houver memória ele descarrega os modelos ativos
+antes de carregar o necessário." Deliberately **no confirmation** here,
+unlike the memory digest's own on-demand load
+(`ensureModelLoadedForSuggestions`, `0.15.0`) — that one asks first
+because the model it loads is incidental to the conversation you're
+having; this one is the model you explicitly picked to chat with, so
+swapping what's resident to honor that just happens. `syncSelectedModel`
+no longer resets the selection back to a loaded model the instant any
+session's status changes elsewhere — that used to undo this same
+choice on its own before a message was even sent.
+
+**iOS.** `NativeChatEngine` only ever holds one model at a time, so
+there's no separate memory-budget check to make: `load(modelID:)`
+already discards whatever was previously resident on its own. The gap
+was purely in the UI — the model ID field and its "pick a registered
+model" menu both disabled themselves the moment something was loaded,
+requiring an explicit Unload first to change anything. Now both stay
+live throughout, `canSend`/`sendLocal` no longer require `engine
+.isLoaded` up front, and sending loads (or swaps to) whichever model is
+currently typed/picked before generating. Profile already had its own
+visible, chat-based `profileBar` here (`0.9.x`) — nothing to fix on
+that side.
 
 ## Architecture
 

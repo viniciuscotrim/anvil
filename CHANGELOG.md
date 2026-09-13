@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.16.0-chat-model-profile-picker] - 2026-09-13
+
+### Changed
+- **Model and Profile are now chosen right in the Chat window, for
+  every conversation, and both can be changed mid-conversation** (the
+  model — Profile still locks after the first message, since it
+  shapes the system prompt from the start): reported/requested live —
+  "você tirou a seleção do modelo pra conversa" (the previous fix for
+  reading history without a loaded model accidentally removed the
+  model picker whenever nothing was loaded, since it used to only
+  list already-loaded models) — "dentro da janela do chat tem que ter
+  o modelo utilizado e podendo mudá-lo mesmo durante a conversa. O
+  mesmo para o Profile, tem que ser chat-based e não system wide. E
+  quando eu for criar um novo chat estes campos tem que aparecer pra
+  eu selecionar antes de mandar a primeira mensagem."
+  - **Mac**: the header's model picker now lists every registered
+    text model (`ModelRegistry.all()`), not just a loaded one — a
+    filled dot marks which ones already are. Profile moved out of the
+    collapsible settings sidebar into the header too, right next to
+    the model, so it's visible and chosen per-conversation instead of
+    tucked away behind a panel toggle most people never open.
+  - **iOS**: the model ID field and its picker menu are no longer
+    disabled once something's loaded, so switching is possible without
+    unloading first. Profile already had its own visible, chat-based
+    picker (`profileBar`) — unchanged.
+  - **Sending now loads the picked model on demand** if it isn't
+    already resident, in both cases: "se o modelo selecionado não
+    estiver carregado, ao mandar uma mensagem ele se carrega
+    automaticamente." On Mac, if that doesn't fit the remaining
+    unified-memory budget, every other currently-loaded model (text
+    and image, since they share one budget) is unloaded first,
+    automatically — "se não houver memória ele descarrega os modelos
+    ativos antes de carregar o necessário" — no confirmation this
+    time, unlike the memory digest's own on-demand load, since here
+    the user picked this model specifically to chat with. On iOS,
+    `NativeChatEngine.load` already replaces whatever was previously
+    resident on its own (only one model is ever loaded there at a
+    time), so no separate memory check was needed.
+
 ## [0.15.1-history-without-model] - 2026-09-13
 
 ### Fixed

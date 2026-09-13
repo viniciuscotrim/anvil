@@ -53,9 +53,14 @@ struct ChatView: View {
                         // sentido" (today I'm forced to, but with
                         // history in the cloud it doesn't make sense).
                         messageList
-                    } else if sessions.readySessions.isEmpty {
+                    } else if chat.selectedModelID == nil {
                         emptyState
                     } else {
+                        // Doesn't require the model to actually be
+                        // loaded right now — picking one no longer
+                        // means picking a *loaded* one; `send()` loads
+                        // it on demand the moment there's something to
+                        // send.
                         Spacer()
                         Text("Say something to \(activeModelName).")
                             .foregroundStyle(.secondary)
@@ -162,7 +167,11 @@ struct ChatView: View {
     }
 
     private var activeModelName: String {
-        sessions.sessions.first { $0.id == chat.selectedModelID }?.model.displayName ?? "the model"
+        // Looked up against every *registered* model, not just a
+        // loaded one (`sessions.sessions` only ever holds
+        // loading/ready/failed sessions) — the selected model is now
+        // routinely one that isn't resident yet.
+        chat.availableTextModels.first { $0.id == chat.selectedModelID }?.displayName ?? "the model"
     }
 
     // MARK: - Header (stays outside the sidebar, always visible)
@@ -180,18 +189,8 @@ struct ChatView: View {
 
             titleField
 
-            if !sessions.readySessions.isEmpty {
-                Picker("", selection: Binding(
-                    get: { chat.selectedModelID },
-                    set: { chat.selectModel($0) }
-                )) {
-                    ForEach(sessions.readySessions) { session in
-                        Text(session.model.displayName).tag(Optional(session.id))
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 220)
-            }
+            modelPicker
+            profilePicker
 
             if chat.isTemporaryModeActive {
                 Label("Temporary", systemImage: "eyeglasses")
@@ -238,6 +237,62 @@ struct ChatView: View {
         .padding()
     }
 
+    /// Every registered text model, loaded or not — requested live:
+    /// this used to only list `sessions.readySessions` (already-loaded
+    /// models), which meant there was no way to even see, let alone
+    /// pick, a model at all once nothing happened to be loaded. Stays
+    /// visible and changeable for the whole life of the conversation
+    /// (unlike `profilePicker`, which locks after the first message) —
+    /// switching mid-conversation is exactly what's requested;
+    /// `send()` loads whichever one is selected on demand.
+    private var modelPicker: some View {
+        Group {
+            if !chat.availableTextModels.isEmpty {
+                Picker("", selection: Binding(
+                    get: { chat.selectedModelID },
+                    set: { chat.selectModel($0) }
+                )) {
+                    ForEach(chat.availableTextModels) { model in
+                        Label(model.displayName, systemImage: sessions.isLoaded(modelID: model.id) ? "circle.fill" : "circle")
+                            .tag(Optional(model.id))
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 220)
+                .help("Model used for this conversation — a filled dot means it's already loaded.")
+            }
+        }
+    }
+
+    /// Moved here from the settings sidebar — requested live, the same
+    /// footing as `modelPicker`: a conversation's Profile is decided
+    /// per-thread (`ChatThread.profileID`) already, but tucked away in
+    /// a collapsible panel most people never open, it behaved like an
+    /// invisible, system-wide default instead of something chosen for
+    /// *this* chat. Locked after the first message (`canChangeProfile`)
+    /// since it shapes the system prompt from the very first turn —
+    /// unlike the model, there's no sensible "swap mid-conversation"
+    /// for this one.
+    private var profilePicker: some View {
+        Picker("", selection: Binding(
+            get: { chat.activeProfile?.id },
+            set: { id in chat.setProfile(chat.availableProfiles.first { $0.id == id }) }
+        )) {
+            Text("No Profile").tag(Optional<UUID>.none)
+            ForEach(chat.availableProfiles) { profile in
+                Text(profile.name).tag(Optional(profile.id))
+            }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 160)
+        .disabled(!chat.canChangeProfile)
+        .help(
+            chat.canChangeProfile
+                ? "Profile used for this conversation."
+                : "Locked after the first message — start a new thread to use a different profile."
+        )
+    }
+
     /// Editable conversation title — defaults to "Profile · created
     /// date" (see `ChatViewModel.autoTitle`) and stays in sync with the
     /// profile until the user types something here, which locks it in
@@ -282,9 +337,9 @@ struct ChatView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Spacer()
-            Text("No models loaded")
+            Text("No models registered")
                 .font(.headline)
-            Text("Load a model from the Models tab first.")
+            Text("Download or import a model in the Models tab first.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -495,14 +550,18 @@ struct ChatView: View {
                             chat.scheduleBufferedSend()
                         }
                     }
-                    .disabled(sessions.readySessions.isEmpty)
+                    // Only requires a model to be *selected*, not
+                    // loaded — `send()` loads whichever one is picked
+                    // on demand, unloading whatever's currently
+                    // running first if that's what it takes to fit.
+                    .disabled(chat.selectedModelID == nil)
 
                 if chat.isSending {
                     Button("Stop", role: .destructive) { chat.stopGeneration() }
                 } else {
                     Button("Send") { Task { await chat.send() } }
                         .disabled(
-                            sessions.readySessions.isEmpty
+                            chat.selectedModelID == nil
                             || chat.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         )
                 }
@@ -592,24 +651,13 @@ struct ChatView: View {
 
     private var sidebar: some View {
         Form {
-            Section("Profile") {
-                Picker("Profile", selection: Binding(
-                    get: { chat.activeProfile?.id },
-                    set: { id in chat.setProfile(chat.availableProfiles.first { $0.id == id }) }
-                )) {
-                    Text("None").tag(Optional<UUID>.none)
-                    ForEach(chat.availableProfiles) { profile in
-                        Text(profile.name).tag(Optional(profile.id))
-                    }
-                }
-                .disabled(!chat.canChangeProfile)
-                .labelsHidden()
-
-                if !chat.canChangeProfile {
-                    Text("Locked after the first message — start a new thread to use a different profile.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if chat.availableProfiles.isEmpty {
+            // Profile moved to the header (`profilePicker`), right next
+            // to the model — requested live: tucked away in here, a
+            // per-conversation choice behaved like an invisible,
+            // system-wide default instead of something picked for
+            // *this* chat before the first message.
+            if chat.availableProfiles.isEmpty {
+                Section("Profile") {
                     Text("No profiles yet — create one in the Profiles tab.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
