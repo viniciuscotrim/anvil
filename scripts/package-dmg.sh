@@ -56,6 +56,8 @@ sed \
   -e "s/__BUILD__/$BUILD_NUMBER/" \
   "$ROOT_DIR/Resources/Info.plist" > "$APP_BUNDLE/Contents/Info.plist"
 
+cp "$ROOT_DIR/Resources/Anvil.icns" "$APP_BUNDLE/Contents/Resources/Anvil.icns"
+
 # Embed the real Developer ID provisioning profile (downloaded from the
 # portal for the macOS App ID com.viniciuscotrim.anvil, iCloud/CloudKit
 # container iCloud.com.viniciuscotrim.anvil already associated to it).

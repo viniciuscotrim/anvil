@@ -9,20 +9,27 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.11.0 (Chat Layout Refinements)
+## Current release: 0.11.1 (Real App Icon + Z-Image/FLUX.2/Krea-2 Loading Fix)
 
-Follows straight on from 0.10.0's threads column with a round of
-refinements to the same area — editable titles, a leaner right-hand
+A real app icon on both platforms (Mac `.icns`, iOS `AppIcon.appiconset`
+— neither had one before), and a real bug fix: Z-Image, FLUX.2, and
+Krea-2 models were all being loaded through mflux's FLUX.1-only
+pipeline and failing the moment anyone tried to generate with one. See
+"Why some image models wouldn't load" below, and the full writeup at
+[docs/image-model-loading.md](docs/image-model-loading.md).
+
+It follows straight on from 0.10.0's threads column and 0.11.0's round
+of refinements to the same area — editable titles, a leaner right-hand
 panel, Temporary Chat in the composer, iPhone/iCloud sync promoted to
 the global top bar, and a popout window that actually detaches the
-conversation. See "A left-hand threads column in Chat" below for the
-full narrative. It builds on a run of iOS chat/sync parity and iCloud
-sync work (`0.7.0`–`0.9.0`) shipped and tagged in git but not yet
-narrated in this README or in [CHANGELOG.md](CHANGELOG.md) in full;
-`git tag -l -n99` has the per-release detail until that catch-up is
-done.
+conversation (see "A left-hand threads column in Chat" below). Full
+release history in [CHANGELOG.md](CHANGELOG.md), now caught up through
+`0.7.0`'s download/queue/image-version-history/Prompt-to-Model work,
+the iOS chat/sync parity and iCloud sync fixes that followed it
+(`0.7.x`–`0.9.0`), and the Models tab fixes and CivitAI support at
+`0.8.x`.
 
-The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.11.0`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.11.1`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -709,6 +716,32 @@ A follow-up round on the threads column above, all requested together:
   shown (no left column, no panel toggle — that's its whole reason to
   exist). Closing the popout is the only way back; there's no separate
   in-app "undo."
+
+## Why some image models wouldn't load
+
+Reported: Z-Image Turbo (`mflux-community/z-image-turbo-mflux-q4`)
+failed to load with `FileNotFoundError: No safetensors files found in
+.../text_encoder_2`. Root cause: `mflux` isn't one pipeline — FLUX.1,
+FLUX.2, Krea-2, and Z-Image are each a genuinely separate Python class
+with a different on-disk component layout (only FLUX.1 has a second,
+T5 `text_encoder_2`), but `ImageServerScript`'s `build_pipeline()`
+loaded *every* registered model through the FLUX.1 class regardless.
+That meant every non-FLUX.1 model in Anvil's own curated hub was
+affected, not just Z-Image — `flux2-klein-4b/9b` and `krea-2-turbo`
+too — since the size-only download fix in `0.8.2` never actually
+verified any of them could generate an image.
+
+Fixed by detecting a registered model's family from its folder name
+(Anvil already names it after the source repo id) and routing to that
+family's own `mflux` class — `ZImage`, `Flux2Klein`, or `Krea2` — each
+sharing enough of a common shape with `Flux1` (constructor, a
+compatible `generate_image()`, a `.callbacks` registry) that this was
+a small, surgical addition rather than a rewrite. Verified for real
+against the actual downloaded Z-Image model: loaded in ~13s, then
+generated and saved a real PNG. Full writeup, including why FLUX.2/
+Krea-2 were verified by reading `mflux`'s own installed source rather
+than a live download, and what happens for a model outside these four
+families: [docs/image-model-loading.md](docs/image-model-loading.md).
 
 ## Architecture
 

@@ -75,6 +75,7 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 schemes:
   # A real gap found while validating this round's fix: xcodegen 2.46
   # wasn't auto-generating a shared scheme for this target the way

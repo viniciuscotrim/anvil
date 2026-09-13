@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.11.1] - 2026-09-13
+
+### Fixed
+- **Z-Image, FLUX.2, and Krea-2 models couldn't load**: every registered
+  image model was loaded through mflux's FLUX.1-only pipeline
+  (`Flux1`), which expects a second `text_encoder_2` (T5) folder none
+  of those three families ship — surfacing as "No safetensors files
+  found in .../text_encoder_2" (or similar) the first time anyone
+  actually generated with one. `ImageServerScript`'s `build_pipeline()`
+  now detects a registered model's real family from its folder name
+  and routes to that family's own mflux class (`ZImage`, `Flux2Klein`,
+  `Krea2`) instead. Verified for real against a downloaded Z-Image
+  Turbo model — loaded and generated a real image; FLUX.2/Krea-2 were
+  verified by reading the installed `mflux` package's own source, not
+  a live download. Full writeup: `docs/image-model-loading.md`.
+
+### Added
+- **A real app icon**, Mac and iOS both: a commissioned image (gold
+  anvil, circuit-branch flourish) baked into a proper `.icns`
+  (`Resources/Anvil.icns`, referenced via `CFBundleIconFile`) for the
+  Mac app, and a single 1024×1024 universal `AppIcon.appiconset` for
+  AnvilIOS. Neither platform had a real icon before this.
+
 ## [0.11.0] - 2026-09-13
 
 ### Added
@@ -41,10 +64,136 @@
   icon in Chat's header (on by default). The existing "Chat History…"
   popout window is unchanged for anyone who prefers a separate window.
 
-> Note: entries for `0.7.0`–`0.9.0` (iOS chat/sync parity, iCloud sync,
-> and related fixes) were shipped and tagged in git but never logged
-> here — see `git tag -l -n99` for those releases' descriptions until
-> they're backfilled into this file.
+## [0.9.0-ios-phase1] - 2026-09-11
+
+### Added
+- **iOS Phase 1**: the first real iOS milestone — scaffolded via
+  XcodeGen, code-signed with a real Apple Development certificate,
+  installed and launched on a physical iPhone (confirmed via
+  `xcrun devicectl`). Deliberately doesn't share `AnvilCore` yet —
+  its Requirements/Serving layers are built around `Foundation.Process`
+  (a private Python venv, subprocess servers), unavailable on iOS. This
+  phase's whole job was proving the Xcode/signing/device-install
+  pipeline works end to end, which it now does.
+
+## [0.8.2] - 2026-09-11
+
+### Fixed
+- **A download nearly 3× the size it needed to be**: repos that ship a
+  redundant root-level copy of their weights (alongside the real
+  pipeline subfolders `mflux` actually loads) no longer download that
+  duplicate — confirmed real ~24GB→~16GB fix on `FLUX.2-klein-4B`.
+  `ModelDownloader` skips a root-level weight file only when
+  `model_index.json` confirms a real pipeline exists in the
+  subfolders, never touching anything inside a component subfolder.
+
+## [0.8.1] - 2026-09-11
+
+### Fixed
+- **`package-dmg.sh`**: asks `swift build --show-bin-path` for the
+  release binary's location instead of guessing a path shape, so it
+  stays correct across build-system backends (Xcode's native backend
+  puts it somewhere different than the older `swiftbuild` one did).
+
+## [0.8.0] - 2026-09-11
+
+### Added
+- **HF compatibility filter**: `ModelCompatibility` classifies a
+  Hugging Face search result from its own file list — flags a flat
+  single-file checkpoint with no pipeline structure as incompatible
+  instead of letting it fail later at load time (the exact shape that
+  broke on `FLUX.2-klein-4b-nvfp4`). "Compatible only" filter on by
+  default in Models.
+- **CivitAI search & download**: a source picker in Models switches
+  between Hugging Face and CivitAI, sharing one download queue so the
+  two sources never download simultaneously. CivitAI checkpoints
+  register but can't load yet (no single-file loading path in
+  `mflux`) — the UI says so plainly rather than implying it works.
+
+### Fixed
+- **Downloads disappearing from Models**: switching tabs mid-download
+  and back used to lose the visible progress — `ModelManagerViewModel`
+  was view-local and torn down on navigation, even though the download
+  itself kept running regardless. Moved into `AppState`, shared like
+  `ChatViewModel` already was.
+
+## [0.7.4-real-sync-fixes] - 2026-09-13
+
+### Fixed
+- **Three real sync bugs, root-caused live**: `ChatViewModel` and
+  `AnvilSyncServer` held separate `ChatThreadStore` instances (a reply
+  saved on one side was invisible to the other); every `upsert`
+  re-stamped `updatedAt` to "now" even on pure replication, letting a
+  stale copy win a recency race against genuinely newer content; and
+  LAN sync's merge couldn't tell "never existed on the other device"
+  apart from "existed, then was deleted," so a delete kept getting
+  resurrected a few seconds later. Fixed with a shared store instance,
+  a timestamp-preserving upsert path for every sync/merge write, and
+  real per-store deletion tombstones. 114/114 tests passing.
+
+## [0.7.3-icloud-sync-fixes] - 2026-09-13
+
+### Fixed
+- **Assistant replies lost across relaunch**: `CloudSyncEngine` never
+  persisted `CKSyncEngine`'s own sync state between launches, so a
+  reply that hadn't finished uploading yet was silently dropped for
+  good if the app quit first. Now persists
+  `CKSyncEngine.State.Serialization` and reloads it on every `start()`.
+- **Deletes never left the Mac**: `ChatViewModel.deleteThread` deleted
+  locally but never told `CloudSyncEngine` — iOS's own delete already
+  did; the Mac side was simply missing the call.
+
+## [0.7.2-mac-icloud-working] - 2026-09-13
+
+### Fixed
+- **CloudKit entitlement denial**: a hand-signed `codesign
+  --entitlements` build doesn't get `com.apple.application-identifier`
+  auto-injected the way Xcode's own build system does, so `cloudd`
+  rejected every CloudKit call outright ("Couldn't check iCloud
+  account status" in the app's own UI). Added the entitlement
+  explicitly.
+
+## [0.7.1-mac-icloud-provisioning-fix] - 2026-09-12
+
+### Fixed
+- **Mac app couldn't launch at all** once the iCloud entitlement was
+  added: a Developer-ID-signed app declaring the iCloud/CloudKit
+  entitlement needs a matching embedded provisioning profile for
+  AMFI/launchd to allow it to even spawn. Registered a real macOS App
+  ID and downloaded/embedded its Developer ID provisioning profile.
+
+## [0.7.0-ios-mac-chat-parity] - 2026-09-12
+
+### Added
+- **iOS: a Mac source governs Chat/Profiles/Memory together**: picking
+  a Mac as the active source (`AnvilSyncClient`, talking to the Mac's
+  `AnvilSyncServer`) now switches Chat, Profiles, and Memory together
+  from one place, so all three tabs see the exact same thread/profile/
+  memory state instead of drifting independently.
+
+## [0.7.0] - 2026-09-11
+
+### Added
+- **Real download progress + a real queue**: parses tqdm's own
+  `\r`-updating percentage instead of losing it to line-buffering; a
+  second download started while one is in progress now queues instead
+  of silently doing nothing.
+- **Draw-Things-style image version history**: every generated image
+  belongs to a lineage; regenerating from an already-selected image
+  adds a new version to it instead of overwriting, with a
+  version-history carousel in the detail view.
+- **Prompt to Model tab**: describe an image idea once, get a tailored,
+  editable prompt per registered image model, each with its own
+  Generate button.
+
+## [0.6.7-ios-bonjour-discovery] - 2026-09-12
+
+### Fixed
+- **iOS Mac discovery found nothing**: the blind subnet sweep (254
+  hosts × 20 ports, ~5,000 simultaneous requests) was flooding
+  `URLSession`'s own connection queue. Now finds the Mac via Bonjour
+  (`_device-info._tcp`) first, falling back to a bounded-concurrency
+  sweep only if that finds nothing.
 
 ## [0.6.7] - 2026-09-12
 

@@ -35,6 +35,64 @@ enum ImageServerScript {
     from mflux.models.common.config import ModelConfig
     from mflux.models.flux.variants.txt2img.flux import Flux1
 
+    # mflux ships a genuinely separate pipeline class per model
+    # architecture — FLUX.1, FLUX.2, Krea-2, Z-Image — each with its
+    # own component shapes on disk (only FLUX.1 has a second,
+    # T5 `text_encoder_2`; the others have just one). A real, reported
+    # bug: every registered image model was loaded through `Flux1`
+    # regardless of which of these it actually was, so anything but a
+    # genuine FLUX.1 checkpoint failed with a "No safetensors files
+    # found in .../text_encoder_2" (or similar) error — Flux1's loader
+    # went looking for a component the other families never have.
+    # `detect_model_family`/`build_non_flux1_pipeline` below route each
+    # family to its own class instead; see docs/image-model-loading.md
+    # for the full writeup of why this happened and what these curated
+    # families actually need.
+    FAMILY_CONFIG_FACTORY = {
+        "z-image-turbo": "z_image_turbo",
+        "flux2-klein-4b": "flux2_klein_4b",
+        "flux2-klein-9b": "flux2_klein_9b",
+        "krea-2": "krea2",
+    }
+
+    def detect_model_family(model_path):
+        # Matched against the local folder's own name (Anvil names a
+        # registered model's directory after its source repo id), not
+        # file contents — cheap, and every curated entry's repo id
+        # names its family unambiguously. Falls back to "flux1" (the
+        # existing, unchanged path) for anything that doesn't match one
+        # of the three families that actually need a different loader.
+        name = model_path.name.lower()
+        if "z-image" in name or "z_image" in name:
+            return "z-image-turbo"
+        if "flux2-klein-9b" in name or "flux-2-klein-9b" in name:
+            return "flux2-klein-9b"
+        if "flux2" in name or "flux-2" in name:
+            return "flux2-klein-4b"
+        if "krea" in name:
+            return "krea-2"
+        return "flux1"
+
+    def build_non_flux1_pipeline(family, model_path, quantize):
+        model_config = getattr(ModelConfig, FAMILY_CONFIG_FACTORY[family])()
+        # Each class only needs its own weights actually present in
+        # model_path — passing it directly (rather than resolving a
+        # named alias through mflux's own CLI config-resolution path)
+        # is exactly what mflux's own CLIs do too whenever --model-path
+        # is a local checkpoint, per mflux's own
+        # ConfigResolution.resolve_restricted: model_path given means
+        # "load from here", full stop, no name matching needed.
+        if family == "z-image-turbo":
+            from mflux.models.z_image.variants.z_image import ZImage
+            return ZImage(model_config=model_config, quantize=quantize, model_path=str(model_path))
+        if family in ("flux2-klein-4b", "flux2-klein-9b"):
+            from mflux.models.flux2.variants import Flux2Klein
+            return Flux2Klein(model_config=model_config, quantize=quantize, model_path=str(model_path))
+        if family == "krea-2":
+            from mflux.models.krea2.variants.txt2img.krea2 import Krea2
+            return Krea2(model_config=model_config, quantize=quantize, model_path=str(model_path))
+        raise ValueError(f"Unhandled model family: {family}")
+
     # MLX ties its compute stream to whatever thread first touches it —
     # calling generate_image() from a thread other than the one that
     # loaded the model fails ("There is no Stream(cpu, 0) in current
@@ -63,6 +121,11 @@ enum ImageServerScript {
         base_model = args.base_model
 
         if model_path.is_dir():
+            family = detect_model_family(model_path)
+            if family != "flux1":
+                print(f"Loading '{model_path.name}' as {family} (not FLUX.1)...", file=sys.stderr, flush=True)
+                return build_non_flux1_pipeline(family, model_path, args.quantize)
+
             has_pipeline = (model_path / "vae").is_dir() or (model_path / "model_index.json").is_file()
             if not has_pipeline:
                 # Check for single checkpoint
