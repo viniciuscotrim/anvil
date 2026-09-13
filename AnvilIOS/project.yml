@@ -67,6 +67,8 @@ targets:
           - iCloud.com.viniciuscotrim.anvil
         com.apple.developer.icloud-services:
           - CloudKit
+        keychain-access-groups:
+          - U3H5DHZP65.com.viniciuscotrim.anvil.credentials
     info:
       path: Sources/AnvilIOS/Info.plist
       properties:

@@ -9,9 +9,23 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.16.0-chat-model-profile-picker (Model and Profile, Chosen Right in Chat)
+## Current release: 0.17.0-credential-sync (Hugging Face and CivitAI Keys Sync via iCloud)
 
-Requested/reported live: "você tirou a seleção do modelo pra
+Requested live: "vamos criar os campos onde as Keys do Huggs e do
+Civitai ficam armazenadas e sincronizadas o iCloud assim não preciso
+recadastrar elas depois de feito em um dos dois devices." Both fields
+already existed (Mac's Models tab, iOS's Settings); `HFTokenStore`/
+`CivitAITokenStore` now save them as synced keychain items
+(`kSecAttrSynchronizable`) under a keychain access group shared by
+both targets, so setting one on either device carries it to the
+other via the user's own iCloud Keychain — independent of the app's
+own "iCloud Sync" toggle, since a credential isn't conversation data.
+A pre-existing token on either device migrates forward automatically
+the first time it's read. See "Hugging Face and CivitAI keys sync via
+iCloud" below for what actually made this fail silently until a
+specific entitlement was added.
+
+It follows 0.16.0-chat-model-profile-picker's own fix, requested/reported live: "você tirou a seleção do modelo pra
 conversa" — the previous fix for reading history without a loaded
 model had an unintended side effect: the header's model picker only
 ever listed already-*loaded* models, so once nothing was loaded there
@@ -102,7 +116,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.16.0-chat-model-profile-picker`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.17.0-credential-sync`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1307,6 +1321,68 @@ live throughout, `canSend`/`sendLocal` no longer require `engine
 currently typed/picked before generating. Profile already had its own
 visible, chat-based `profileBar` here (`0.9.x`) — nothing to fix on
 that side.
+
+## Hugging Face and CivitAI keys sync via iCloud
+
+Requested live: "vamos criar os campos onde as Keys do Huggs e do
+Civitai ficam armazenadas e sincronizadas o iCloud assim não preciso
+recadastrar elas depois de feito em um dos dois devices" — the fields
+themselves already existed (Mac's Models tab, iOS's Settings screen,
+both backed by the same cross-platform `HFTokenStore`/
+`CivitAITokenStore`), but each only ever wrote to that one device's own
+local keychain — setting a token on the Mac never showed up on the
+phone, or vice versa.
+
+**Why a plain `kSecAttrSynchronizable` flip wasn't enough.** The
+obvious first fix — add `kSecAttrSynchronizable: true` to the existing
+`SecItemAdd`/`SecItemCopyMatching`/`SecItemDelete` calls — compiles
+fine and looks like it should just work, but confirmed directly against
+a real, properly Developer-ID-signed binary: `SecItemAdd` fails
+outright with `errSecMissingEntitlement` (`-34018`) the moment
+`kSecAttrSynchronizable` is `true`, even for an app that's otherwise
+validly signed with a real Team ID and no sandbox restrictions. Plain,
+non-synced keychain items have no such requirement, which is exactly
+why nobody had hit this before — nothing had ever asked for a synced
+item until now. The fix is a `keychain-access-groups` entitlement
+(the "Keychain Sharing" capability) — confirmed by adding it to a
+throwaway signed test binary and watching the identical `SecItemAdd`
+call start returning `errSecSuccess`.
+
+**Why the two platforms need to agree on one specific group name.**
+Mac and iOS are two different bundle identifiers
+(`com.viniciuscotrim.anvil` vs `.anvil.ios`), so left to their own
+defaults each would get its own separate implicit keychain group —
+both would sync fine via iCloud, just never with *each other*, since
+an iCloud-synced keychain item only ever propagates within the access
+group it was saved under. Fixed by declaring one explicit, shared group
+— `U3H5DHZP65.com.viniciuscotrim.anvil.credentials` — in both targets'
+`keychain-access-groups` entitlement (iOS's added through
+`AnvilIOS/project.yml`'s own `entitlements.properties`, since
+`xcodegen generate` regenerates `AnvilIOS.entitlements` from there on
+every run — editing the checked-in file directly doesn't survive the
+next regeneration) and passing it explicitly as `kSecAttrAccessGroup`
+on every keychain call in both stores, rather than trusting either
+platform's own implicit default.
+
+**Migration.** `load()` now checks, in order: the current shared+synced
+item; the same shared group without the sync flag (a transient shape
+that shouldn't really persist, but cheap to also cover); and finally
+the exact shape a pre-this-feature version of Anvil used — no explicit
+access group, no sync flag at all. Whichever one is found is
+immediately re-saved into the new shared+synced shape via `save()`
+(which also deletes the older copies it replaces), so the fallback
+path only ever runs once per device — a token set months ago on either
+platform keeps working without the user having to re-enter anything,
+and then starts syncing from that point on.
+
+Deliberately **not** gated behind the app's own `isCloudSyncEnabled`
+toggle (`CloudSyncEngine`, threads/profiles/memories/suggestions) —
+a credential isn't conversation data, and tying it to a setting most
+people leave off by default would defeat the entire point. The only
+external requirement is each device's own system-wide iCloud Keychain
+setting being on, which it is by default for most users and is outside
+this app's control either way — the same standard mechanism any other
+app relying on `kSecAttrSynchronizable` depends on.
 
 ## Architecture
 

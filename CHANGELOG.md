@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.17.0-credential-sync] - 2026-09-13
+
+### Added
+- **Hugging Face token and CivitAI API key now sync between Mac and
+  iPhone via iCloud Keychain**: requested live — "vamos criar os
+  campos onde as Keys do Huggs e do Civitai ficam armazenadas e
+  sincronizadas o iCloud assim não preciso recadastrar elas depois de
+  feito em um dos dois devices." Both fields already existed (Mac's
+  Models tab, iOS's Settings screen) but `HFTokenStore`/
+  `CivitAITokenStore` only ever wrote to each device's own local
+  keychain. Both now save as `kSecAttrSynchronizable` items under a
+  keychain access group shared by both targets
+  (`U3H5DHZP65.com.viniciuscotrim.anvil.credentials`, new
+  `keychain-access-groups` entitlement on both platforms) — set once
+  on either device, the other picks it up the moment its own iCloud
+  Keychain syncs, independent of (not gated behind) the app's own
+  "iCloud Sync" toggle, since a credential isn't conversation data. A
+  device with a token saved by an older version of Anvil migrates it
+  forward automatically the first time it's read. Confirmed directly:
+  writing a synced keychain item requires this entitlement at all —
+  without it, the write fails outright (`errSecMissingEntitlement`),
+  which is exactly why this went unnoticed until sync was actually
+  attempted. Requires each device's own system-wide iCloud Keychain
+  setting to be on (default for most users).
+
 ## [0.16.0-chat-model-profile-picker] - 2026-09-13
 
 ### Changed

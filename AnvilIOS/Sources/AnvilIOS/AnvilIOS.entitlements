@@ -12,5 +12,9 @@
 	</array>
 	<key>com.apple.developer.kernel.increased-memory-limit</key>
 	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>U3H5DHZP65.com.viniciuscotrim.anvil.credentials</string>
+	</array>
 </dict>
 </plist>

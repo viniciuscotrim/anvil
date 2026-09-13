@@ -14,5 +14,9 @@
 	</array>
 	<key>com.apple.developer.icloud-container-environment</key>
 	<string>Production</string>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>U3H5DHZP65.com.viniciuscotrim.anvil.credentials</string>
+	</array>
 </dict>
 </plist>
