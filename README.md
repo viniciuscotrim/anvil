@@ -9,10 +9,22 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.19.0-context-shift (Automatic Conversation Compaction)
+## Current release: 0.19.1-ios-hide-thinking (Hide Model Thinking on iOS)
 
-Requested live: a full spec for a Python orchestration pipeline,
-focused on Apple Silicon (MLX), that compacts a conversation's history
+Reported live: "Precisamos colocar no iPhone agora o botão de ocultar
+o Thinking do modelo. Não dá pra conversar como está." Mac's
+`mlx_lm.server`/`llama_cpp.server` already split a reasoning model's
+`<think>…</think>` block into its own field before Anvil ever sees it;
+iOS's on-device engines stream raw, unseparated text, so a thinking
+model's whole chain-of-thought used to land straight in the visible
+chat bubble. New `ReasoningStreamSplitter` (cross-platform, unit
+tested) does that separation client-side, wired into both on-device
+backends; a new toolbar toggle (on by default, matching Mac's own)
+hides it. See "Hiding model thinking on iOS" below.
+
+It follows 0.19.0-context-shift. Requested live: a full spec for a
+Python orchestration pipeline, focused on Apple Silicon (MLX), that
+compacts a conversation's history
 when its context window fills up — a strict "Stop-and-Swap" discipline
 (one heavy model resident at a time, 17 GB max per phase, 24 GB total)
 across four phases: a KV-cache trigger, RAG vectorization of old
@@ -157,7 +169,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.19.0-context-shift`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.19.1-ios-hide-thinking`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1614,6 +1626,55 @@ several real minutes mid-compaction" timing a live, very long
 conversation would eventually hit — the pipeline's own correctness
 under real models and real memory pressure is what's confirmed here,
 not that specific duration.
+
+## Hiding model thinking on iOS
+
+Reported live: "Precisamos colocar no iPhone agora o botão de ocultar
+o Thinking do modelo. Não dá pra conversar como está."
+
+Mac never had this problem because it never had to: `mlx_lm.server`
+and `llama_cpp.server` both parse a reasoning model's own
+`<think>…</think>` convention *server-side*, exposing the result as a
+separate `reasoning` field in their OpenAI-compatible streaming
+response — `ChatClient` just reads that field directly
+(`reasoningDelta`), never touching the raw tag itself, and `ChatView`
+already had a `hideReasoning` toggle to show or hide whatever landed
+there.
+
+iOS's on-device engines have no such server sitting in front of them.
+`NativeChatEngine`'s MLX path streams straight from `mlx-swift-lm`'s
+own `ChatSession`; `GGUFChatBackend` streams straight from
+`LLM.swift`. Neither one knows anything about `<think>` at all — every
+token, thinking included, arrived as plain, unseparated text, so a
+reasoning model's entire chain-of-thought used to land directly in the
+visible chat bubble ahead of (sometimes instead of) the real answer.
+
+New `ReasoningStreamSplitter` (`AnvilCore`, cross-platform on purpose —
+pure string processing, no platform API involved) is the client-side
+equivalent of what the Mac servers already do: an incremental state
+machine tracking `<think>`/`</think>` across however the stream
+happens to chunk it (a tag can arrive split across multiple
+`streamSend` callbacks — a model deciding to think again mid-answer
+produces more than one `<think>…</think>` pair — a generation
+cancelled mid-thought leaves an unclosed tag that still needs to
+surface as *something*, not silently vanish). Eight unit tests cover
+exactly those cases directly, without needing a real model running at
+all.
+
+Wired into `NativeChatEngine.streamSend` for both backends (yielding
+only the answer half to the visible stream, accumulating reasoning
+into a new read-once `lastReasoning`/`consumeLastReasoning()` — the
+same pattern `lastTokensPerSecond`/`consumeLastTokensPerSecond()`
+already used) and into `respondOnce` too, so the memory digest's own
+JSON-array prompts aren't corrupted by a stray thinking block mixed
+into what's supposed to be pure JSON.
+
+A new `ChatThreadsViewModel.hideReasoning` (on by default, matching
+Mac's own default) plus a brain-icon toggle in Chat's own toolbar show
+or hide it — `ChatMessage.reasoning` is always populated regardless of
+the toggle (both the local engines, via the splitter above, and the
+remote-Mac path, which already worked correctly), so switching it back
+on later still has something to reveal.
 
 ## Architecture
 

@@ -168,6 +168,17 @@ struct NativeChatView: View {
                             Image(systemName: threads.isTemporaryModeActive ? "eyeglasses" : "eyeglasses.slash")
                         }
                         .disabled(isGenerating)
+                        // Reported live: "Precisamos colocar no iPhone
+                        // agora o botão de ocultar o Thinking do
+                        // modelo. Não dá pra conversar como está" — on
+                        // by default (see `ChatThreadsViewModel
+                        // .hideReasoning`'s own doc comment), so this
+                        // reads as "show" when thinking is currently
+                        // hidden, the state most people leave it in.
+                        Button { threads.hideReasoning.toggle() } label: {
+                            Image(systemName: threads.hideReasoning ? "brain" : "brain.head.profile")
+                        }
+                        .help(threads.hideReasoning ? "Show model thinking" : "Hide model thinking")
                         exportMenu
                         Button { isSettingsPresented = true } label: { Image(systemName: "slider.horizontal.3") }
                         Button { newChat() } label: { Image(systemName: "square.and.pencil") }
@@ -623,7 +634,21 @@ struct NativeChatView: View {
                             ShareLink(item: URL(fileURLWithPath: path))
                         }
                 }
-                if !message.content.isEmpty {
+                if !threads.hideReasoning, let reasoning = message.reasoning, !reasoning.isEmpty {
+                    Text(reasoning)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .padding(8)
+                        .background(Color.gray.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                if message.content.isEmpty && message.reasoning != nil && !isGenerating {
+                    Text("_(cut off before an answer — try again, or raise Max Tokens)_")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .italic()
+                } else if !message.content.isEmpty {
                     Text(message.content)
                         .textSelection(.enabled)
                 }
@@ -782,6 +807,13 @@ struct NativeChatView: View {
                     if let tokensPerSecond = engine.consumeLastTokensPerSecond() {
                         threads.currentThread.messages[index].tokensPerSecond = tokensPerSecond
                         lastTokensPerSecond = tokensPerSecond
+                    }
+                    // Set even when `threads.hideReasoning` is on —
+                    // stored regardless of whether it's currently
+                    // shown, same as the Mac app, so toggling it back
+                    // on later still has something to reveal.
+                    if let reasoning = engine.consumeLastReasoning() {
+                        threads.currentThread.messages[index].reasoning = reasoning
                     }
                 }
             } catch {

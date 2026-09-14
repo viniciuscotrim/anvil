@@ -73,6 +73,17 @@ final class NativeChatEngine: ObservableObject {
     /// number the Mac app's header shows via `ChatMessage.tokensPerSecond`.
     /// Read-once via `consumeLastTokensPerSecond()`.
     @Published private(set) var lastTokensPerSecond: Double?
+    /// Set once `streamSend`'s stream finishes, holding whatever
+    /// `ReasoningStreamSplitter` pulled out of a `<think>…</think>`
+    /// block along the way — neither on-device backend
+    /// (`mlx-swift-lm`'s `ChatSession` nor `LLM.swift`) separates
+    /// reasoning from the answer itself the way the Mac app's HTTP
+    /// servers do, so `streamSend`/`respondOnce` do that splitting
+    /// client-side and only ever yield/return the answer half.
+    /// Read-once via `consumeLastReasoning()`. Reported live: "Não dá
+    /// pra conversar como está" — a reasoning model's whole thinking
+    /// block used to land straight in the visible reply.
+    @Published private(set) var lastReasoning: String?
 
     // Qualified explicitly: the vendored StableDiffusion sources
     // (`NativeImageEngine`'s `StableDiffusion/` directory) declare their
@@ -270,12 +281,31 @@ final class NativeChatEngine: ObservableObject {
             let (backendStream, tokensPerSecond) = ggufBackend.streamSend(text)
             let (stream, continuation) = AsyncThrowingStream<String, Error>.makeStream()
             let forwardingTask = Task { [weak self] in
+                var splitter = ReasoningStreamSplitter()
+                var reasoningSoFar = ""
                 do {
                     for try await chunk in backendStream {
-                        if case .terminated = continuation.yield(chunk) { break }
+                        for delta in splitter.process(chunk) {
+                            switch delta {
+                            case .content(let text):
+                                if case .terminated = continuation.yield(text) { break }
+                            case .reasoning(let text):
+                                reasoningSoFar += text
+                            }
+                        }
+                    }
+                    for delta in splitter.finish() {
+                        if case .content(let text) = delta {
+                            _ = continuation.yield(text)
+                        } else if case .reasoning(let text) = delta {
+                            reasoningSoFar += text
+                        }
                     }
                     let measured = tokensPerSecond()
-                    Task { @MainActor in self?.lastTokensPerSecond = measured }
+                    Task { @MainActor in
+                        self?.lastTokensPerSecond = measured
+                        self?.lastReasoning = reasoningSoFar.nilIfEmptyTrimmed
+                    }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -301,11 +331,20 @@ final class NativeChatEngine: ObservableObject {
         let detailStream = session.streamDetails(to: text)
         let (stream, continuation) = AsyncThrowingStream<String, Error>.makeStream()
         let forwardingTask = Task { [weak self] in
+            var splitter = ReasoningStreamSplitter()
+            var reasoningSoFar = ""
             do {
                 for try await item in detailStream {
                     switch item {
                     case .chunk(let text):
-                        if case .terminated = continuation.yield(text) { break }
+                        for delta in splitter.process(text) {
+                            switch delta {
+                            case .content(let text):
+                                if case .terminated = continuation.yield(text) { break }
+                            case .reasoning(let text):
+                                reasoningSoFar += text
+                            }
+                        }
                     case .info(let info):
                         let tokensPerSecond = info.tokensPerSecond
                         Task { @MainActor in self?.lastTokensPerSecond = tokensPerSecond }
@@ -313,6 +352,14 @@ final class NativeChatEngine: ObservableObject {
                         break
                     }
                 }
+                for delta in splitter.finish() {
+                    if case .content(let text) = delta {
+                        _ = continuation.yield(text)
+                    } else if case .reasoning(let text) = delta {
+                        reasoningSoFar += text
+                    }
+                }
+                Task { @MainActor in self?.lastReasoning = reasoningSoFar.nilIfEmptyTrimmed }
                 continuation.finish()
             } catch {
                 continuation.finish(throwing: error)
@@ -328,6 +375,14 @@ final class NativeChatEngine: ObservableObject {
     func consumeLastTokensPerSecond() -> Double? {
         defer { lastTokensPerSecond = nil }
         return lastTokensPerSecond
+    }
+
+    /// Consumes whatever `streamSend` pulled out of a `<think>…</think>`
+    /// block during the last reply — read-once, mirroring
+    /// `consumeLastTokensPerSecond`.
+    func consumeLastReasoning() -> String? {
+        defer { lastReasoning = nil }
+        return lastReasoning
     }
 
     /// Maps `settings` onto `ChatSession.generateParameters`, applied
@@ -447,7 +502,19 @@ final class NativeChatEngine: ObservableObject {
         if let maxTokens {
             session.generateParameters = GenerateParameters(maxTokens: maxTokens)
         }
-        return try await session.respond(to: prompt)
+        let raw = try await session.respond(to: prompt)
+        // Strips a `<think>…</think>` block the same way `streamSend`
+        // does for a live chat reply — a caller here (the memory
+        // digest's own JSON-array prompt, notably) expects the actual
+        // answer, not a reasoning model's thinking mixed in ahead of
+        // it.
+        var splitter = ReasoningStreamSplitter()
+        let deltas = splitter.process(raw) + splitter.finish()
+        let content = deltas.compactMap { delta -> String? in
+            if case .content(let text) = delta { return text }
+            return nil
+        }.joined()
+        return content.isEmpty ? raw : content
     }
 
     /// Converts a persisted thread's messages into the wire format
@@ -467,6 +534,13 @@ final class NativeChatEngine: ObservableObject {
             case .system, .tool: nil
             }
         }
+    }
+}
+
+private extension String {
+    var nilIfEmptyTrimmed: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

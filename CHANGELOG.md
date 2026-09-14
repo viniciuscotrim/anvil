@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.19.1-ios-hide-thinking] - 2026-09-14
+
+### Fixed
+- **iOS Chat was unusable with a reasoning model**: reported live —
+  "Precisamos colocar no iPhone agora o botão de ocultar o Thinking do
+  modelo. Não dá pra conversar como está." On-device inference
+  (`NativeChatEngine`'s MLX path, and `GGUFChatBackend`'s GGUF path)
+  streams raw, unseparated text — unlike Mac's `mlx_lm.server`/
+  `llama_cpp.server`, which split a reasoning model's `<think>…
+  </think>` block into its own `reasoning` field before Anvil ever
+  sees it, nothing on iOS was pulling that block out of the visible
+  reply, so a thinking model's entire chain-of-thought landed straight
+  in the chat bubble ahead of (or instead of) the actual answer.
+  - New `ReasoningStreamSplitter` (`AnvilCore`, cross-platform, 8 unit
+    tests covering split-across-chunks, no-tag, unclosed-tag, and
+    multiple-blocks cases) incrementally separates `<think>…</think>`
+    from a raw token stream — the client-side counterpart to what
+    Mac's servers already do. Wired into `NativeChatEngine.streamSend`
+    (both backends) and `respondOnce` (so the memory digest's own
+    JSON-array prompts aren't corrupted by a stray thinking block
+    either).
+  - New `ChatThreadsViewModel.hideReasoning` (on by default, mirroring
+    Mac's own `ChatViewModel.hideReasoning`) plus a toolbar button in
+    Chat's header (a brain icon) to toggle it — reasoning is always
+    captured into `ChatMessage.reasoning` regardless, so toggling it
+    back on later still has something to show, on both the local and
+    remote-Mac chat paths.
+
 ## [0.19.0-context-shift] - 2026-09-13
 
 ### Added

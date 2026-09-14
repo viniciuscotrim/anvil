@@ -73,6 +73,17 @@ final class ChatThreadsViewModel {
     /// Memory-suggestion errors only — a real failure worth surfacing
     /// loudly, unlike a Mac simply not having sync turned on.
     var errorMessage: String?
+    /// On by default, mirroring the Mac app's own `ChatViewModel
+    /// .hideReasoning` — a reasoning model's `<think>…</think>` block
+    /// is always captured into `ChatMessage.reasoning` regardless
+    /// (`NativeChatEngine.streamSend`/`RemoteChatEngine` both split it
+    /// out already), this only controls whether `NativeChatView` shows
+    /// it. Reported live: "Precisamos colocar no iPhone agora o botão
+    /// de ocultar o Thinking do modelo. Não dá pra conversar como
+    /// está" — the whole point of turning this on by default, the same
+    /// as Mac, since an unfiltered thinking block is what actually
+    /// made the phone unusable for chat before this existed at all.
+    var hideReasoning = true
     /// While on, the active conversation is never saved to disk — same
     /// restriction and behavior as the Mac app's own temporary mode:
     /// blocks `newThread`/`selectThread` (turn it off first) and every
