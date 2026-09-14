@@ -43,28 +43,17 @@ struct MemoryView: View {
                     .disabled(chat.isSuggestingMemories || chat.messages.isEmpty)
                 }
 
-                HStack {
-                    Text("Model for suggestions")
-                    Spacer()
-                    // Every registered text model, not just a loaded
-                    // one — requested live: picking one here doesn't
-                    // load it yet, only pressing "Suggest" does (and,
-                    // if there isn't room, asks before unloading
-                    // anything else). Matches Mac's own `ModelManager`
-                    // list ordering (by family) so the picker isn't a
-                    // flat unsorted dump of every quant/size variant.
-                    Picker("", selection: Binding(
-                        get: { chat.memorySuggestionModelID },
-                        set: { chat.setMemorySuggestionModelID($0) }
-                    )) {
-                        Text("Current chat model").tag(Optional<String>.none)
-                        ForEach(chat.availableTextModels) { model in
-                            Text(model.displayName).tag(Optional(model.id))
-                        }
-                    }
-                    .labelsHidden()
-                    .disabled(chat.isSuggestingMemories)
-                }
+                // Requested live: "ele tem que rodar o novo workflow de
+                // memoria que temos" — this now always runs the same
+                // RAG + Phi-4 summarization pipeline Context Shift's
+                // automatic compaction uses (its own three fixed
+                // models, not whichever chat model happens to be
+                // selected), so there's no longer a model to pick here.
+                Text("Uses the same memory pipeline as automatic Context Shift compaction "
+                    + "(nomic-embed-text, CodeRankEmbed, Phi-4-mini-instruct) — those three need to be "
+                    + "registered and downloaded first.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
 
                 if let errorMessage = chat.errorMessage {
                     HStack(spacing: 6) {

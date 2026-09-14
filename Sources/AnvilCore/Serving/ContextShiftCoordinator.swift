@@ -233,6 +233,125 @@ public actor ContextShiftCoordinator {
         launcherURL = nil
     }
 
+    /// Runs the same RAG-indexing + Phi-4 summarization pipeline a
+    /// triggered shift uses (`run_compaction`) — but as a one-shot
+    /// subprocess against an explicit thread snapshot, entirely
+    /// separate from the persistent `--watch` process above, and
+    /// without the automatic trigger's Phase 4 (this never replaces
+    /// the caller's actual thread — the caller decides what to do with
+    /// `ShiftResult.summary`). For on-demand "Suggest from Thread",
+    /// not the automatic 90%-of-context trigger. Requested live: "Ao
+    /// clicar no botão Suggest From Thread ... ele tem que rodar o
+    /// novo workflow de memoria que temos."
+    ///
+    /// Never touches `statusFilePath`, the persistent watcher, or
+    /// `status`/`onStatusChanged` at all — mutating those here would
+    /// incorrectly show the automatic-compaction banner for a manual
+    /// digest that isn't pausing or unloading anything through that
+    /// mechanism. The caller is responsible for making sure nothing
+    /// else heavy is resident first: this alone can need up to 17GB
+    /// per phase, the same ceiling `run_triggered_shift` enforces on
+    /// the Python side regardless of which mode invoked it.
+    public func runManualSummarization(
+        systemPrompt: String?,
+        messages: [ChatMessage],
+        nomicModelPath: String,
+        coderankModelPath: String,
+        phi4ModelPath: String,
+        requirements: RequirementsManager
+    ) async throws -> ShiftResult {
+        guard await requirements.ensure(ContextShiftRuntimeDependency()) else {
+            let reason = await requirements.lastError
+            throw ServingError.serverFailedToStart(reason ?? "Could not set up conversation compaction")
+        }
+
+        let scriptURL = try ContextShiftScript.ensureWrittenToDisk()
+        let threadPath = RuntimePaths.applicationSupportDirectory
+            .appendingPathComponent("context_shift_manual_thread.json")
+        let export = ThreadExport(systemPrompt: systemPrompt, messages: messages)
+        let threadData = try JSONEncoder.anvil.encode(export)
+        try threadData.write(to: threadPath, options: .atomic)
+
+        let arguments = [
+            scriptURL.path,
+            "--run-once", threadPath.path,
+            "--nomic-model", nomicModelPath,
+            "--coderank-model", coderankModelPath,
+            "--phi4-model", phi4ModelPath,
+            "--vector-store", vectorStorePath.path,
+        ]
+
+        let launcher = await NamedLauncher.shared.makeLauncher(displayName: "Anvil - Memory Suggestions")
+
+        // A plain `Process` + readability handler + termination handler
+        // (not `async`/`await` all the way down — `Process` predates
+        // structured concurrency) bridged into one `async throws` call
+        // via a continuation, same shape `LLMServer`/`ImageServer` use
+        // for their own one-shot subprocess calls.
+        return try await withCheckedThrowingContinuation { continuation in
+            let proc = Process()
+            proc.executableURL = launcher
+            proc.arguments = arguments
+            let stdoutPipe = Pipe()
+            proc.standardOutput = stdoutPipe
+            proc.standardError = stdoutPipe
+
+            final class OutputBox: @unchecked Sendable {
+                var buffer = Data()
+                var resumed = false
+            }
+            let box = OutputBox()
+
+            stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { return }
+                box.buffer.append(chunk)
+            }
+
+            proc.terminationHandler = { _ in
+                stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                Task { await NamedLauncher.shared.removeLauncher(at: launcher) }
+                guard !box.resumed else { return }
+                box.resumed = true
+
+                for lineData in box.buffer.split(separator: 0x0A) {
+                    guard let envelope = try? JSONDecoder.anvil.decode(EventEnvelope.self, from: Data(lineData)) else { continue }
+                    switch envelope.event {
+                    case "context_shift_ready":
+                        guard let payload = try? JSONDecoder.anvil.decode(ContextShiftReadyEvent.self, from: Data(lineData)) else { continue }
+                        continuation.resume(returning: ShiftResult(
+                            systemPrompt: payload.systemPrompt,
+                            summary: payload.summary,
+                            intactMessages: payload.intactMessages,
+                            textChunksIndexed: payload.textChunksIndexed,
+                            codeChunksIndexed: payload.codeChunksIndexed
+                        ))
+                        return
+                    case "context_shift_failed":
+                        let payload = try? JSONDecoder.anvil.decode(ShiftFailedEvent.self, from: Data(lineData))
+                        continuation.resume(throwing: ServingError.serverFailedToStart(payload?.reason ?? "unknown"))
+                        return
+                    default:
+                        continue
+                    }
+                }
+                continuation.resume(throwing: ServingError.serverFailedToStart("The memory pipeline exited without a result."))
+            }
+
+            do {
+                try proc.run()
+                ProcessWatchdog.attach(toPID: proc.processIdentifier)
+            } catch {
+                stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                Task { await NamedLauncher.shared.removeLauncher(at: launcher) }
+                if !box.resumed {
+                    box.resumed = true
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     // MARK: - Event parsing
 
     private func consume(_ data: Data) {

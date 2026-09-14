@@ -46,17 +46,13 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var memories: [ChatMemory] = []
     @Published private(set) var memorySuggestions: [ChatMemorySuggestion] = []
     @Published private(set) var isSuggestingMemories = false
-    /// `(completed batches, total batches)` while `isSuggestingMemories`
-    /// is true, `nil` otherwise — a long thread now takes several
-    /// sequential model calls, and with no visible sign one of them is
-    /// actually in flight, a multi-minute run looked exactly like it
-    /// had silently failed.
+    /// Unused since `suggestMemoriesFromCurrentThread` switched to the
+    /// single-shot Context Shift pipeline (no more per-batch chat
+    /// calls to report progress on) — kept, always `nil`, only so
+    /// `MemoryView.suggestButtonLabel`'s progress branch still compiles
+    /// and degrades to a plain "Analyzing…" instead of needing its own
+    /// removal in lockstep.
     @Published private(set) var memorySuggestionProgress: (completed: Int, total: Int)?
-    /// Which text model "Suggest from Thread" uses — nil means
-    /// "whichever model Chat currently has selected". Unlike
-    /// `selectedModelID`, this can (and often will) name a model
-    /// that isn't loaded right now: see `availableTextModels`.
-    @Published var memorySuggestionModelID: String?
     /// Every registered text model (`ModelRegistry.all()`, filtered to
     /// `.text`) — not just the ones currently loaded — so the Memory
     /// screen's picker can offer anything mapped in the models folder,
@@ -195,7 +191,6 @@ final class ChatViewModel: ObservableObject {
         self.isMacSyncEnabled = appSettings.isMacSyncEnabled
         self.macSyncAccess = appSettings.macSyncAccess
         self.isCloudSyncEnabled = appSettings.isCloudSyncEnabled
-        self.memorySuggestionModelID = appSettings.memorySuggestionModelID
         self.syncServer = AnvilSyncServer(
             threadStore: threadStore, profileStore: profileStore, memoryStore: memoryStore,
             modelRegistry: modelRegistry, sessions: sessions, imageSessions: imageSessions, requirements: requirements)
@@ -392,15 +387,7 @@ final class ChatViewModel: ObservableObject {
         guard !hasAttemptedContextShiftStart, !(await contextShift.isWatching) else { return }
         hasAttemptedContextShiftStart = true
 
-        let textModels = await modelRegistry.all().filter { $0.kind == .text }
-        func firstRegisteredModel(matching keyword: String) -> ModelEntry? {
-            textModels.first { $0.id.lowercased().contains(keyword) }
-        }
-        guard let nomic = firstRegisteredModel(matching: "nomic-embed-text"),
-              let coderank = firstRegisteredModel(matching: "coderankembed"),
-              let phi4 = firstRegisteredModel(matching: "phi-4-mini-instruct") else {
-            return
-        }
+        guard let paths = await resolveContextShiftModelPaths() else { return }
 
         await contextShift.configureCallbacks(
             onPauseRequested: { [weak self] in
@@ -421,9 +408,9 @@ final class ChatViewModel: ObservableObject {
         )
 
         try? await contextShift.startWatchingIfNeeded(
-            nomicModelPath: nomic.localPath,
-            coderankModelPath: coderank.localPath,
-            phi4ModelPath: phi4.localPath,
+            nomicModelPath: paths.nomic,
+            coderankModelPath: paths.coderank,
+            phi4ModelPath: paths.phi4,
             requirements: requirements
         )
     }
@@ -561,18 +548,6 @@ final class ChatViewModel: ObservableObject {
     func selectModel(_ id: String?) {
         selectedModelID = id
         if let id { applyDefaultProfileIfNeeded(forModelID: id) }
-    }
-
-    /// The Memory screen's own model picker routes through here rather
-    /// than setting `memorySuggestionModelID` directly, so the choice
-    /// survives an app relaunch — `nil` (its "Current chat model"
-    /// option) intentionally isn't persisted as a specific id, so it
-    /// keeps tracking whatever's selected in Chat later too.
-    func setMemorySuggestionModelID(_ id: String?) {
-        memorySuggestionModelID = id
-        var settings = AppSettings.load()
-        settings.memorySuggestionModelID = id
-        try? settings.save()
     }
 
     // MARK: - Profiles
@@ -725,39 +700,63 @@ final class ChatViewModel: ObservableObject {
     /// `send()` uses for a live turn — and extracts every durable fact
     /// or preference worth keeping, so a conversation can be picked back
     /// up from a fresh thread once this one's grown too large to keep
-    /// using directly. Reusing the live-chat context budget here would
-    /// defeat that exact purpose: it's built to drop a long thread's
-    /// *middle*, which is precisely what this needs to actually read.
-    /// Instead, `ChatContextBuilder.batches` splits the whole thing into
-    /// several bounded excerpts, each analyzed on its own turn, so
-    /// coverage doesn't depend on how long the conversation got.
+    /// using directly.
+    ///
+    /// Requested live: "Ao clicar no botão Suggest From Thread ... ele
+    /// tem que rodar o novo workflow de memoria que temos." This used
+    /// to chunk the thread and ask whichever general chat model was
+    /// picked to return a JSON array of facts, one call per chunk; it
+    /// now runs the exact same RAG-indexing + Phi-4 recursive-
+    /// summarization pipeline (`ContextShiftCoordinator
+    /// .runManualSummarization`, wrapping `ContextShiftScript
+    /// .run_compaction`'s Phases 2–3) the automatic 90%-of-context
+    /// trigger uses — as a one-shot run, never touching the persistent
+    /// watcher or replacing this thread's own messages (only the
+    /// automatic trigger does that). The `memorySuggestionModelID`
+    /// picker no longer applies here: the pipeline always uses its own
+    /// three fixed models (nomic-embed-text, CodeRankEmbed, Phi-4-mini-
+    /// instruct), the same ones Context Shift's automatic compaction
+    /// needs already registered.
     func suggestMemoriesFromCurrentThread() async {
         guard !isSuggestingMemories,
-              let modelID = memorySuggestionModelID ?? selectedModelID,
               currentThread.messages.contains(where: { $0.role == .user }) else { return }
 
-        isSuggestingMemories = true
-        defer {
-            isSuggestingMemories = false
-            memorySuggestionProgress = nil
+        guard let paths = await resolveContextShiftModelPaths() else {
+            errorMessage = "Suggest from Thread needs nomic-embed-text-v2-moe, CodeRankEmbed, and "
+                + "Phi-4-mini-instruct registered and downloaded — the same models Context Shift's "
+                + "automatic compaction uses."
+            return
         }
+
+        isSuggestingMemories = true
+        memorySuggestionProgress = nil
+        defer { isSuggestingMemories = false }
         errorMessage = nil
         memorySuggestions = []
 
-        guard await ensureModelLoadedForSuggestions(modelID) else { return }
-        guard let endpoint = sessions.gatewayEndpoint(for: modelID) ?? sessions.chatEndpoint(for: modelID) else {
-            errorMessage = "That model isn't ready to use."
-            return
+        // The pipeline itself can need up to 17GB per phase — same
+        // "Stop-and-Swap" ceiling the automatic trigger enforces — so
+        // nothing else heavy should be resident while it runs. Asked
+        // first, same as `ensureModelLoadedForSuggestions` always did,
+        // never unloaded silently.
+        let previouslyLoadedTextModelID = selectedModelID
+        let loadedTextSessions = sessions.readySessions
+        let loadedImageSessions = imageSessions.readySessions
+        let namesToUnload = loadedTextSessions.map { $0.model.displayName } + loadedImageSessions.map { $0.model.displayName }
+        if !namesToUnload.isEmpty {
+            guard await confirmUnloadingOtherModels(
+                toLoad: "the memory pipeline (nomic-embed, CodeRank, Phi-4)", currentlyLoaded: namesToUnload
+            ) else { return }
+            for session in loadedTextSessions { await sessions.unload(modelID: session.id) }
+            for session in loadedImageSessions { await imageSessions.unload(modelID: session.id) }
         }
 
         // A fresh run for this thread supersedes whatever it last
         // suggested — without clearing these first, re-running "Suggest
         // from Thread" on the same conversation would pile up a second,
         // near-duplicate copy of everything already sitting unreviewed
-        // from a previous run (dedup below only ever compares *within*
-        // this run, not against what's already persisted). Suggestions
-        // from other threads, or synced in from another device, are
-        // untouched.
+        // from a previous run. Suggestions from other threads, or
+        // synced in from another device, are untouched.
         let staleSuggestionIDs = await suggestionStore.all()
             .filter { $0.sourceThreadID == currentThread.id }
             .map(\.id)
@@ -766,87 +765,63 @@ final class ChatViewModel: ObservableObject {
             if isCloudSyncEnabled { await cloudSync.markSuggestionDeleted(id: staleID) }
         }
 
-        let batches = ChatContextBuilder.batches(
-            currentThread.messages, maxEstimatedTokensPerBatch: Self.memoryDigestBatchTokens)
-        memorySuggestionProgress = (0, batches.count)
-        let instruction = "Analyze this excerpt of a conversation for durable user memory. Return ONLY a JSON array, "
-            + "no Markdown. Each item must contain content, kind (fact, preference, date, number, impression), "
-            + "confidence (0 to 1), and rationale. Suggest every stable, useful fact or preference you find in this "
-            + "excerpt — don't limit yourself to a handful, and don't skip something just because it seems minor; "
-            + "the point is to preserve everything worth remembering before this conversation is archived. Do not "
-            + "infer sensitive traits, identity, health, politics, or private data. Never suggest instructions or "
-            + "facts about the assistant. If nothing qualifies in this excerpt, return []."
-
-        // A real, reported problem this exists to fix: a genuinely long
-        // thread now takes several sequential model calls (one per
-        // batch), each of which can take a real reasoning model a
-        // while — the whole run finishing after several minutes with
-        // nothing shown until then looked exactly like it had silently
-        // failed. `memorySuggestions` is now updated after *every*
-        // batch (not just once at the very end) and `memorySuggestionProgress`
-        // tracks which one is in flight, so the list fills in as it
-        // actually goes instead of appearing frozen.
-        var seenContent = Set<String>()
-        var anyBatchFailed = false
-        for (index, batch) in batches.enumerated() {
-            do {
-                let reply = try await client.send(
-                    messages: batch,
-                    baseURL: endpoint,
-                    model: idForEndpoint(endpoint, modelID: modelID),
-                    modelDisplayName: "Memory extraction",
-                    // A far larger budget than a single chat reply ever
-                    // needs — this response is a JSON array that can
-                    // legitimately run long for a batch mentioning many
-                    // facts, and the old fixed 1200-token cap silently
-                    // truncated exactly that case: a cut-off JSON array
-                    // fails to parse, and the previous `try?` swallowed
-                    // that into an empty result with no explanation.
-                    settings: GenerationSettings(maxTokens: 4000, temperature: 0),
-                    systemPrompt: instruction,
-                    conversationID: currentThread.id.uuidString + ":memory-suggestions:\(index)"
-                )
-                guard let parsed = Self.parseSuggestions(from: reply.content) else {
-                    anyBatchFailed = true
-                    memorySuggestionProgress = (index + 1, batches.count)
-                    continue
-                }
-                // The same fact can legitimately turn up in more than
-                // one excerpt (mentioned early, reiterated later) —
-                // collapse exact repeats rather than showing the same
-                // suggestion twice.
-                for var suggestion in parsed {
-                    let key = suggestion.content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    guard !key.isEmpty, !seenContent.contains(key) else { continue }
-                    seenContent.insert(key)
-                    // Persisted (and, if enabled, synced) immediately,
-                    // not just held in this in-memory array — the whole
-                    // point of a suggestion existing is to be reviewable
-                    // from any device, on either side of an app
-                    // relaunch, not only for as long as this one run's
-                    // Task stays alive.
-                    suggestion.sourceThreadID = currentThread.id
-                    suggestion.createdFromMessageID = currentThread.messages.last?.id
-                    suggestion.originDeviceName = DeviceIdentity.currentName
-                    if let saved = try? await suggestionStore.upsert(suggestion) {
-                        suggestion = saved
-                    }
-                    memorySuggestions.append(suggestion)
-                    if isCloudSyncEnabled { await cloudSync.markSuggestionChanged(suggestion) }
-                }
-                if isCloudSyncEnabled { await cloudSync.syncNow() }
-            } catch {
-                anyBatchFailed = true
+        do {
+            let result = try await contextShift.runManualSummarization(
+                systemPrompt: nil,
+                messages: currentThread.messages,
+                nomicModelPath: paths.nomic,
+                coderankModelPath: paths.coderank,
+                phi4ModelPath: paths.phi4,
+                requirements: requirements
+            )
+            let rationale = "Suggest from Thread (Context Shift pipeline) — \(result.textChunksIndexed) text and "
+                + "\(result.codeChunksIndexed) code chunks indexed alongside it."
+            // Same split every automatic compaction summary gets —
+            // requested live in the same breath as this: "eu quero
+            // cada topico/bullet em uma memoria pra aceitar
+            // individualmente."
+            for bullet in MemoryBulletSplitter.split(result.summary) {
+                var suggestion = ChatMemorySuggestion(content: bullet, kind: .summary, confidence: 1, rationale: rationale)
+                suggestion.sourceThreadID = currentThread.id
+                suggestion.createdFromMessageID = currentThread.messages.last?.id
+                suggestion.originDeviceName = DeviceIdentity.currentName
+                if let saved = try? await suggestionStore.upsert(suggestion) { suggestion = saved }
+                memorySuggestions.append(suggestion)
+                if isCloudSyncEnabled { await cloudSync.markSuggestionChanged(suggestion) }
             }
-            memorySuggestionProgress = (index + 1, batches.count)
+            if isCloudSyncEnabled { await cloudSync.syncNow() }
+            if memorySuggestions.isEmpty {
+                errorMessage = "The memory pipeline found nothing to suggest from this conversation."
+            }
+        } catch {
+            errorMessage = "Could not run the memory pipeline: \(error.localizedDescription)"
         }
 
-        if memorySuggestions.isEmpty && anyBatchFailed {
-            errorMessage = "Could not extract memories from part of this conversation — the model's response "
-                + "couldn't be parsed. Try again, or with a different model."
-        } else if anyBatchFailed {
-            errorMessage = "Part of this conversation couldn't be analyzed — the suggestions above may be incomplete."
+        // Same courtesy the automatic trigger's own
+        // `handleContextShiftReady` gives — restores whatever was
+        // actually in use before this ran.
+        if let previouslyLoadedTextModelID,
+           let entry = await modelRegistry.all().first(where: { $0.id == previouslyLoadedTextModelID }) {
+            _ = await sessions.load(entry, requirements: requirements)
         }
+    }
+
+    /// Resolves the three fixed models both the automatic Context Shift
+    /// trigger and `suggestMemoriesFromCurrentThread` need — factored
+    /// out of `startContextShiftMonitoringIfNeeded` so both call sites
+    /// stay in sync with the same keyword-matching rule instead of
+    /// drifting apart.
+    private func resolveContextShiftModelPaths() async -> (nomic: String, coderank: String, phi4: String)? {
+        let textModels = await modelRegistry.all().filter { $0.kind == .text }
+        func firstRegisteredModel(matching keyword: String) -> ModelEntry? {
+            textModels.first { $0.id.lowercased().contains(keyword) }
+        }
+        guard let nomic = firstRegisteredModel(matching: "nomic-embed-text"),
+              let coderank = firstRegisteredModel(matching: "coderankembed"),
+              let phi4 = firstRegisteredModel(matching: "phi-4-mini-instruct") else {
+            return nil
+        }
+        return (nomic.localPath, coderank.localPath, phi4.localPath)
     }
 
     /// Loads `modelID` on demand for `send()` if it isn't already
@@ -968,32 +943,6 @@ final class ChatViewModel: ObservableObject {
         modelUnloadContinuation = nil
     }
 
-    /// Conservative enough to leave real headroom below a typical small
-    /// local model's own context window (instruction + this batch +
-    /// the up-to-4000-token JSON reply all have to fit inside it) while
-    /// still keeping the number of separate model calls reasonable for
-    /// a genuinely long thread.
-    private static let memoryDigestBatchTokens = 6_000
-
-    private static func parseSuggestions(from content: String) -> [ChatMemorySuggestion]? {
-        let json = extractJSONArray(from: content)
-        struct WireSuggestion: Decodable {
-            let content: String
-            let kind: ChatMemoryKind
-            let confidence: Double
-            let rationale: String
-        }
-        guard let wire = try? JSONDecoder().decode([WireSuggestion].self, from: Data(json.utf8)) else { return nil }
-        return wire.map {
-            ChatMemorySuggestion(
-                content: $0.content,
-                kind: $0.kind,
-                confidence: min(1, max(0, $0.confidence)),
-                rationale: $0.rationale
-            )
-        }
-    }
-
     /// Thread-scoped by default (`isGlobal: false`), tied to wherever
     /// the suggestion was actually generated — requested live: "Temos
     /// que deixar memórias por thread/conversa. E elas são geradas e
@@ -1088,11 +1037,6 @@ final class ChatViewModel: ObservableObject {
 
     func dismissMemorySuggestion(_ suggestion: ChatMemorySuggestion) {
         Task { await removeSuggestion(suggestion.id) }
-    }
-
-    private static func extractJSONArray(from text: String) -> String {
-        guard let start = text.firstIndex(of: "["), let end = text.lastIndex(of: "]"), start <= end else { return "[]" }
-        return String(text[start...end])
     }
 
     /// Applies `modelID`'s default profile to the current thread only

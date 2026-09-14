@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.22.0-suggest-from-thread-on-context-shift] - 2026-09-14
+
+### Changed
+- **"Suggest from Thread" (Mac only) now runs the same Context Shift
+  pipeline automatic compaction uses, instead of its own separate
+  chat-completion-based extraction** — requested live: "Ao clicar no
+  botão Suggest From Thread ... ele tem que rodar o novo workflow de
+  memoria que temos." Previously this chunked the thread and asked
+  whichever chat model was picked to return a JSON array of facts, one
+  call per chunk. It now calls a new `ContextShiftCoordinator
+  .runManualSummarization` — a one-shot `--run-once` invocation of
+  `ContextShiftScript.run_compaction` (the same RAG-indexing + Phi-4
+  recursive-summarization phases the automatic 90%-of-context trigger
+  runs), entirely separate from the persistent `--watch` process and
+  never replacing the thread's own messages (only the automatic
+  trigger does that) — verified directly: fed the real, unmodified
+  pipeline script fake model paths and confirmed it reaches
+  `run_compaction`/`run_rag_phase` with the exact CLI arguments Swift
+  now constructs, failing only on the expected missing-runtime-deps
+  error a bare test environment has and the real app's own venv
+  doesn't. The result's summary is split into individual suggestions
+  the same new way a compaction's summary is (`MemoryBulletSplitter`,
+  shipped last release).
+  - The "Model for suggestions" picker is gone from Mac's Memory
+    screen — the pipeline always uses its own three fixed models
+    (nomic-embed-text-v2-moe, CodeRankEmbed, Phi-4-mini-instruct), the
+    same ones Context Shift's automatic compaction needs already
+    registered, not whichever chat model happened to be selected.
+  - Still asks before unloading anything else first (same confirmation
+    dialog as before, just a different reason) — the pipeline alone
+    can need up to 17GB per phase, the same "Stop-and-Swap" ceiling the
+    automatic trigger enforces — and reloads whatever was active
+    before once it finishes.
+  - **iOS is unchanged** — there's no subprocess mechanism on iOS (no
+    Python, no `Process`), so "Suggest from Thread" there still uses
+    its original on-device `NativeChatEngine`-based extraction, model
+    picker included.
+
 ## [0.21.0-search-sort-and-editable-memories] - 2026-09-14
 
 ### Added

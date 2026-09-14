@@ -9,7 +9,29 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.21.0-search-sort-and-editable-memories (Search Sorting, Active-Model Ordering, Editable Memories, Split Compaction Bullets)
+## Current release: 0.22.0-suggest-from-thread-on-context-shift ("Suggest from Thread" Now Runs the Context Shift Pipeline, Mac)
+
+Requested live: "Ao clicar no botão Suggest From Thread ... ele tem
+que rodar o novo workflow de memoria que temos." Mac's "Suggest from
+Thread" used to chunk the thread and ask whichever chat model was
+picked for a JSON array of facts, one call per chunk — a separate
+mechanism from Context Shift's own RAG + Phi-4 recursive-summarization
+pipeline. It now calls a new `ContextShiftCoordinator
+.runManualSummarization`, a one-shot `--run-once` run of the exact
+same `ContextShiftScript.run_compaction` phases the automatic
+90%-of-context trigger uses — never touching the persistent watcher or
+replacing the thread's own messages, and splitting the result the same
+`MemoryBulletSplitter` way a compaction's own summary is. The "Model
+for suggestions" picker is gone: the pipeline always uses its own
+three fixed models (nomic-embed-text-v2-moe, CodeRankEmbed, Phi-4-
+mini-instruct), so there's nothing left to pick. **iOS is unchanged**
+— no subprocess mechanism exists there, so its own on-device
+extraction (`NativeChatEngine`-based, model picker included) keeps
+working exactly as before. See "Suggest from Thread on the Context
+Shift pipeline" below, and [CHANGELOG.md](CHANGELOG.md) for the full
+writeup.
+
+It follows 0.21.0-search-sort-and-editable-memories (Search Sorting, Active-Model Ordering, Editable Memories, Split Compaction Bullets)
 
 Four requests landed together this pass, all on both platforms unless
 noted:
@@ -260,7 +282,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.21.0-search-sort-and-editable-memories`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.22.0-suggest-from-thread-on-context-shift`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -2011,6 +2033,73 @@ when nothing looks like a bullet at all, so this is never worse than
 before, only ever more granular) now turns that same text into one
 suggestion per topic, each individually reviewable in the same queue
 "Suggest from Thread" already uses.
+
+## Suggest from Thread on the Context Shift pipeline
+
+Requested live: "Ao clicar no botão Suggest From Thread ... ele tem
+que rodar o novo workflow de memoria que temos." Before this, Mac's
+"Suggest from Thread" and the automatic Context Shift trigger were two
+entirely separate memory-extraction mechanisms: the manual button
+chunked the thread with `ChatContextBuilder.batches` and asked
+whichever chat model was picked (the "Model for suggestions" picker)
+to return a JSON array of facts, one call per chunk; the automatic
+trigger ran a whole different Python pipeline — RAG-indexing the old
+history into a local vector store, then recursively summarizing it
+into bullet points with a dedicated Phi-4-mini-instruct model.
+
+**Now they share the same pipeline.** A new `ContextShiftCoordinator
+.runManualSummarization(systemPrompt:messages:nomicModelPath
+:coderankModelPath:phi4ModelPath:requirements:)` writes the current
+thread to its own file (`context_shift_manual_thread.json` — a
+different name from the persistent watcher's own
+`context_shift_thread.json`, so the two can never collide) and spawns
+`ContextShiftScript.ensureWrittenToDisk()`'s already-existing
+`--run-once` mode as a one-shot subprocess: a `Process` + readability
+handler + termination handler bridged into one `async throws` call via
+a continuation, parsing the same JSON-lines protocol `handleLine`
+already reads, but entirely separate from it — this never touches
+`statusFilePath`, the persistent `--watch` process, or `status`/
+`onStatusChanged` (mutating those here would incorrectly show the
+automatic-compaction banner for a manual digest that isn't pausing or
+unloading anything through that mechanism), and — unlike a triggered
+shift — never replaces the thread's own messages; only `ShiftResult
+.summary` comes back, same as before, just from a different source.
+`suggestMemoriesFromCurrentThread` then splits that summary with the
+same `MemoryBulletSplitter` a compaction's own summary gets, so a
+"Suggest from Thread" run now produces the same individually-
+reviewable, per-topic suggestions either path yields.
+
+**Verified directly against the real, unmodified pipeline script** —
+not just reasoning about the Swift wiring: fed `--run-once` with fake
+model paths and confirmed it accepts the exact same `--nomic-model`/
+`--coderank-model`/`--phi4-model`/`--vector-store` arguments Swift's
+new call constructs, reaching `run_compaction` → `run_rag_phase`
+before failing only on the expected missing-runtime-dependency error a
+bare test environment has (the real app's own bundled venv, set up via
+`ContextShiftRuntimeDependency`, doesn't) — confirming the CLI
+contract between the two sides is exactly right, not just that it
+compiles.
+
+**Three real, user-facing consequences of switching mechanisms:**
+- The "Model for suggestions" picker is gone from the Memory screen —
+  the pipeline always uses its own three fixed models
+  (nomic-embed-text-v2-moe, CodeRankEmbed, Phi-4-mini-instruct), the
+  same ones the automatic trigger needs already registered and
+  downloaded; there's nothing left to choose. Missing any of the
+  three now shows a clear error instead of quietly falling back to
+  something else.
+- Still asks before unloading anything else first, same as before —
+  the pipeline alone can need up to 17GB per phase, the same
+  "Stop-and-Swap" ceiling `run_triggered_shift` enforces regardless of
+  which mode invoked it — and reloads whatever chat model was active
+  before, once the run finishes (successfully or not).
+- **iOS keeps its original mechanism entirely, unchanged.** There is
+  no subprocess mechanism on iOS at all (no Python interpreter, no
+  `Process`/subprocess spawning in a sandboxed app) — `ContextShiftCoordinator`
+  itself is `#if os(macOS)`-only, so this whole pipeline simply can't
+  run there. iOS's `ChatThreadsViewModel`, its own "Model for
+  suggestions" picker, and its `NativeChatEngine`-based batch
+  extraction are all untouched.
 
 ## Architecture
 
