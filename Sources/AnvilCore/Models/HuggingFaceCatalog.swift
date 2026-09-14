@@ -22,6 +22,12 @@ public struct HFModelSummary: Codable, Sendable, Equatable, Identifiable {
     /// asked for it — powers `compatibility` below. Not persisted
     /// anywhere; only ever a live search result.
     public let filePaths: [String]?
+    /// The repo's last-pushed-to date, straight from Hugging Face's own
+    /// `lastModified` field — powers Search's "Updated" sort option
+    /// (`ModelSearchSortOption`). `nil` only if the API response itself
+    /// didn't carry the field (shouldn't happen given `expand=
+    /// lastModified` below, but never assumed).
+    public let lastModified: Date?
 
     /// Whether this repo's file layout looks loadable by Anvil's image
     /// backend — see `ModelCompatibility`'s own doc comment for the
@@ -39,6 +45,7 @@ public struct HFModelSummary: Codable, Sendable, Equatable, Identifiable {
         case tags
         case safetensors
         case siblings
+        case lastModified
     }
 
     private struct SafetensorsField: Decodable {
@@ -67,15 +74,27 @@ public struct HFModelSummary: Codable, Sendable, Equatable, Identifiable {
 
         let siblings = try container.decodeIfPresent([SiblingField].self, forKey: .siblings)
         filePaths = siblings?.map(\.rfilename)
+
+        let lastModifiedString = try container.decodeIfPresent(String.self, forKey: .lastModified)
+        lastModified = lastModifiedString.flatMap(Self.parseHFDate)
     }
 
-    public init(modelID: String, downloads: Int?, likes: Int?, tags: [String]?, sizeBytes: Int64?, filePaths: [String]? = nil) {
+    public init(
+        modelID: String,
+        downloads: Int?,
+        likes: Int?,
+        tags: [String]?,
+        sizeBytes: Int64?,
+        filePaths: [String]? = nil,
+        lastModified: Date? = nil
+    ) {
         self.modelID = modelID
         self.downloads = downloads
         self.likes = likes
         self.tags = tags
         self.sizeBytes = sizeBytes
         self.filePaths = filePaths
+        self.lastModified = lastModified
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -84,6 +103,24 @@ public struct HFModelSummary: Codable, Sendable, Equatable, Identifiable {
         try container.encodeIfPresent(downloads, forKey: .downloads)
         try container.encodeIfPresent(likes, forKey: .likes)
         try container.encodeIfPresent(tags, forKey: .tags)
+    }
+
+    // Hugging Face's `lastModified` carries fractional seconds
+    // ("2025-06-27T16:22:19.000Z"); a plain `ISO8601DateFormatter`
+    // rejects that unless `.withFractionalSeconds` is set. Falls back
+    // to the plain format too, just in case a response ever omits them.
+    private static let iso8601Fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private static let iso8601Plain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+    private static func parseHFDate(_ string: String) -> Date? {
+        iso8601Fractional.date(from: string) ?? iso8601Plain.date(from: string)
     }
 
     private static func bytesPerParameter(dtype: String) -> Int64 {
@@ -121,7 +158,9 @@ public struct HuggingFaceCatalog: Sendable {
             // Powers `HFModelSummary.compatibility` — the repo's own
             // file list is enough to tell a proper pipeline apart from
             // a raw single-file checkpoint before ever downloading it.
-            URLQueryItem(name: "expand", value: "siblings")
+            URLQueryItem(name: "expand", value: "siblings"),
+            // Powers Search's "Updated" sort option.
+            URLQueryItem(name: "expand", value: "lastModified")
         ]
         guard let url = components.url else {
             throw ModelError.searchFailed("Could not build search URL")
@@ -161,7 +200,8 @@ public struct HuggingFaceCatalog: Sendable {
             URLQueryItem(name: "expand", value: "likes"),
             URLQueryItem(name: "expand", value: "tags"),
             URLQueryItem(name: "expand", value: "safetensors"),
-            URLQueryItem(name: "expand", value: "siblings")
+            URLQueryItem(name: "expand", value: "siblings"),
+            URLQueryItem(name: "expand", value: "lastModified")
         ]
         guard let url = components.url else {
             throw ModelError.searchFailed("Could not build model URL for '\(id)'")

@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.21.0-search-sort-and-editable-memories] - 2026-09-14
+
+### Added
+- **Search results can be sorted by size, downloads, or update/publish
+  date now, on both platforms** — requested live: "Na aba de busca, me
+  dar opcões de ordenação dos resultados em todas as plataformas por
+  tamanho, quantidade de downloads, data de atualização/pulicação."
+  One shared `ModelSearchSortOption` (Relevance/Size/Downloads/Updated)
+  drives a "Sort by" control on Mac's Search tab and an equivalent Menu
+  on iOS's, applying to whichever source (Hugging Face, CivitAI, Draw
+  Things) is currently selected. `.relevance` keeps each source's
+  existing default order (RAM-runnability-first, on top of the API's
+  own downloads-sorted results); the other three are a plain descending
+  sort on the chosen field, with a result that has no value for it
+  always sorting last. New date fields power the "Updated" option:
+  `HFModelSummary.lastModified` (Hugging Face's own field, `expand=
+  lastModified`) and `CivitAIModelSummary.publishedAt` (the first model
+  version's own `publishedAt` — the only update/publish timestamp
+  CivitAI's search response actually carries); Draw Things results
+  inherit whichever of these their underlying source provides (the
+  curated catalog entries have no live repo behind them to date, so
+  sort last under "Updated"). Every result row now also shows a
+  relative "Updated X ago" label, so sorting by date isn't sorting by
+  something invisible in the list itself.
+- **Models tab: the currently-loaded model always sorts to the top** —
+  requested live: "Na aba modelos organizar por Ativo sempre no topo."
+  A family containing a loaded model (or, on iOS, the one model this
+  device actually has resident) now sorts ahead of every family with
+  none, and within that family the loaded model itself sorts first
+  too — alphabetical order (the existing grouping's own tiebreak)
+  still decides everything else, so nothing else visually reshuffles
+  just because a model got loaded or unloaded.
+- **A memory can be edited/rewritten in place** — requested live:
+  "também poder editar/reescrever uma memoria capturada." A pencil
+  button next to each memory on Mac (inline edit field, Save/Cancel);
+  a leading swipe action opening an edit sheet on iOS. Both call a new
+  `editMemoryContent`, sharing the same trim-and-no-op-if-empty-or-
+  unchanged validation `addMemory` already applies.
+- **A Context Shift compaction's summary is now one memory suggestion
+  per bullet, not one giant one** — reported live: "Na Memoria tudo
+  que o processo rodou veio em uma unica memoria gigante ... eu quero
+  cada topico/bullet em uma memoria pra aceitar individualmente."
+  `ContextShiftScript.summarize`'s own prompt already asks Phi-4 for
+  bullet points ("Return only the bullet points, nothing else") —
+  `handleContextShiftReady` was just handing that whole block to one
+  all-or-nothing `ChatMemorySuggestion` instead of actually splitting
+  on them. A new, unit-tested `MemoryBulletSplitter` (handles `-`/`*`/
+  `•`/numbered markers, joins a bullet's wrapped second line back into
+  it, falls back to splitting on blank-line-separated paragraphs when
+  nothing looks like a bullet at all) now produces one suggestion per
+  topic, each individually reviewable exactly like every other
+  suggestion in the queue.
+
 ## [0.20.1-context-shift-handshake-fix] - 2026-09-14
 
 ### Fixed

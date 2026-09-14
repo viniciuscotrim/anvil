@@ -34,9 +34,18 @@ struct ModelLibraryView: View {
                 // Grouped by family (e.g. every "Qwen3.5" size/quant
                 // variant together, "FLUX.2-klein" its own) rather than
                 // one flat list — see `ModelManagerViewModel.familyName`.
-                ForEach(viewModel.registeredModelFamilies) { family in
+                // Requested live: "organizar por Ativo sempre no topo" —
+                // whichever family has a currently-loaded model in it
+                // sorts to the very top of the list, and within that
+                // family the loaded model itself sorts first too, so
+                // it's never buried in a scrolled-away section.
+                // Alphabetical order (already `group()`'s own tiebreak)
+                // still decides everything else, both between families
+                // and within one, so nothing else visually reshuffles
+                // just because a model got loaded or unloaded.
+                ForEach(orderedFamilies) { family in
                     Section(family.name) {
-                        ForEach(family.models) { entry in
+                        ForEach(sortedModels(in: family)) { entry in
                             modelRow(entry)
                         }
                     }
@@ -63,8 +72,31 @@ struct ModelLibraryView: View {
         }
     }
 
+    /// `registeredModelFamilies`, reordered so a family containing the
+    /// currently-loaded model always sorts first — requested live:
+    /// "organizar por Ativo sempre no topo". Alphabetical order (the
+    /// grouping's own existing tiebreak) still decides everything else,
+    /// so nothing else visually reshuffles just because a model got
+    /// loaded or unloaded.
+    private var orderedFamilies: [ModelFamilyGrouping.Family] {
+        viewModel.registeredModelFamilies.sorted { lhs, rhs in
+            lhs.models.contains(where: isLoaded) && !rhs.models.contains(where: isLoaded)
+        }
+    }
+
+    /// A family's own models, with the loaded one (if any) sorted first
+    /// too — same request, applied within a section as well as across
+    /// them.
+    private func sortedModels(in family: ModelFamilyGrouping.Family) -> [ModelEntry] {
+        family.models.sorted { isLoaded($0) && !isLoaded($1) }
+    }
+
+    private func isLoaded(_ entry: ModelEntry) -> Bool {
+        entry.kind == .image ? imageSessions.isLoaded(modelID: entry.id) : sessions.isLoaded(modelID: entry.id)
+    }
+
     private func modelRow(_ entry: ModelEntry) -> some View {
-        let isLoaded = entry.kind == .image ? imageSessions.isLoaded(modelID: entry.id) : sessions.isLoaded(modelID: entry.id)
+        let active = isLoaded(entry)
 
         return HStack {
             VStack(alignment: .leading, spacing: 2) {
@@ -99,8 +131,8 @@ struct ModelLibraryView: View {
                     }
                 }
                 .buttonStyle(.borderless)
-                .disabled(isLoaded || viewModel.movingModelID != nil)
-                .help(isLoaded ? "Unload the model first." : "Move into the current models folder.")
+                .disabled(active || viewModel.movingModelID != nil)
+                .help(active ? "Unload the model first." : "Move into the current models folder.")
             }
 
             Button {
@@ -109,8 +141,8 @@ struct ModelLibraryView: View {
                 Image(systemName: "trash")
             }
             .buttonStyle(.borderless)
-            .disabled(isLoaded)
-            .help(isLoaded ? "Unload the model first." : "Move this model's files to the Trash.")
+            .disabled(active)
+            .help(active ? "Unload the model first." : "Move this model's files to the Trash.")
 
             loadControl(for: entry)
         }

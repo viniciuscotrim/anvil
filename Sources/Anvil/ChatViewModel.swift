@@ -487,19 +487,30 @@ final class ChatViewModel: ObservableObject {
             persistCurrentThread()
         }
 
-        var suggestion = ChatMemorySuggestion(
-            content: result.summary,
-            kind: .summary,
-            confidence: 1,
-            rationale: "Automatic context-shift compaction — \(result.textChunksIndexed) text and \(result.codeChunksIndexed) code chunks indexed alongside it."
-        )
-        suggestion.sourceThreadID = currentThread.id
-        suggestion.createdFromMessageID = recap.id
-        suggestion.originDeviceName = DeviceIdentity.currentName
-        if let saved = try? await suggestionStore.upsert(suggestion) { suggestion = saved }
-        memorySuggestions.append(suggestion)
+        // Requested live: "Na Memoria tudo que o processo rodou veio em
+        // uma unica memoria gigante ... eu quero cada topico/bullet em
+        // uma memoria pra aceitar individualmente." `summarize`'s own
+        // prompt already asks Phi-4 for bullet points — this used to
+        // hand the whole block to one all-or-nothing suggestion instead
+        // of actually splitting on them the way `MemoryBulletSplitter`
+        // does.
+        let rationale = "Automatic context-shift compaction — \(result.textChunksIndexed) text and "
+            + "\(result.codeChunksIndexed) code chunks indexed alongside it."
+        for bullet in MemoryBulletSplitter.split(result.summary) {
+            var suggestion = ChatMemorySuggestion(
+                content: bullet,
+                kind: .summary,
+                confidence: 1,
+                rationale: rationale
+            )
+            suggestion.sourceThreadID = currentThread.id
+            suggestion.createdFromMessageID = recap.id
+            suggestion.originDeviceName = DeviceIdentity.currentName
+            if let saved = try? await suggestionStore.upsert(suggestion) { suggestion = saved }
+            memorySuggestions.append(suggestion)
+            if isCloudSyncEnabled { await cloudSync.markSuggestionChanged(suggestion) }
+        }
         if isCloudSyncEnabled {
-            await cloudSync.markSuggestionChanged(suggestion)
             await cloudSync.syncNow()
         }
 
@@ -685,6 +696,19 @@ final class ChatViewModel: ObservableObject {
     func toggleMemoryGlobal(_ memory: ChatMemory) async {
         var updated = memory
         updated.isGlobal.toggle()
+        await updateMemory(updated)
+    }
+
+    /// Rewrites a memory's own text in place — requested live:
+    /// "também poder editar/reescrever uma memoria capturada." Same
+    /// trim-and-no-op-if-empty validation `addMemory` already applies;
+    /// a no-op entirely if the text didn't actually change, so editing
+    /// and immediately cancelling doesn't even bump `updatedAt`.
+    func editMemoryContent(_ memory: ChatMemory, to newContent: String) async {
+        let trimmed = newContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != memory.content else { return }
+        var updated = memory
+        updated.content = trimmed
         await updateMemory(updated)
     }
 

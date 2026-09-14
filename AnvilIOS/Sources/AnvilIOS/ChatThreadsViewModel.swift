@@ -384,6 +384,18 @@ final class ChatThreadsViewModel {
         await updateMemory(updated)
     }
 
+    /// Rewrites a memory's own text in place — mirrors Mac's own
+    /// `ChatViewModel.editMemoryContent`. Requested live (both
+    /// platforms): "também poder editar/reescrever uma memoria
+    /// capturada."
+    func editMemoryContent(_ memory: ChatMemory, to newContent: String) async {
+        let trimmed = newContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != memory.content else { return }
+        var updated = memory
+        updated.content = trimmed
+        await updateMemory(updated)
+    }
+
     func deleteMemory(_ memory: ChatMemory) async {
         try? await memoryStore.delete(id: memory.id)
         memories = await memoryStore.all()

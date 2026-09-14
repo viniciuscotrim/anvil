@@ -18,6 +18,11 @@ struct MemoryView: View {
     @State private var draftSource: ChatMemorySource = .explicit
     @State private var draftProfileID: UUID?
     @State private var draftConfidence = 0.8
+    /// Which memory's text is currently being rewritten in place, if
+    /// any — requested live: "também poder editar/reescrever uma
+    /// memoria capturada."
+    @State private var editingMemoryID: UUID?
+    @State private var editDraftText = ""
 
     var body: some View {
         List {
@@ -225,8 +230,21 @@ struct MemoryView: View {
             Image(systemName: memory.source == .inferred ? "sparkles" : "person.fill")
                 .foregroundStyle(memory.source == .inferred ? .purple : .accentColor)
             VStack(alignment: .leading, spacing: 5) {
-                Text(memory.content)
-                    .textSelection(.enabled)
+                if editingMemoryID == memory.id {
+                    TextField("Memory", text: $editDraftText, axis: .vertical)
+                        .lineLimit(1...6)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { commitEdit(memory) }
+                    HStack {
+                        Button("Save") { commitEdit(memory) }
+                            .disabled(editDraftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        Button("Cancel") { editingMemoryID = nil }
+                    }
+                    .font(.caption)
+                } else {
+                    Text(memory.content)
+                        .textSelection(.enabled)
+                }
                 HStack(spacing: 8) {
                     Text(memory.kind.label)
                     Text(memory.source.label)
@@ -251,6 +269,16 @@ struct MemoryView: View {
                     .foregroundStyle(memory.isGlobal ? Color.secondary : Color.accentColor)
             }
             Spacer()
+            if editingMemoryID != memory.id {
+                Button {
+                    editDraftText = memory.content
+                    editingMemoryID = memory.id
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.borderless)
+                .help("Edit this memory's text")
+            }
             // Requested live: "criar um botão pra cada memória no menu
             // Memórias que pode transformar ela em Global ou voltar
             // apenas pra conversa onde foi gerada." Hidden for a
@@ -275,6 +303,12 @@ struct MemoryView: View {
             .help("Delete this memory")
         }
         .padding(.vertical, 4)
+    }
+
+    private func commitEdit(_ memory: ChatMemory) {
+        let text = editDraftText
+        editingMemoryID = nil
+        Task { await chat.editMemoryContent(memory, to: text) }
     }
 
     private func threadScopeLabel(for memory: ChatMemory) -> String {

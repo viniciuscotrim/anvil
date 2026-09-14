@@ -24,6 +24,11 @@ public struct CivitAIModelSummary: Codable, Sendable, Equatable, Identifiable {
     public let downloadCount: Int?
     public let creatorUsername: String?
     public let primaryFile: PrimaryFile?
+    /// The first (current) model version's own `publishedAt` — the
+    /// only update/publish timestamp CivitAI's search response actually
+    /// carries (no separate `updatedAt` at either the model or version
+    /// level). Powers Search's "Updated" sort option.
+    public let publishedAt: Date?
 
     public struct PrimaryFile: Codable, Sendable, Equatable {
         public let downloadURL: URL
@@ -54,7 +59,8 @@ public struct CivitAIModelSummary: Codable, Sendable, Equatable, Identifiable {
         nsfw: Bool,
         downloadCount: Int?,
         creatorUsername: String?,
-        primaryFile: PrimaryFile?
+        primaryFile: PrimaryFile?,
+        publishedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -64,6 +70,7 @@ public struct CivitAIModelSummary: Codable, Sendable, Equatable, Identifiable {
         self.downloadCount = downloadCount
         self.creatorUsername = creatorUsername
         self.primaryFile = primaryFile
+        self.publishedAt = publishedAt
     }
 
     // MARK: - Decoding CivitAI's real (nested, nullable-heavy) shape
@@ -76,6 +83,7 @@ public struct CivitAIModelSummary: Codable, Sendable, Equatable, Identifiable {
     private struct ModelVersion: Decodable {
         let baseModel: String?
         let files: [File]?
+        let publishedAt: String?
     }
     private struct File: Decodable {
         let name: String
@@ -99,6 +107,7 @@ public struct CivitAIModelSummary: Codable, Sendable, Equatable, Identifiable {
         let versions = try container.decodeIfPresent([ModelVersion].self, forKey: .modelVersions) ?? []
         let firstVersion = versions.first
         baseModel = firstVersion?.baseModel
+        publishedAt = firstVersion?.publishedAt.flatMap(Self.parseCivitAIDate)
 
         let files = firstVersion?.files ?? []
         // The version's own flagged primary file, or its first
@@ -124,6 +133,23 @@ public struct CivitAIModelSummary: Codable, Sendable, Equatable, Identifiable {
         try container.encode(name, forKey: .name)
         try container.encode(type, forKey: .type)
         try container.encode(nsfw, forKey: .nsfw)
+    }
+
+    // CivitAI's `publishedAt` carries fractional seconds
+    // ("2024-08-02T23:46:31.363Z"), same shape as Hugging Face's own
+    // `lastModified` — see that type's identical formatter pair.
+    private static let iso8601Fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private static let iso8601Plain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+    private static func parseCivitAIDate(_ string: String) -> Date? {
+        iso8601Fractional.date(from: string) ?? iso8601Plain.date(from: string)
     }
 }
 

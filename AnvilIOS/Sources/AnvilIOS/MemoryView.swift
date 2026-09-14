@@ -24,6 +24,10 @@ struct MemoryView: View {
     /// only ever one model resident at a time here, unlike Mac's
     /// several-at-once server processes).
     @State private var pendingModelSwap: PendingModelSwap?
+    /// Which memory is being rewritten in a sheet right now, if any —
+    /// requested live: "também poder editar/reescrever uma memoria
+    /// capturada."
+    @State private var editingMemory: ChatMemory?
 
     private struct PendingModelSwap: Identifiable {
         let id: String
@@ -126,6 +130,11 @@ struct MemoryView: View {
             } message: { swap in
                 Text("Chat only keeps one model loaded at a time on this iPhone, so this also switches what "
                     + "Chat itself uses next, until you load something else.")
+            }
+            .sheet(item: $editingMemory) { memory in
+                EditMemorySheet(memory: memory) { newText in
+                    Task { await threads.editMemoryContent(memory, to: newText) }
+                }
             }
         }
     }
@@ -247,6 +256,14 @@ struct MemoryView: View {
                 .tint(.blue)
             }
         }
+        .swipeActions(edge: .leading) {
+            Button {
+                editingMemory = memory
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            .tint(.orange)
+        }
     }
 
     private func threadScopeLabel(for memory: ChatMemory) -> String {
@@ -255,5 +272,46 @@ struct MemoryView: View {
         }
         let threadTitle = threads.allThreads.first(where: { $0.id == originThreadID })?.title
         return "Only in: \(threadTitle ?? "a deleted conversation")"
+    }
+}
+
+/// A memory's own text, rewritten in place — requested live: "também
+/// poder editar/reescrever uma memoria capturada." `onSave` is handed
+/// the trimmed replacement text; `ChatThreadsViewModel
+/// .editMemoryContent` itself no-ops if it's empty or unchanged, so
+/// this doesn't need to duplicate that check to behave correctly.
+private struct EditMemorySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let memory: ChatMemory
+    let onSave: (String) -> Void
+    @State private var text: String
+
+    init(memory: ChatMemory, onSave: @escaping (String) -> Void) {
+        self.memory = memory
+        self.onSave = onSave
+        _text = State(initialValue: memory.content)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Memory", text: $text, axis: .vertical)
+                    .lineLimit(4...12)
+            }
+            .navigationTitle("Edit Memory")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(text)
+                        dismiss()
+                    }
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
     }
 }

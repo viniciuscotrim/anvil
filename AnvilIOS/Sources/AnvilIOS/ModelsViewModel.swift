@@ -117,6 +117,12 @@ final class ModelsViewModel {
     /// even trying it, using the same RAM-relative classification the
     /// Mac's Model Manager and the registered-models list already show.
     var maxSizeClass: ModelSizeClass?
+    /// Applies to whichever `source` is selected — one shared control,
+    /// matching the Mac app's own (requested live for both: "Na aba de
+    /// busca, me dar opcões de ordenação dos resultados em todas as
+    /// plataformas por tamanho, quantidade de downloads, data de
+    /// atualização/pulicação").
+    var sortOption: ModelSearchSortOption = .relevance
 
     /// The job actively downloading, if any — drives
     /// `ModelDownloadsSection`'s Pause/Stop and blocks starting a second
@@ -174,7 +180,16 @@ final class ModelsViewModel {
             if compatibleOnlyHF, !summary.isLoadableOnIOS { return false }
             return Self.fitsSizeFilter(summary.sizeBytes, maxSizeClass)
         }
-        return ModelSizeClass.sortedByRunnability(filtered) { $0.sizeBytes }
+        switch sortOption {
+        case .relevance:
+            return ModelSizeClass.sortedByRunnability(filtered) { $0.sizeBytes }
+        case .size:
+            return filtered.sortedDescending { $0.sizeBytes }
+        case .downloads:
+            return filtered.sortedDescending { $0.downloads }
+        case .updated:
+            return filtered.sortedDescending { $0.lastModified }
+        }
     }
 
     /// What the CivitAI results section shows once `maxSizeClass` is
@@ -186,7 +201,16 @@ final class ModelsViewModel {
     /// than another on iOS today regardless of base model.
     var filteredCivitAIResults: [CivitAIModelSummary] {
         let filtered = civitaiResults.filter { Self.fitsSizeFilter($0.primaryFile?.sizeBytes, maxSizeClass) }
-        return ModelSizeClass.sortedByRunnability(filtered) { $0.primaryFile?.sizeBytes }
+        switch sortOption {
+        case .relevance:
+            return ModelSizeClass.sortedByRunnability(filtered) { $0.primaryFile?.sizeBytes }
+        case .size:
+            return filtered.sortedDescending { $0.primaryFile?.sizeBytes }
+        case .downloads:
+            return filtered.sortedDescending { $0.downloadCount }
+        case .updated:
+            return filtered.sortedDescending { $0.publishedAt }
+        }
     }
 
     /// What the Draw Things results section shows, reordered the same
@@ -200,7 +224,16 @@ final class ModelsViewModel {
     /// single-file loading path).
     var filteredDrawThingsResults: [DrawThingsModelSummary] {
         let filtered = drawThingsResults.filter { Self.fitsSizeFilter($0.sizeBytes, maxSizeClass) }
-        return ModelSizeClass.sortedByRunnability(filtered) { $0.sizeBytes }
+        switch sortOption {
+        case .relevance:
+            return ModelSizeClass.sortedByRunnability(filtered) { $0.sizeBytes }
+        case .size:
+            return filtered.sortedDescending { $0.sizeBytes }
+        case .downloads:
+            return filtered.sortedDescending { $0.downloads }
+        case .updated:
+            return filtered.sortedDescending { $0.lastModified }
+        }
     }
 
     private static func fitsSizeFilter(_ sizeBytes: Int64?, _ maxSizeClass: ModelSizeClass?) -> Bool {

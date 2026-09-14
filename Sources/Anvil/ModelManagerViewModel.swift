@@ -97,6 +97,12 @@ final class ModelManagerViewModel: ObservableObject {
     /// `.unknown` result (most text models included) — only a
     /// confirmed `.incompatible` one.
     @Published var hideIncompatibleModels: Bool = true
+    /// Applies to whichever `searchSource` is currently selected — one
+    /// shared control, not a per-source setting. Requested live: "Na
+    /// aba de busca, me dar opcões de ordenação dos resultados em todas
+    /// as plataformas por tamanho, quantidade de downloads, data de
+    /// atualização/pulicação."
+    @Published var sortOption: ModelSearchSortOption = .relevance
     private var liveSearchTask: Task<Void, Never>?
 
     private let ramBytes = ProcessInfo.processInfo.physicalMemory
@@ -120,14 +126,50 @@ final class ModelManagerViewModel: ObservableObject {
             guard let bytes = summary.sizeBytes else { return false }
             return ModelSizeClass.classify(sizeBytes: bytes, ramBytes: ramBytes) == sizeFilter
         }
-        return ModelSizeClass.sortedByRunnability(filtered, ramBytes: ramBytes) { $0.sizeBytes }
+        switch sortOption {
+        case .relevance:
+            return ModelSizeClass.sortedByRunnability(filtered, ramBytes: ramBytes) { $0.sizeBytes }
+        case .size:
+            return filtered.sortedDescending { $0.sizeBytes }
+        case .downloads:
+            return filtered.sortedDescending { $0.downloads }
+        case .updated:
+            return filtered.sortedDescending { $0.lastModified }
+        }
     }
 
     /// `civitaiResults`, reordered the same way `filteredSearchResults`
-    /// is — results that fit this Mac's RAM first. No compatibility/size
-    /// filtering here today (unlike the HF side), just the ordering fix.
+    /// is — `.relevance` puts results that fit this Mac's RAM first (no
+    /// compatibility/size filtering here today, unlike the HF side);
+    /// every other `sortOption` overrides that with a plain descending
+    /// sort on the chosen field.
     var rankedCivitAIResults: [CivitAIModelSummary] {
-        ModelSizeClass.sortedByRunnability(civitaiResults, ramBytes: ramBytes) { $0.primaryFile?.sizeBytes }
+        switch sortOption {
+        case .relevance:
+            return ModelSizeClass.sortedByRunnability(civitaiResults, ramBytes: ramBytes) { $0.primaryFile?.sizeBytes }
+        case .size:
+            return civitaiResults.sortedDescending { $0.primaryFile?.sizeBytes }
+        case .downloads:
+            return civitaiResults.sortedDescending { $0.downloadCount }
+        case .updated:
+            return civitaiResults.sortedDescending { $0.publishedAt }
+        }
+    }
+
+    /// `drawThingsResults`, same idea — `.relevance` keeps
+    /// `DrawThingsCatalog.search`'s own already-by-downloads order (the
+    /// curated list's hand-set order when nothing's been searched yet).
+    var sortedDrawThingsResults: [DrawThingsModelSummary] {
+        switch sortOption {
+        case .relevance:
+            return drawThingsResults
+        case .size:
+            return drawThingsResults.sortedDescending { $0.sizeBytes }
+        case .downloads:
+            return drawThingsResults.sortedDescending { $0.downloads }
+        case .updated:
+            return drawThingsResults.sortedDescending { $0.lastModified }
+        }
     }
 
     /// Grouped by family for display — see `ModelFamilyGrouping`.

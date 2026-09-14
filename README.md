@@ -9,7 +9,32 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.20.1-context-shift-handshake-fix (Context Shift's Unload Handshake Actually Acknowledges Now)
+## Current release: 0.21.0-search-sort-and-editable-memories (Search Sorting, Active-Model Ordering, Editable Memories, Split Compaction Bullets)
+
+Four requests landed together this pass, all on both platforms unless
+noted:
+
+- **Search sorting**: "Na aba de busca, me dar opcões de ordenação dos
+  resultados em todas as plataformas por tamanho, quantidade de
+  downloads, data de atualização/pulicação." A shared
+  `ModelSearchSortOption` (Relevance/Size/Downloads/Updated) now drives
+  a sort control on Search, applying to whichever source is selected.
+- **Models tab, Mac + iOS**: "Na aba modelos organizar por Ativo
+  sempre no topo." The family (and, within it, the model) that's
+  actually loaded now always sorts first.
+- **Editable memories**: "também poder editar/reescrever uma memoria
+  capturada." A pencil button (Mac) / edit sheet (iOS) rewrites a
+  memory's text in place.
+- **Split compaction bullets**: "Na Memoria tudo que o processo rodou
+  veio em uma unica memoria gigante ... eu quero cada topico/bullet em
+  uma memoria pra aceitar individualmente." Context Shift's own
+  already-bulleted summary now becomes one suggestion per bullet
+  instead of one giant one.
+
+See "Search sorting, active-model ordering, and editable memories"
+below, and [CHANGELOG.md](CHANGELOG.md) for the full writeup.
+
+It follows 0.20.1-context-shift-handshake-fix (Context Shift's Unload Handshake Actually Acknowledges Now)
 
 Reported live right after 0.19.2 finally let a real shift trigger for
 the first time: "Depois de instalar o novo .dmg eu mandei uma mensagem
@@ -235,7 +260,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.20.1-context-shift-handshake-fix`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.21.0-search-sort-and-editable-memories`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1914,6 +1939,78 @@ unloading — `runChatLoop`'s existing `CancellationError` path already
 tears a cancelled request down cleanly (quietly drops the empty
 in-progress assistant bubble, no scary error text), so the process
 only ever goes away after Swift's own side has already let go of it.
+
+## Search sorting, active-model ordering, and editable memories
+
+**Search sorting.** Requested live: "Na aba de busca, me dar opcões de
+ordenação dos resultados em todas as plataformas por tamanho,
+quantidade de downloads, data de atualização/pulicação." A new,
+shared `ModelSearchSortOption` (`.relevance`/`.size`/`.downloads`/
+`.updated`) drives one "Sort by" control on Mac's Search tab (next to
+the source picker) and an equivalent Menu on iOS's — applying to
+whichever of the three sources (Hugging Face, CivitAI, Draw Things) is
+currently selected, not a per-source setting. `.relevance` keeps each
+source's existing default (RAM-runnability-first, `ModelSizeClass
+.sortedByRunnability`, on top of the API's own downloads-sorted
+order); every other option is a plain `sortedDescending(by:)` — a new
+shared `Array` extension, nils always sorting last since there's
+nothing to rank them by. "Updated" needed new fields that didn't exist
+before: `HFModelSummary.lastModified` (Hugging Face's own field,
+fetched via `expand=lastModified`, alongside the existing `expand`
+params) and `CivitAIModelSummary.publishedAt` (confirmed directly
+against the live API: CivitAI's search response carries no separate
+`updatedAt` at either the model or version level — only the first
+model version's own `publishedAt`, the actual field this reads).
+`DrawThingsModelSummary` inherits whichever of these its underlying
+Hugging Face result carries when it came from a live search; the
+hand-curated catalog entries (`DrawThingsCatalog.curatedModels`) have
+no live repo behind them to date a "publish" against, so they always
+sort last under "Updated" — never hidden, just unranked. Every result
+row across all three sources and both platforms now also shows a
+relative "Updated X ago" label (`RelativeDateTimeFormatter`), so
+sorting by date isn't sorting by something invisible in the list
+itself.
+
+**Active-model ordering.** Requested live: "Na aba modelos organizar
+por Ativo sempre no topo." `ModelLibraryView`'s family-grouped list
+(Mac) and its iOS equivalent both now reorder `registeredModelFamilies`
+so a family containing the currently-loaded model (Mac: either text or
+image session; iOS: `chatEngine.loadedModelID`/`imageEngine
+.loadedModelID`, since only one model is ever resident there at a
+time) sorts ahead of every family with none, and within that family
+the loaded model itself sorts first too. Alphabetical order — the
+grouping's own existing tiebreak — still decides everything else on
+both sides of that split, so nothing else visually reshuffles just
+because a model got loaded or unloaded.
+
+**Editable memories.** Requested live: "também poder editar/reescrever
+uma memoria capturada." A new `editMemoryContent(_:to:)` on both
+platforms' view models — the same trim-and-no-op-if-empty-or-unchanged
+validation `addMemory` already applies, then a plain `updateMemory`
+(which already existed, used by the Global/thread-scoped toggle, and
+already stamps `updatedAt` on write) — backs a pencil button on Mac
+(turns the row into an inline `TextField` with Save/Cancel) and a
+leading swipe action opening a small edit sheet on iOS.
+
+**Split compaction bullets.** Reported live, right after Context
+Shift's handshake fix let a compaction actually complete for the first
+time: "Na Memoria tudo que o processo rodou veio em uma unica memoria
+gigante ... eu quero cada topico/bullet em uma memoria pra aceitar
+individualmente." `ContextShiftScript.summarize`'s own system prompt
+already asks Phi-4 for bullet points ("Summarize it into concise
+bullet points... Return only the bullet points, nothing else") — the
+text it returns was already well-structured. `handleContextShiftReady`
+was just the part that didn't take advantage of that: it handed the
+whole block to one `ChatMemorySuggestion`, all or nothing, instead of
+actually splitting on the bullets already there. A new, unit-tested
+`MemoryBulletSplitter` (`-`/`*`/`•`/numbered markers; a bullet's own
+wrapped second line gets joined back into it rather than becoming a
+bullet of its own; blank lines between bullets don't become empty
+bullets; falls back to splitting on blank-line-separated paragraphs
+when nothing looks like a bullet at all, so this is never worse than
+before, only ever more granular) now turns that same text into one
+suggestion per topic, each individually reviewable in the same queue
+"Suggest from Thread" already uses.
 
 ## Architecture
 

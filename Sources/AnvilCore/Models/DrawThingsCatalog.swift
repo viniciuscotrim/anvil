@@ -14,6 +14,11 @@ public struct DrawThingsModelSummary: Codable, Sendable, Equatable, Identifiable
     public let likes: Int?
     public let sizeBytes: Int64?
     public let filePaths: [String]?
+    /// The underlying Hugging Face repo's `lastModified`, when this
+    /// variant came from a live search — powers Search's "Updated" sort
+    /// option. Always `nil` for the hand-curated catalog entries
+    /// (`curatedModels`): there's no live repo behind those to date.
+    public let lastModified: Date?
 
     public init(
         id: String,
@@ -25,7 +30,8 @@ public struct DrawThingsModelSummary: Codable, Sendable, Equatable, Identifiable
         downloads: Int? = nil,
         likes: Int? = nil,
         sizeBytes: Int64? = nil,
-        filePaths: [String]? = nil
+        filePaths: [String]? = nil,
+        lastModified: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -37,6 +43,7 @@ public struct DrawThingsModelSummary: Codable, Sendable, Equatable, Identifiable
         self.likes = likes
         self.sizeBytes = sizeBytes
         self.filePaths = filePaths ?? (filename.map { [$0] })
+        self.lastModified = lastModified
     }
 }
 
@@ -202,7 +209,8 @@ public struct DrawThingsCatalog: Sendable {
                 URLQueryItem(name: "expand", value: "likes"),
                 URLQueryItem(name: "expand", value: "tags"),
                 URLQueryItem(name: "expand", value: "safetensors"),
-                URLQueryItem(name: "expand", value: "siblings")
+                URLQueryItem(name: "expand", value: "siblings"),
+                URLQueryItem(name: "expand", value: "lastModified")
             ]
             if kw.hasPrefix("author:") {
                 let author = String(kw.dropFirst(7))
@@ -273,7 +281,8 @@ public struct DrawThingsCatalog: Sendable {
                     downloads: hf.downloads,
                     likes: hf.likes,
                     sizeBytes: estimatedSize,
-                    filePaths: [file]
+                    filePaths: [file],
+                    lastModified: hf.lastModified
                 ))
             }
         }

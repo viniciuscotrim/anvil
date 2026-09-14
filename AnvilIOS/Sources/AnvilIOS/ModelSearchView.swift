@@ -129,6 +129,17 @@ struct ModelSearchView: View {
             .help("Search as I type (3+ characters, after a short pause).")
             Spacer()
             Menu {
+                ForEach(ModelSearchSortOption.allCases) { option in
+                    Button(option.label) { viewModel.sortOption = option }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up.arrow.down.circle")
+                    Text(viewModel.sortOption.label)
+                }
+                .font(.caption)
+            }
+            Menu {
                 Button("Any size") { viewModel.maxSizeClass = nil }
                 ForEach(ModelSizeClass.allCases) { sizeClass in
                     Button("Up to \(sizeClass.label)") { viewModel.maxSizeClass = sizeClass }
@@ -160,6 +171,9 @@ struct ModelSearchView: View {
                     if let bytes = summary.sizeBytes {
                         Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                         Text("· \(ModelSizeClass.classify(sizeBytes: bytes).label)")
+                    }
+                    if let date = summary.lastModified {
+                        Text("· \(Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date()))")
                     }
                     switch summary.compatibility {
                     case .supported(.mlx), .supported(.mflux):
@@ -200,6 +214,9 @@ struct ModelSearchView: View {
                         Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                         Text("· \(ModelSizeClass.classify(sizeBytes: bytes).label)")
                     }
+                    if let date = summary.publishedAt {
+                        Text("· \(Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date()))")
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -210,6 +227,13 @@ struct ModelSearchView: View {
             }
         }
     }
+
+    /// Shared by every result row's own "Updated" text.
+    fileprivate static let relativeDateFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
 
     private func drawThingsResultRow(_ summary: DrawThingsModelSummary) -> some View {
         HStack {
@@ -228,6 +252,9 @@ struct ModelSearchView: View {
                     if let bytes = summary.sizeBytes {
                         Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                         Text("· \(ModelSizeClass.classify(sizeBytes: bytes).label)")
+                    }
+                    if let date = summary.lastModified {
+                        Text("· \(Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date()))")
                     }
                 }
                 .font(.caption)

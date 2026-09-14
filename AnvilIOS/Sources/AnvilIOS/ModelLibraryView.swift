@@ -23,9 +23,9 @@ struct ModelLibraryView: View {
                     )
                 } else {
                     List {
-                        ForEach(viewModel.registeredModelFamilies) { family in
+                        ForEach(orderedFamilies) { family in
                             Section(family.name) {
-                                ForEach(family.models) { entry in
+                                ForEach(sortedModels(in: family)) { entry in
                                     modelRow(entry)
                                 }
                             }
@@ -46,6 +46,24 @@ struct ModelLibraryView: View {
             .task { await viewModel.loadRegistry() }
             .onAppear { Task { await viewModel.loadRegistry() } }
         }
+    }
+
+    /// `registeredModelFamilies`, reordered so the family containing the
+    /// one model this iPhone actually has loaded always sorts first —
+    /// requested live (matching the Mac app): "organizar por Ativo
+    /// sempre no topo".
+    private var orderedFamilies: [ModelFamilyGrouping.Family] {
+        viewModel.registeredModelFamilies.sorted { lhs, rhs in
+            lhs.models.contains(where: isLoaded) && !rhs.models.contains(where: isLoaded)
+        }
+    }
+
+    private func sortedModels(in family: ModelFamilyGrouping.Family) -> [ModelEntry] {
+        family.models.sorted { isLoaded($0) && !isLoaded($1) }
+    }
+
+    private func isLoaded(_ entry: ModelEntry) -> Bool {
+        chatEngine.loadedModelID == entry.id || imageEngine.loadedModelID == entry.id
     }
 
     @ViewBuilder

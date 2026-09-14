@@ -30,6 +30,7 @@ struct ModelSearchView: View {
         List {
             Section {
                 sourcePicker
+                sortPicker
             }
 
             switch viewModel.searchSource {
@@ -87,7 +88,7 @@ struct ModelSearchView: View {
             case .drawThings:
                 if !viewModel.drawThingsResults.isEmpty {
                     Section("Results") {
-                        ForEach(viewModel.drawThingsResults) { summary in
+                        ForEach(viewModel.sortedDrawThingsResults) { summary in
                             drawThingsResultRow(summary)
                         }
                     }
@@ -146,6 +147,28 @@ struct ModelSearchView: View {
                 }
             Spacer()
         }
+    }
+
+    /// Applies to whichever source is selected above — requested live:
+    /// "Na aba de busca, me dar opcões de ordenação dos resultados em
+    /// todas as plataformas por tamanho, quantidade de downloads, data
+    /// de atualização/pulicação."
+    private var sortPicker: some View {
+        HStack {
+            Text("Sort by:").foregroundStyle(.secondary)
+            Picker("", selection: Binding(
+                get: { viewModel.sortOption },
+                set: { viewModel.sortOption = $0 }
+            )) {
+                ForEach(ModelSearchSortOption.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: 160)
+            Spacer()
+        }
+        .font(.callout)
     }
 
     private var searchBar: some View {
@@ -338,6 +361,9 @@ struct ModelSearchView: View {
                     if let bytes = summary.primaryFile?.sizeBytes {
                         Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                     }
+                    if let date = summary.publishedAt {
+                        Text("· \(Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date()))")
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -348,6 +374,15 @@ struct ModelSearchView: View {
             }
         }
     }
+
+    /// Shared by every result row's own "Updated" text — requested
+    /// alongside `ModelSearchSortOption`, so a "sort by update date"
+    /// control isn't sorting by something invisible in the row itself.
+    fileprivate static let relativeDateFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
 
     private var drawThingsSearchBar: some View {
         HStack {
@@ -385,6 +420,9 @@ struct ModelSearchView: View {
                     if let bytes = summary.sizeBytes {
                         Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                     }
+                    if let date = summary.lastModified {
+                        Text("· \(Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date()))")
+                    }
                     HStack(spacing: 3) {
                         Circle().fill(Color.green).frame(width: 6, height: 6)
                         Text("· Draw Things (libnnc)")
@@ -413,6 +451,9 @@ struct ModelSearchView: View {
                     if let bytes = summary.sizeBytes {
                         Text("· \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                         Text("· \(ModelSizeClass.classify(sizeBytes: bytes).label)")
+                    }
+                    if let date = summary.lastModified {
+                        Text("· \(Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date()))")
                     }
                     switch summary.compatibility {
                     case .supported(let engine):
