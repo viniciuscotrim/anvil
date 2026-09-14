@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.24.1-reject-all-memory-suggestions] - 2026-09-14
+
+### Added
+- **"Reject All" next to "Accept All" in the Memory screen**, on both
+  platforms — requested live: "adicione um botão reject all ao lado de
+  accept all no menu memórias." A new `rejectAllMemorySuggestions`
+  dismisses every pending suggestion at once, the same way `Accept
+  All` accepts every one — for a digest that came back mostly (or
+  entirely) off-base and isn't worth reviewing one at a time.
+
 ## [0.24.0-full-history-never-compacted] - 2026-09-14
 
 ### Changed

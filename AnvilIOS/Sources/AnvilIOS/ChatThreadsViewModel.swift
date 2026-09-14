@@ -609,6 +609,14 @@ final class ChatThreadsViewModel {
         }
     }
 
+    /// Mirrors Mac's own `ChatViewModel.rejectAllMemorySuggestions` —
+    /// requested live, next to Accept All.
+    func rejectAllMemorySuggestions() {
+        for suggestion in memorySuggestions {
+            dismissMemorySuggestion(suggestion)
+        }
+    }
+
     // MARK: - Editing/deleting a sent message
 
     /// Deletes `message` and every message that came after it in

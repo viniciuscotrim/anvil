@@ -1148,6 +1148,18 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Dismisses every current suggestion at once — requested live,
+    /// next to "Accept All": a symmetric bulk action for the opposite
+    /// case, a digest that came back mostly (or entirely) off-base and
+    /// isn't worth reviewing one at a time. Goes through the exact same
+    /// `dismissMemorySuggestion` each does individually — no new
+    /// persistence path.
+    func rejectAllMemorySuggestions() {
+        for suggestion in memorySuggestions {
+            dismissMemorySuggestion(suggestion)
+        }
+    }
+
     // MARK: - Editing/deleting a sent message
 
     /// Deletes `message` and every message that came after it — see

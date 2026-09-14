@@ -82,6 +82,12 @@ struct MemoryView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
+                        // Requested live, next to Accept All: a
+                        // symmetric bulk action for a digest that came
+                        // back mostly off-base.
+                        Button("Reject All", role: .destructive) {
+                            chat.rejectAllMemorySuggestions()
+                        }
                         Button("Accept All") {
                             Task { await chat.acceptAllMemorySuggestions() }
                         }

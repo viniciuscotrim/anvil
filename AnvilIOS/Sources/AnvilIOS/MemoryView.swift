@@ -69,8 +69,13 @@ struct MemoryView: View {
                         Text("Nothing is saved until you accept it — global, usable from any new thread.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Button("Accept All") {
-                            Task { await threads.acceptAllMemorySuggestions() }
+                        HStack {
+                            Button("Accept All") {
+                                Task { await threads.acceptAllMemorySuggestions() }
+                            }
+                            Button("Reject All", role: .destructive) {
+                                threads.rejectAllMemorySuggestions()
+                            }
                         }
                         ForEach(threads.memorySuggestions) { suggestion in
                             suggestionRow(suggestion)

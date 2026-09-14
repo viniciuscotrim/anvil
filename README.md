@@ -9,7 +9,14 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.24.0-full-history-never-compacted (Context Shift Never Touches the Transcript Anymore; Paged Loading)
+## Current release: 0.24.1-reject-all-memory-suggestions ("Reject All" Next to "Accept All")
+
+Requested live: "adicione um botão reject all ao lado de accept all no
+menu memórias." A new `rejectAllMemorySuggestions` dismisses every
+pending suggestion at once, mirroring `acceptAllMemorySuggestions` —
+on both Mac and iOS.
+
+It follows 0.24.0-full-history-never-compacted (Context Shift Never Touches the Transcript Anymore; Paged Loading)
 
 Requested live: "Eu não quero ver o resumo da compactação quando eu
 rolar pro histórico da conversa, eu quero ver ela inteira, cada
@@ -338,7 +345,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.24.0-full-history-never-compacted`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.24.1-reject-all-memory-suggestions`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
