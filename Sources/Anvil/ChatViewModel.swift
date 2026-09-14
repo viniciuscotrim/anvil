@@ -1275,11 +1275,32 @@ final class ChatViewModel: ObservableObject {
         // duplicated here): this Mac's own estimate of how full the
         // active model's context window is, plus a fresh export of the
         // thread to compact if that watcher decides to act on it.
+        //
+        // Deliberately the *full* thread's own token estimate
+        // (`currentThread.messages`), not `lastEstimatedContextTokens`
+        // (`context.messages` — already windowed down to
+        // `maxEstimatedContextTokens`, 24,000 by default, by
+        // `ChatContextBuilder.build` a few lines up). A real, reported
+        // bug this fixes: feeding the watcher the *post-truncation*
+        // number meant it could never actually reflect how long the
+        // real conversation had grown — once a thread passed that
+        // budget, this number effectively stopped growing at all, so
+        // the 90%-of-context-window trigger could go unreached forever
+        // for any model whose real context window is bigger than
+        // ~26,700 tokens (24,000 ÷ 0.9), no matter how long the
+        // conversation actually got. Reported live: "o contexto deve
+        // estar bem longo já… mas não estou vendo ele executando o
+        // fluxo de memoria, parece que simplesmente está travado de
+        // fundo" — confirmed directly: the model server for that
+        // conversation was genuinely deadlocked (unresponsive even to
+        // a brand-new, five-token test request) with the compaction
+        // pipeline never having triggered even once all session.
+        let fullThreadEstimatedTokens = currentThread.messages.reduce(0) { $0 + ChatContextBuilder.estimateTokens($1.content) }
         if let modelPath = sessions.session(for: id)?.model.localPath {
             await contextShift.writeStatus(
                 activeModelID: id,
                 activeModelPath: modelPath,
-                estimatedTokens: lastEstimatedContextTokens,
+                estimatedTokens: fullThreadEstimatedTokens,
                 systemPrompt: systemPrompt,
                 messages: currentThread.messages
             )

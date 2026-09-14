@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.19.2-context-shift-trigger-fix] - 2026-09-14
+
+### Fixed
+- **Context Shift's trigger could never actually fire for most
+  models, so a long conversation's model could hang with no safety
+  net**: reported live — "Eu mandei mensagem pra um chat chamado
+  Sofia, e ele iniciou a geração, mas o contexto deve estar bem longo
+  já… mas não estou vendo ele executando o fluxo de memoria, parece
+  que simplesmente está travado de fundo." Investigated directly:
+  the model server for that conversation was genuinely deadlocked —
+  unresponsive even to a brand-new, five-token test request sent
+  straight to its own port — with the compaction pipeline never having
+  triggered once all session. Root cause confirmed in
+  `ChatViewModel.send()`: the number written to `ContextShiftCoordinator
+  .writeStatus(estimatedTokens:)` was `lastEstimatedContextTokens`,
+  which comes from `context.messages` — already windowed down to
+  `maxEstimatedContextTokens` (24,000 by default) by `ChatContextBuilder
+  .build` a few lines earlier — instead of the full, ever-growing
+  thread's own real size. Once a conversation passed that budget, this
+  number effectively stopped growing at all, so the 90%-of-context-
+  window trigger could go unreached forever for any model whose real
+  context window is bigger than ~26,700 tokens, no matter how long the
+  conversation actually got. Now uses a fresh estimate over the full,
+  untruncated `currentThread.messages` instead.
+- The stuck model server from the reported session was killed directly
+  to unblock the conversation; Anvil doesn't yet detect a session
+  whose underlying process died externally on its own (a known,
+  separate gap) — if a model's chat requests start failing outright
+  after this update, Unload and reload it once from the Models tab.
+
 ## [0.19.1-ios-hide-thinking] - 2026-09-14
 
 ### Fixed

@@ -9,10 +9,26 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.19.1-ios-hide-thinking (Hide Model Thinking on iOS)
+## Current release: 0.19.2-context-shift-trigger-fix (Context Shift's Trigger Actually Fires Now)
 
-Reported live: "Precisamos colocar no iPhone agora o botão de ocultar
-o Thinking do modelo. Não dá pra conversar como está." Mac's
+Reported live: "Eu mandei mensagem pra um chat chamado Sofia, e ele
+iniciou a geração, mas o contexto deve estar bem longo já… mas não
+estou vendo ele executando o fluxo de memoria, parece que simplesmente
+está travado de fundo." Investigated directly: the model server was
+genuinely deadlocked (unresponsive to a brand-new test request sent
+straight to its port), and Context Shift's compaction pipeline had
+never triggered even once. Root cause: `ChatViewModel.send()` was
+feeding the watcher an *already-truncated* token estimate (capped at
+24,000 by `ChatContextBuilder.build`) instead of the full,
+ever-growing thread's real size — meaning the 90%-of-context-window
+trigger could never actually be reached for any model with a context
+window bigger than ~26,700 tokens, no matter how long a conversation
+actually got. Fixed to measure the real, untruncated thread. See
+"Fixing Context Shift's trigger" below.
+
+It follows 0.19.1-ios-hide-thinking. Reported live: "Precisamos
+colocar no iPhone agora o botão de ocultar o Thinking do modelo. Não
+dá pra conversar como está." Mac's
 `mlx_lm.server`/`llama_cpp.server` already split a reasoning model's
 `<think>…</think>` block into its own field before Anvil ever sees it;
 iOS's on-device engines stream raw, unseparated text, so a thinking
@@ -169,7 +185,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.19.1-ios-hide-thinking`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.19.2-context-shift-trigger-fix`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1675,6 +1691,60 @@ or hide it — `ChatMessage.reasoning` is always populated regardless of
 the toggle (both the local engines, via the splitter above, and the
 remote-Mac path, which already worked correctly), so switching it back
 on later still has something to reveal.
+
+## Fixing Context Shift's trigger
+
+Reported live: "Eu mandei mensagem pra um chat chamado Sofia, e ele
+iniciou a geração, mas o contexto deve estar bem longo já… mas não
+estou vendo ele executando o fluxo de memoria, parece que simplesmente
+está travado de fundo."
+
+**Investigated directly, not guessed at.** The reported thread's model
+server (`mlx_lm.server`, a 27B model) was checked live: `GET /v1
+/models` answered instantly, but a brand-new `/v1/chat/completions`
+request — five max tokens, a two-word prompt, nothing at all to do
+with the actual conversation — timed out completely (`curl` exit 28,
+no response at all after 20 seconds). That's a genuinely deadlocked
+server process, not just a slow one: a healthy server would have
+answered a request that trivial almost immediately even with a huge
+job already queued behind it, since mlx_lm.server can accept the
+connection and start responding to a *different* tiny request's own
+work independently of whatever the stuck one is doing — the fact
+nothing came back at all points at the whole process being wedged, not
+merely busy. The process was killed directly to unblock the
+conversation (its message history was already safely persisted before
+that send — `persistCurrentThreadForDurability()` runs before the
+model is ever contacted); if a model's replies start failing outright
+after updating past this point, that's the visible effect of exactly
+this cleanup — Unload and reload it once from the Models tab and it's
+back to normal.
+
+**Root cause: `send()` measured the wrong number.** Every turn,
+`ChatViewModel.send()` writes a small status file
+`ContextShiftCoordinator`'s background watcher polls, containing an
+estimate of how full the active model's context window is —
+comparing that against `estimated_tokens / context_window` is how the
+watcher decides when to trigger a compaction pass (see "Automatic
+conversation compaction" above). That estimate was
+`lastEstimatedContextTokens`, sourced from `context.messages` —
+already windowed down to `maxEstimatedContextTokens` (24,000 tokens by
+default) by `ChatContextBuilder.build` a few lines earlier, the
+existing, unrelated mechanism that decides what actually gets sent to
+the model each turn. Once a real conversation's true length passed
+that budget, this number simply stopped growing — a 200-message thread
+and a 20-message thread past that point reported the *same* estimate,
+because both got windowed down to the same ~24,000-token slice. Doing
+the math: for any model with a real context window bigger than
+roughly 26,700 tokens (24,000 ÷ 0.9), that capped estimate can
+*never* reach 90% of it, no matter how long the actual conversation
+gets — the trigger was, in practice, permanently unreachable for
+anything but a small-context model.
+
+Fixed to compute a fresh estimate over the full, untruncated
+`currentThread.messages` instead — the number that actually reflects
+whether the real conversation has grown enough to need compacting,
+independent of whatever `ChatContextBuilder` separately decides to
+send this particular turn.
 
 ## Architecture
 
