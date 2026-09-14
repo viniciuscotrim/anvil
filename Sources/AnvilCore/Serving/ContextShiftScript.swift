@@ -107,15 +107,40 @@ enum ContextShiftScript {
     DEFAULT_SUMMARY_BATCH_CHARS = 6000
     MEMORY_LOG_INTERVAL_SECONDS = 1.0
 
+    # The explicit attribution warning below (from "Every turn is
+    # labeled..." on) was added after a real, confirmed misattribution:
+    # reported live — "essa memoria foi a primeira que foi gerada ...
+    # mas ela assim como as demais o pipeline está confundindo as
+    # personas ... foi a IA que ficou surpresa que eu encontrei o
+    # numero no Linkedin" — a bullet said the *User* was surprised to
+    # find a character's phone number on LinkedIn, when the raw
+    # transcript showed the *Assistant*, speaking in character as that
+    # persona in first person ("I'll be honest — I'm a little
+    # surprised to see this"), expressing that surprise. Confirmed
+    # directly against the real, saved thread export, not guessed at.
+    # A small model summarizing plain "User:"/"Assistant:"-labeled
+    # dialogue has no inherent reason to keep a first-person statement
+    # pinned to the turn it came from once it's paraphrasing into
+    # third-person bullets — this instruction exists specifically to
+    # counter that.
     HIDDEN_SYSTEM_PROMPT = (
         "You are Anvil's internal context-compaction assistant. You will be shown "
-        "an excerpt from an older part of a conversation between a user and an AI "
-        "assistant. Summarize it into concise bullet points capturing every "
-        "durable decision, established fact, and the logical flow of the "
-        "discussion — write in the same language the excerpt itself is in. Do "
-        "not address the user directly, do not add commentary or preamble, and "
-        "never invent information that isn't in the excerpt. Return only the "
-        "bullet points, nothing else."
+        "an excerpt from an older part of a conversation, formatted as alternating "
+        "turns labeled 'User:' (the human) and 'Assistant:' (the AI's reply, which "
+        "may itself be written in character, in first person, as a named persona "
+        "the Assistant is roleplaying). Summarize it into concise bullet points "
+        "capturing every durable decision, established fact, and the logical flow "
+        "of the discussion — write in the same language the excerpt itself is in. "
+        "Every turn is labeled with who actually said it — attribute every "
+        "action, feeling, or statement in your summary to that same speaker, "
+        "never the other one. A first-person statement inside an 'Assistant:' "
+        "turn (for example, the Assistant saying \"I'm surprised\") belongs to "
+        "the Assistant or its persona, never to the User, even when the "
+        "Assistant is speaking in character using its own name — do not swap, "
+        "merge, or reverse which speaker did or felt something. Do not address "
+        "the user directly, do not add commentary or preamble, and never invent "
+        "information that isn't in the excerpt. Return only the bullet points, "
+        "nothing else."
     )
 
 
@@ -737,7 +762,34 @@ enum ContextShiftScript {
         return "\n".join(lines)
 
 
-    def summarize(phi4_model_path: Path, old_messages: list[dict]) -> str:
+    def build_summarization_user_content(excerpt: str, system_prompt: Optional[str]) -> str:
+        """Grounds Phi-4 on who the Assistant is actually playing in
+        this conversation before handing it the excerpt itself —
+        without this, a small model summarizing plain "User:"/
+        "Assistant:"-labeled dialogue has nothing telling it the
+        Assistant might be speaking in character as a named persona,
+        which is exactly what led to the real misattribution
+        `HIDDEN_SYSTEM_PROMPT`'s own doc comment describes. Returns the
+        excerpt unchanged when there's no system prompt to ground with
+        (a thread with no custom persona at all). Truncated to 1000
+        characters: this only needs enough of a custom system prompt
+        to establish who's who, not the full instructions verbatim —
+        a very long one would otherwise crowd out the actual excerpt
+        in a small model's limited context.
+        """
+        if not system_prompt or not system_prompt.strip():
+            return excerpt
+        grounding = system_prompt.strip()[:1000]
+        return (
+            "For context, the Assistant in this conversation follows these "
+            "instructions (it may be roleplaying as a named persona — treat any "
+            "first-person statement in an Assistant turn as belonging to that "
+            "persona, never to the User):\n"
+            f"{grounding}\n\n---\n\n{excerpt}"
+        )
+
+
+    def summarize(phi4_model_path: Path, old_messages: list[dict], system_prompt: Optional[str] = None) -> str:
         from mlx_lm import load, generate
 
         with MemoryMonitor("summarize") as monitor:
@@ -753,7 +805,7 @@ enum ContextShiftScript {
                     continue
                 conversation = [
                     {"role": "system", "content": HIDDEN_SYSTEM_PROMPT},
-                    {"role": "user", "content": excerpt},
+                    {"role": "user", "content": build_summarization_user_content(excerpt, system_prompt)},
                 ]
                 prompt = tokenizer.apply_chat_template(conversation, add_generation_prompt=True)
                 text = generate(model, tokenizer, prompt=prompt, max_tokens=800, verbose=False)
@@ -767,9 +819,9 @@ enum ContextShiftScript {
         return "\n".join(part for part in bullet_summaries if part)
 
 
-    def run_summarization_phase(old_messages: list[dict], config: "PipelineConfig") -> str:
+    def run_summarization_phase(old_messages: list[dict], config: "PipelineConfig", system_prompt: Optional[str] = None) -> str:
         emit("phase_started", phase="summarize")
-        summary = summarize(config.phi4_model_path, old_messages)
+        summary = summarize(config.phi4_model_path, old_messages, system_prompt)
         emit("phase_completed", phase="summarize", summary_chars=len(summary))
         return summary
 
@@ -809,7 +861,7 @@ enum ContextShiftScript {
         emit("shift_started", total_messages=len(messages), old_messages=len(old_messages), intact_messages=len(intact_messages))
 
         text_chunks, code_chunks = run_rag_phase(old_messages, config)
-        summary = run_summarization_phase(old_messages, config)
+        summary = run_summarization_phase(old_messages, config, system_prompt=thread.get("system_prompt"))
 
         payload = {
             "system_prompt": thread.get("system_prompt"),
@@ -870,6 +922,27 @@ enum ContextShiftScript {
         oversized = [{"role": "user", "content": "y" * 1000}]
         check("chunk_messages keeps an oversized message as its own batch",
               chunk_messages(oversized, max_chars=10) == [oversized])
+
+        # --- format_excerpt / build_summarization_user_content -----------------
+        excerpt = format_excerpt([
+            {"role": "user", "content": "Hello Sofia! I found this number on your LinkedIn."},
+            {"role": "assistant", "content": "I'll be honest, I'm a little surprised to see this."},
+        ])
+        check("format_excerpt labels each turn with who actually said it",
+              excerpt == "User: Hello Sofia! I found this number on your LinkedIn.\n"
+                         "Assistant: I'll be honest, I'm a little surprised to see this.")
+        check("build_summarization_user_content passes the excerpt through unchanged with no persona to ground with",
+              build_summarization_user_content(excerpt, None) == excerpt)
+        check("build_summarization_user_content passes the excerpt through unchanged for a blank system prompt",
+              build_summarization_user_content(excerpt, "   ") == excerpt)
+        grounded = build_summarization_user_content(excerpt, "You are Sofia, warm and a little guarded.")
+        check("build_summarization_user_content grounds the excerpt with the persona's own system prompt",
+              "You are Sofia, warm and a little guarded." in grounded)
+        check("build_summarization_user_content still includes the excerpt itself after grounding",
+              grounded.endswith(excerpt))
+        long_prompt = "z" * 5000
+        check("build_summarization_user_content truncates an overly long system prompt rather than crowding out the excerpt",
+              len(build_summarization_user_content(excerpt, long_prompt)) < len(long_prompt) + len(excerpt))
 
         # --- LocalVectorStore round trip --------------------------------------
         with tempfile.TemporaryDirectory() as tmp:

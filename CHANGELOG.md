@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.24.2-summarizer-persona-attribution-fix] - 2026-09-14
+
+### Fixed
+- **The compaction summarizer (Phi-4) was misattributing who said or
+  felt what in a roleplay conversation** — reported live, and
+  confirmed directly against a real thread's raw export: "essa memoria
+  foi a primeira que foi gerada ... mas ela assim como as demais o
+  pipeline está confundindo as personas ... foi a IA que ficou
+  surpresa que eu encontrei o numero no Linkedin ... leia os raws e
+  vai confirmar." A generated bullet read "User reconnects with Sofia
+  on LinkedIn, surprised to see her number" — but the raw transcript
+  showed the *Assistant*, speaking in character as Sofia in first
+  person ("I'll be honest — I'm a little surprised to see this"),
+  expressing that surprise, not the user. Root cause: `format_excerpt`
+  labels each turn plainly as `User:`/`Assistant:` before handing it to
+  Phi-4, and the summarization prompt (`HIDDEN_SYSTEM_PROMPT`) never
+  told the model those labels needed to stay pinned to whichever
+  speaker actually said each thing once paraphrased into third-person
+  bullets — nor did it have any idea the Assistant might be roleplaying
+  as a named persona at all, since the thread's own system prompt (the
+  persona's actual instructions) was never passed into the
+  summarization phase in the first place.
+  - `HIDDEN_SYSTEM_PROMPT` now explicitly instructs Phi-4 to keep every
+    action, feeling, or statement attributed to whichever speaker's
+    turn it actually appeared in, and warns specifically against the
+    exact failure mode observed (a first-person Assistant statement
+    getting attributed to the User).
+  - A new `build_summarization_user_content` grounds each excerpt with
+    the thread's own system prompt (truncated to 1000 characters) when
+    one exists — telling Phi-4 who the Assistant is actually playing
+    before it ever sees the dialogue, so it has a real chance at
+    correct attribution instead of guessing from bare dialogue alone.
+  - Verified directly against the real, unmodified pipeline script: 6
+    new self-test checks (`format_excerpt`'s own labeling, grounding
+    with/without a persona, truncation of an overly long one) pass
+    alongside all existing coverage.
+
 ## [0.24.1-reject-all-memory-suggestions] - 2026-09-14
 
 ### Added

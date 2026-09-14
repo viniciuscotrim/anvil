@@ -9,7 +9,24 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.24.1-reject-all-memory-suggestions ("Reject All" Next to "Accept All")
+## Current release: 0.24.2-summarizer-persona-attribution-fix (Compaction Summaries No Longer Swap Who Said What)
+
+Reported live, confirmed against a real thread's raw export: "essa
+memoria foi a primeira que foi gerada ... mas ela assim como as demais
+o pipeline está confundindo as personas ... foi a IA que ficou
+surpresa que eu encontrei o numero no Linkedin ... leia os raws e vai
+confirmar." A generated memory said the User was surprised to find a
+persona's phone number on LinkedIn; the raw transcript showed the
+Assistant (in character as that persona) expressing the surprise.
+Phi-4 had two real gaps: `HIDDEN_SYSTEM_PROMPT` never told it to keep
+attribution pinned to the labeled speaker once paraphrasing into
+bullets, and the persona's own system prompt was never even passed
+into the summarization phase, so it had no idea the Assistant might be
+roleplaying at all. Both fixed — see "Fixing the summarizer's persona
+attribution" below and [CHANGELOG.md](CHANGELOG.md) for the full
+writeup.
+
+It follows 0.24.1-reject-all-memory-suggestions ("Reject All" Next to "Accept All")
 
 Requested live: "adicione um botão reject all ao lado de accept all no
 menu memórias." A new `rejectAllMemorySuggestions` dismisses every
@@ -345,7 +362,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.24.1-reject-all-memory-suggestions`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.24.2-summarizer-persona-attribution-fix`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -2294,6 +2311,62 @@ value type means `currentThread.messages.append(...)` reassigns the
 whole `currentThread` property too, so a naive unconditional reset
 would have wiped out a user's scroll-back progress on every single new
 message.
+
+## Fixing the summarizer's persona attribution
+
+Reported live, immediately after recovering a real thread's raw
+history through Time Machine and reading the generated memory back
+against it: "essa memoria foi a primeira que foi gerada ... mas ela
+assim como as demais o pipeline está confundindo as personas ... foi a
+IA que ficou surpresa que eu encontrei o numero no Linkedin ... leia os
+raws e vai confirmar."
+
+**Confirmed directly, not guessed at.** The recovered thread's first
+two messages: the User ("Hello Sofia! I found this number on your
+Linkedin profile...") reaching out, and the Assistant — replying in
+character, in first person, as the persona named Sofia — saying "I'll
+be honest, I'm a little surprised to see this." The compaction pipeline
+had generated: "User reconnects with Sofia on LinkedIn, surprised to
+see her number" — attributing the Assistant's own stated feeling to
+the User instead.
+
+**Two real gaps, both in `summarize()`'s own prompt construction:**
+- `format_excerpt` labels each turn plainly as `User:`/`Assistant:`
+  before handing the excerpt to Phi-4 — accurate, but `HIDDEN_SYSTEM_PROMPT`
+  never told the model those labels needed to stay pinned to whichever
+  speaker actually said each thing, once it started paraphrasing
+  dialogue into third-person bullet points. A small model has no
+  inherent reason to keep that straight on its own.
+- The thread's own system prompt — a persona's real instructions (`You
+  are Sofia, ...`), the same text `ChatViewModel.composedSystemPrompt`
+  builds for every live turn — was captured in `ThreadExport.systemPrompt`
+  (`thread["system_prompt"]` on the Python side) but never actually
+  *used* anywhere in the summarization phase. Phi-4 had literally no
+  way to know the Assistant might be roleplaying as a named character
+  at all.
+
+**Fixed with a stronger instruction plus real grounding.**
+`HIDDEN_SYSTEM_PROMPT` now explicitly warns against the exact failure
+observed — a first-person statement inside an `Assistant:` turn
+belongs to the Assistant (or its persona), never the User, even when
+speaking in character using its own name. A new, unit-tested
+`build_summarization_user_content(excerpt, system_prompt)` prepends
+the persona's own system prompt (truncated to 1000 characters — enough
+to establish who's who without crowding out the actual excerpt in a
+small model's limited context) ahead of the excerpt whenever the
+thread has one; `run_compaction` now threads `thread.get("system_prompt")`
+through `run_summarization_phase` into `summarize()` to reach it. A
+thread with no custom persona at all (`system_prompt` is `None` or
+blank) summarizes exactly as before — nothing to ground with, so
+nothing changes.
+
+Verified directly against the real, unmodified pipeline script: 6 new
+self-test checks (`format_excerpt`'s own labeling; grounding with and
+without a persona; the excerpt itself surviving grounding intact;
+truncation of an overly long system prompt) pass alongside all
+existing coverage. Actually confirming the *summarization quality*
+improved needs a real run against real model weights — self-test
+deliberately covers only what doesn't need a model on disk.
 
 ## Architecture
 
