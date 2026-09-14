@@ -221,7 +221,7 @@ final class ChatViewModel: ObservableObject {
         self.macSyncAccess = appSettings.macSyncAccess
         self.isCloudSyncEnabled = appSettings.isCloudSyncEnabled
         self.syncServer = AnvilSyncServer(
-            threadStore: threadStore, profileStore: profileStore, memoryStore: memoryStore,
+            threadStore: threadStore, profileStore: profileStore, memoryStore: memoryStore, suggestionStore: suggestionStore,
             modelRegistry: modelRegistry, sessions: sessions, imageSessions: imageSessions, requirements: requirements)
         self.cloudSync = CloudSyncEngine(
             threadStore: threadStore, profileStore: profileStore, memoryStore: memoryStore,
@@ -401,6 +401,21 @@ final class ChatViewModel: ObservableObject {
     }
 
     func loadInitialState() async {
+        // Requested live: "As memorias geradas pelo pipeline no PC não
+        // aparecem pra revisão ou edição no iPhone .. uma vez geradas
+        // elas já tem que sincronizar." A record created on another
+        // device only actually lands on this one's local disk once
+        // `CKSyncEngine`'s own `fetchChanges()` runs — which otherwise
+        // only ever happened once, inside `applyCloudSyncSettingsIfNeeded`
+        // right after this app launched. `loadInitialState()` already
+        // reruns every time Chat or Memory reappears (switching tabs
+        // and back); pulling first, here, means returning to either
+        // tab is itself what surfaces a change made on another device,
+        // not only this device's own next local edit (previously the
+        // only other thing that ever nudged a sync).
+        if isCloudSyncEnabled {
+            await cloudSync.syncNow()
+        }
         let savedThreads = await threadStore.all()
         let temporary = temporaryThreads.values.sorted { $0.updatedAt > $1.updatedAt }
         allThreads = temporary + savedThreads.filter { temporaryThreads[$0.id] == nil }

@@ -44,6 +44,9 @@ import Network
 /// GET    /v1/anvil/memories         -> [ChatMemory]
 /// PUT    /v1/anvil/memories         <- ChatMemory   (upsert one)
 /// DELETE /v1/anvil/memories/{id}
+/// GET    /v1/anvil/suggestions      -> [ChatMemorySuggestion]
+/// PUT    /v1/anvil/suggestions      <- ChatMemorySuggestion (upsert one)
+/// DELETE /v1/anvil/suggestions/{id}
 /// GET    /v1/anvil/models           -> [ModelEntry]           (every registered model)
 /// GET    /v1/anvil/sessions         -> [ModelSessionWire]      (every currently loaded one)
 /// POST   /v1/anvil/sessions/load    <- {modelID, access, port?}
@@ -60,6 +63,15 @@ public actor AnvilSyncServer {
     private let threadStore: ChatThreadStore
     private let profileStore: ChatProfileStore
     private let memoryStore: ChatMemoryStore
+    // A real, reported gap: suggestions (unapproved digest output) had
+    // no route here at all — only threads/profiles/memories did — so
+    // "Suggest from Thread" or an automatic Context Shift compaction
+    // running on the Mac never reached an iPhone connected over Mac
+    // Sync (the local-network path; separate from iCloud sync, which
+    // has its own equivalent fix). Reported live: "As memorias
+    // geradas pelo pipeline no PC não aparecem pra revisão ou edição
+    // no iPhone .. uma vez geradas elas já tem que sincronizar."
+    private let suggestionStore: ChatMemorySuggestionStore
     private let modelRegistry: ModelRegistry?
     private let sessions: ModelSessionManager?
     private let imageSessions: ImageSessionManager?
@@ -75,6 +87,7 @@ public actor AnvilSyncServer {
         threadStore: ChatThreadStore = ChatThreadStore(),
         profileStore: ChatProfileStore = ChatProfileStore(),
         memoryStore: ChatMemoryStore = ChatMemoryStore(),
+        suggestionStore: ChatMemorySuggestionStore = ChatMemorySuggestionStore(),
         modelRegistry: ModelRegistry? = nil,
         sessions: ModelSessionManager? = nil,
         imageSessions: ImageSessionManager? = nil,
@@ -83,6 +96,7 @@ public actor AnvilSyncServer {
         self.threadStore = threadStore
         self.profileStore = profileStore
         self.memoryStore = memoryStore
+        self.suggestionStore = suggestionStore
         self.modelRegistry = modelRegistry
         self.sessions = sessions
         self.imageSessions = imageSessions
@@ -229,6 +243,23 @@ public actor AnvilSyncServer {
         case ("DELETE", "memories", .some(let idString)):
             guard let id = UUID(uuidString: idString) else { return RouteResponse(status: 400, body: nil) }
             try await memoryStore.delete(id: id)
+            return RouteResponse(status: 204, body: nil)
+
+        case ("GET", "suggestions", nil):
+            return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await suggestionStore.all()))
+        case ("GET", "suggestions", .some("deleted")):
+            return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await suggestionStore.deletionTimestamps()))
+        case ("PUT", "suggestions", nil):
+            let suggestion = try JSONDecoder.anvil.decode(ChatMemorySuggestion.self, from: request.body)
+            if let existing = await suggestionStore.all().first(where: { $0.id == suggestion.id }),
+               existing.updatedAt >= suggestion.updatedAt {
+                return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(existing))
+            }
+            let saved = try await suggestionStore.upsertPreservingTimestamp(suggestion)
+            return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(saved))
+        case ("DELETE", "suggestions", .some(let idString)):
+            guard let id = UUID(uuidString: idString) else { return RouteResponse(status: 400, body: nil) }
+            try await suggestionStore.delete(id: id)
             return RouteResponse(status: 204, body: nil)
 
         case ("GET", "models", nil):

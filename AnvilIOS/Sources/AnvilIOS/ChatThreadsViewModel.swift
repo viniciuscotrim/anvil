@@ -201,6 +201,14 @@ final class ChatThreadsViewModel {
     private var hasLoadedInitialState = false
 
     func loadInitialState() async {
+        // Requested live: "As memorias geradas pelo pipeline no PC não
+        // aparecem pra revisão ou edição no iPhone .. uma vez geradas
+        // elas já tem que sincronizar." Mirrors Mac's own
+        // `ChatViewModel.loadInitialState` — see its doc comment for
+        // why this has to run here, not just once at launch.
+        if isCloudSyncEnabled {
+            await cloudSync.syncNow()
+        }
         allThreads = await store.all()
         memories = await memoryStore.all()
         if !isSuggestingMemories {
@@ -278,6 +286,13 @@ final class ChatThreadsViewModel {
         do {
             try await Self.mergeThreads(local: store, remote: syncClient, host: connection.host)
             try await Self.mergeMemories(local: memoryStore, remote: syncClient, host: connection.host)
+            // Only while nothing is actively being analyzed right now
+            // — same guard `loadInitialState` uses — a mid-run refresh
+            // would otherwise stomp on suggestions this device's own
+            // loop is still appending.
+            if !isSuggestingMemories {
+                try await Self.mergeSuggestions(local: suggestionStore, remote: syncClient, host: connection.host)
+            }
             await profilesViewModel.mergeSync(host: connection.host)
             isMacSyncAvailable = true
         } catch {
@@ -285,6 +300,9 @@ final class ChatThreadsViewModel {
         }
         allThreads = await store.all()
         memories = await memoryStore.all()
+        if !isSuggestingMemories {
+            memorySuggestions = await suggestionStore.all()
+        }
         // If the thread being actively viewed just got a same-ID update
         // from the other side (e.g. the Mac itself answered a message
         // sent from here, or vice versa), pick that up immediately
@@ -364,6 +382,45 @@ final class ChatThreadsViewModel {
             case let (nil, r?):
                 if localTombstones[id] != nil {
                     try? await remote.deleteMemory(id: id, host: host)
+                } else {
+                    _ = try? await local.upsertPreservingTimestamp(r)
+                }
+            case (nil, nil):
+                break
+            }
+        }
+    }
+
+    /// Mirrors `mergeMemories` exactly, for suggestions — a real,
+    /// reported gap this closes: nothing merged these at all before,
+    /// on either side (`AnvilSyncServer`/`AnvilSyncClient` had no
+    /// routes/methods for them either). Reported live: "As memorias
+    /// geradas pelo pipeline no PC não aparecem pra revisão ou edição
+    /// no iPhone .. uma vez geradas elas já tem que sincronizar."
+    private static func mergeSuggestions(local: ChatMemorySuggestionStore, remote: AnvilSyncClient, host: String) async throws {
+        let localAll = await local.all()
+        let remoteAll = try await remote.suggestions(host: host)
+        let localByID = Dictionary(uniqueKeysWithValues: localAll.map { ($0.id, $0) })
+        let remoteByID = Dictionary(uniqueKeysWithValues: remoteAll.map { ($0.id, $0) })
+        let localTombstones = await local.deletionTimestamps()
+        let remoteTombstones = (try? await remote.deletedSuggestionIDs(host: host)) ?? [:]
+        for id in Set(localByID.keys).union(remoteByID.keys) {
+            switch (localByID[id], remoteByID[id]) {
+            case let (l?, r?) where l.updatedAt > r.updatedAt:
+                _ = try? await remote.upsertSuggestion(l, host: host)
+            case let (l?, r?) where r.updatedAt > l.updatedAt:
+                _ = try? await local.upsertPreservingTimestamp(r)
+            case (.some, .some):
+                break
+            case let (l?, nil):
+                if remoteTombstones[id] != nil {
+                    try? await local.delete(id: id)
+                } else {
+                    _ = try? await remote.upsertSuggestion(l, host: host)
+                }
+            case let (nil, r?):
+                if localTombstones[id] != nil {
+                    try? await remote.deleteSuggestion(id: id, host: host)
                 } else {
                     _ = try? await local.upsertPreservingTimestamp(r)
                 }

@@ -82,6 +82,32 @@ struct AnvilSyncClient {
         try await get([UUID: Date].self, host: host, path: "memories/deleted")
     }
 
+    // MARK: - Memory suggestions
+    //
+    // A real, reported gap: these had no client-side methods at all,
+    // matching the same absence on the server side — a digest run on
+    // the Mac never reached an iPhone connected over Mac Sync.
+    // Reported live: "As memorias geradas pelo pipeline no PC não
+    // aparecem pra revisão ou edição no iPhone .. uma vez geradas elas
+    // já tem que sincronizar."
+
+    func suggestions(host: String) async throws -> [ChatMemorySuggestion] {
+        try await get([ChatMemorySuggestion].self, host: host, path: "suggestions")
+    }
+
+    @discardableResult
+    func upsertSuggestion(_ suggestion: ChatMemorySuggestion, host: String) async throws -> ChatMemorySuggestion {
+        try await put(suggestion, returning: ChatMemorySuggestion.self, host: host, path: "suggestions")
+    }
+
+    func deleteSuggestion(id: UUID, host: String) async throws {
+        try await delete(host: host, path: "suggestions/\(id.uuidString)")
+    }
+
+    func deletedSuggestionIDs(host: String) async throws -> [UUID: Date] {
+        try await get([UUID: Date].self, host: host, path: "suggestions/deleted")
+    }
+
     // MARK: - Model management
 
     /// Every model registered on the Mac (`ModelRegistry`) — downloaded

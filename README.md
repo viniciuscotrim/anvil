@@ -9,7 +9,33 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.25.0-memory-relevance-scoring (AI-Scored, Editable Memory Relevance — And a Feedback Loop)
+## Current release: 0.26.0-suggestion-sync-fix (Memory Suggestions Actually Reach the Other Device Now)
+
+Reported live: "As memorias geradas pelo pipeline no PC não aparecem
+pra revisão ou edição no iPhone .. uma vez geradas elas já tem que
+sincronizar. Agora poderem ser utilizadas no chat é outra coisa e sim
+precisa da aprovação." Two real, separate gaps, both confirmed
+directly in the code:
+
+- **Mac Sync (local network)**: suggestions had no route/client
+  methods at all — `AnvilSyncServer`/`AnvilSyncClient` only ever
+  covered threads/profiles/memories. Both now mirror the existing
+  `memories` support exactly, and iOS's own 3-second merge loop picks
+  them up the same way it already does memories.
+- **iCloud sync**: suggestions *were* being pushed correctly the
+  moment they're created, but nothing on the receiving device ever
+  proactively pulled — the one and only fetch happened once, at app
+  launch. `loadInitialState` (both platforms) now also syncs first
+  whenever Chat or Memory reappears, so opening either tab is what
+  surfaces a change from another device.
+
+Using a synced suggestion in chat still needs the same explicit
+approval as ever, on either device — unchanged.
+
+See "Fixing suggestion sync" below, and [CHANGELOG.md](CHANGELOG.md)
+for the full writeup.
+
+It follows 0.25.0-memory-relevance-scoring (AI-Scored, Editable Memory Relevance — And a Feedback Loop)
 
 Requested live, after a first real digest surfaced 100+ suggestions in
 one pass: "+100 memorias pra um primeiro load, foram muitas. Ao
@@ -391,7 +417,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.25.0-memory-relevance-scoring`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.26.0-suggestion-sync-fix`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -2495,6 +2521,63 @@ correction logged on iPhone stays local to that device (`RelevanceFeedbackStore`
 is per-device, by design) — it edits what's shown there, but doesn't
 feed Mac's own calibration unless the same correction is also made on
 Mac.
+
+## Fixing suggestion sync
+
+Reported live: "As memorias geradas pelo pipeline no PC não aparecem
+pra revisão ou edição no iPhone .. uma vez geradas elas já tem que
+sincronizar. Agora poderem ser utilizadas no chat é outra coisa e sim
+precisa da aprovação." The last sentence was already true and stayed
+true — accepting is still the only thing that turns a suggestion into
+something the AI can actually read into a chat request, on either
+platform. The first half wasn't: a suggestion generated on the Mac
+(automatic Context Shift trigger, or manual "Suggest from Thread")
+genuinely never reached an iPhone at all, through either of this app's
+two sync mechanisms — confirmed directly in each, not guessed at.
+
+**Mac Sync (the local-network path, `AnvilSyncServer`/`AnvilSyncClient`)
+had no suggestion support whatsoever.** Its own route list — `GET`/
+`PUT`/`DELETE` for `threads`, `profiles`, `memories` — simply never
+grew a fourth `suggestions` entry when suggestions themselves were
+built; `AnvilSyncClient` had no matching methods, and iOS's own
+`mergeSyncNow` (the loop that runs every 3 seconds while connected to
+a Mac, already merging threads and memories two-way, last-write-wins
+by `updatedAt`) had nothing calling into them either. Both sides now
+mirror the existing `memories` support line for line: `GET
+/v1/anvil/suggestions`, `PUT /v1/anvil/suggestions`, `DELETE
+/v1/anvil/suggestions/{id}`, plus the `/deleted` tombstone endpoint
+every other collection already has, and a new `mergeSuggestions` —
+copied from `mergeMemories`, same tombstone-aware union — runs
+alongside it, guarded against running mid-digest the same way
+`loadInitialState` already guards its own suggestion reload.
+
+**iCloud sync was pushing correctly the whole time — the gap was
+entirely on the *pull* side.** `createMemorySuggestion` already called
+`cloudSync.markSuggestionChanged` and the enclosing loop already
+called `syncNow()` right after, so a newly-created suggestion was
+genuinely queued and sent to CKSyncEngine the moment it existed. But
+`CKSyncEngine.fetchChanges()` — the only thing that actually pulls a
+remote change down onto *this* device's local disk — ran exactly once
+per app launch, inside `applyCloudSyncSettingsIfNeeded`'s own
+`cloudSync.start()`. Every other place cloud sync gets nudged
+(`markThreadChanged`/`markMemoryChanged`/etc. followed by `syncNow()`)
+is triggered by a *local* edit on *this* device — none of that helps a
+device that made no local edit at all and is just opening the Memory
+tab to see what the other device generated. `loadInitialState` (Mac's
+`ChatViewModel` and iOS's `ChatThreadsViewModel` — both already rerun
+every time Chat or Memory reappears, not just once) now calls
+`cloudSync.syncNow()` first, when cloud sync is enabled, before
+reading any of the local stores it populates its published state from
+— so returning to either tab is itself what surfaces a suggestion (or
+thread, or memory) from another device, not only this device's own
+next local edit.
+
+Verified by structural mirroring against the already-correct
+`memories` code on both sides (route handlers, client methods, and the
+merge function itself are line-for-line the same shape, adapted type
+by type) rather than a fresh implementation — the lowest-risk way to
+extend an established, working pattern to a fourth collection that
+should have had it from the start.
 
 ## Architecture
 
