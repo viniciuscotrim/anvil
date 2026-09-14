@@ -113,7 +113,21 @@ struct NativeChatView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
-                            ForEach(threads.currentThread.messages) { message in
+                            // Requested live: "Ele pode ir carregando a
+                            // cada X mensagens pra não sobrecarregar o
+                            // app." A plain button, not an auto-load-
+                            // on-scroll trigger — this row sits at the
+                            // very top of a long thread's initial view
+                            // (which opens scrolled to the *bottom*,
+                            // the `.onChange` below), so it's never
+                            // actually on-screen until scrolled all the
+                            // way up to.
+                            if threads.hasEarlierMessagesToLoad {
+                                Button("Load Earlier Messages") { threads.loadEarlierMessages() }
+                                    .frame(maxWidth: .infinity)
+                                    .id("load-earlier")
+                            }
+                            ForEach(threads.displayedMessages) { message in
                                 bubble(message).id(message.id)
                             }
                             if isLocalGenerating {

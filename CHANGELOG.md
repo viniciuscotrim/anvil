@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.24.0-full-history-never-compacted] - 2026-09-14
+
+### Changed
+- **Context Shift no longer replaces a conversation's stored history
+  with a summary — the full transcript is always there, forever**,
+  requested live: "Eu não quero ver o resumo da compactação quando eu
+  rolar pro histórico da conversa, eu quero ver ela inteira, cada
+  palavra e mensagem desde a primeira. Ele pode ir carregando a cada X
+  mensagens pra não sobrecarregar o app, mas não posso ver as memorias
+  geradas no chat. As memorias são exclusivas do menu Memorias."
+  `handleContextShiftReady` used to reconstruct
+  `currentThread.messages` as `[recap message] + [last 5 intact
+  messages]`, discarding everything older — that reconstruction is
+  gone entirely. A completed compaction pass now only ever produces
+  memory suggestions (still needing the same explicit approval as
+  ever), never touches the thread itself, and never inserts a
+  synthetic "🗜️ This conversation was compacted…" message into the
+  transcript. What still keeps a live turn's request within the active
+  model's context window is unrelated and unaffected: `send()`'s own
+  `ChatContextBuilder.build` already windows the full thread down
+  before ever sending it to the model, independent of whether a
+  compaction pass has ever run — nothing about that changed.
+- **The transcript now loads in pages instead of mounting an entire,
+  potentially very long thread at once**, on both platforms — the
+  other half of the same request: "Ele pode ir carregando a cada X
+  mensagens pra não sobrecarregar o app." A thread opens showing its
+  most recent 60 messages (scrolled to the bottom, as always); a "Load
+  Earlier Messages" button at the top of what's currently shown reveals
+  another 60 on each tap, all the way back to the very first message.
+  The full history is always intact in `currentThread.messages` (and
+  on disk) — this only limits what's actually mounted into the
+  transcript's view hierarchy at once, so scrolling back through a
+  long, never-compacted thread stays responsive. Pagination resets to
+  the most recent page whenever the thread itself actually switches,
+  not on every new message within the same one.
+
 ## [0.23.0-memory-dedup-and-update-diffs] - 2026-09-14
 
 ### Added

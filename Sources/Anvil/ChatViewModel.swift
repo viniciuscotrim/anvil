@@ -40,7 +40,19 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    @Published var currentThread: ChatThread
+    /// Resets `displayedMessageCount` back to one page on an actual
+    /// switch to a different thread (`oldValue.id != currentThread.id`)
+    /// — not on every mutation *within* the same thread (`currentThread
+    /// .messages.append(...)` reassigns this whole property too, since
+    /// `ChatThread` is a value type, so a plain "always reset" here
+    /// would wipe out pagination progress on every single new message).
+    @Published var currentThread: ChatThread {
+        didSet {
+            if oldValue.id != currentThread.id {
+                displayedMessageCount = Self.messageDisplayPageSize
+            }
+        }
+    }
     @Published private(set) var allThreads: [ChatThread] = []
     @Published private(set) var availableProfiles: [ChatProfile] = []
     @Published private(set) var memories: [ChatMemory] = []
@@ -336,6 +348,41 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// How many of the most recent `visibleMessages` are actually
+    /// mounted into the transcript's view hierarchy at once — requested
+    /// live, once Context Shift stopped ever compacting a thread's own
+    /// stored history: "Eu não quero ver o resumo da compactação
+    /// quando eu rolar pro histórico da conversa, eu quero ver ela
+    /// inteira, cada palavra e mensagem desde a primeira. Ele pode ir
+    /// carregando a cada X mensagens pra não sobrecarregar o app." The
+    /// full history is always still in `currentThread.messages` (and
+    /// persisted to disk) — this only limits what `ChatView.messageList`
+    /// renders at once, so scrolling a very long thread stays
+    /// responsive regardless of how far back it goes.
+    private static let messageDisplayPageSize = 60
+    @Published private(set) var displayedMessageCount = messageDisplayPageSize
+
+    /// What `ChatView.messageList` actually renders — the most recent
+    /// `displayedMessageCount` of `visibleMessages`.
+    var displayedMessages: [ChatMessage] {
+        let all = visibleMessages
+        guard all.count > displayedMessageCount else { return all }
+        return Array(all.suffix(displayedMessageCount))
+    }
+
+    /// Whether there's anything further back than what's currently
+    /// displayed — drives whether `messageList` shows a "Load Earlier
+    /// Messages" control at all.
+    var hasEarlierMessagesToLoad: Bool {
+        visibleMessages.count > displayedMessageCount
+    }
+
+    /// Reveals another page of older messages, scrolled up from the
+    /// top of what's currently shown.
+    func loadEarlierMessages() {
+        displayedMessageCount = min(visibleMessages.count, displayedMessageCount + Self.messageDisplayPageSize)
+    }
+
     func loadInitialState() async {
         let savedThreads = await threadStore.all()
         let temporary = temporaryThreads.values.sorted { $0.updatedAt > $1.updatedAt }
@@ -454,26 +501,29 @@ final class ChatViewModel: ObservableObject {
         await sessions.unload(modelID: modelID)
     }
 
-    /// Phase 4: reconstructs the thread from the compacted payload —
-    /// `[Instruções de Sistema] + [Resumo] + [últimas 5 mensagens
-    /// intactas]` — reloads the model that was active before, saves
-    /// the summary as a suggestion needing the same explicit approval
-    /// "Suggest from Thread" already requires (requested live: "todos
-    /// os resultados gerados de memória devem ser alocados e
-    /// solicitados aprovação como já acontece hoje no menu Memórias"),
-    /// and un-pauses sending.
+    /// Turns a completed compaction pass into memory suggestions only
+    /// — never touches `currentThread.messages` at all. Requested
+    /// live, overriding this phase's original design (Phase 4 used to
+    /// reconstruct the thread as `[Resumo] + [últimas 5 mensagens
+    /// intactas]`, replacing everything older): "Eu não quero ver o
+    /// resumo da compactação quando eu rolar pro histórico da
+    /// conversa, eu quero ver ela inteira, cada palavra e mensagem
+    /// desde a primeira ... As memorias são exclusivas do menu
+    /// Memorias." The full, original conversation now always stays
+    /// exactly as it was — this only ever mines memories out of it
+    /// (still needing the same explicit approval "Suggest from
+    /// Thread" already requires: "todos os resultados gerados de
+    /// memória devem ser alocados e solicitados aprovação como já
+    /// acontece hoje no menu Memórias"). What actually keeps a live
+    /// turn's request within the active model's context window is
+    /// unrelated and unaffected by any of this: `send()`'s own
+    /// `ChatContextBuilder.build` already windows the full thread down
+    /// before ever sending it, independent of whether a compaction
+    /// pass has ever run. `result.intactMessages` (Phase 4's original
+    /// tail-preservation payload) is deliberately unused now — there's
+    /// nothing left to preserve *from*, since nothing gets discarded.
     @MainActor
     private func handleContextShiftReady(_ result: ContextShiftCoordinator.ShiftResult) async {
-        let recap = ChatMessage(
-            role: .assistant,
-            content: "🗜️ This conversation was compacted to stay within memory limits. Summary of what came before:\n\n\(result.summary)",
-            modelDisplayName: "Context Shift"
-        )
-        currentThread.messages = [recap] + result.intactMessages
-        if !isTemporaryModeActive {
-            persistCurrentThread()
-        }
-
         // Requested live: "Na Memoria tudo que o processo rodou veio em
         // uma unica memoria gigante ... eu quero cada topico/bullet em
         // uma memoria pra aceitar individualmente." `summarize`'s own
@@ -492,16 +542,21 @@ final class ChatViewModel: ObservableObject {
         let rationale = "Automatic context-shift compaction — \(result.textChunksIndexed) text and "
             + "\(result.codeChunksIndexed) code chunks indexed alongside it."
         let scopedMemories = memories.filter { $0.appliesTo(threadID: currentThread.id) }
+        // No synthetic recap message exists to attach this to anymore
+        // — the most recent real message in the thread is the closest
+        // equivalent, same convention `suggestMemoriesFromCurrentThread`
+        // already uses for its own suggestions.
+        let lastMessageID = currentThread.messages.last?.id
         for bullet in MemoryBulletSplitter.split(result.summary) {
             switch classifyBullet(bullet, against: scopedMemories) {
             case .duplicate:
                 continue
             case .update(let memoryID):
                 await createMemorySuggestion(
-                    content: bullet, rationale: rationale, createdFromMessageID: recap.id, supersedesMemoryID: memoryID)
+                    content: bullet, rationale: rationale, createdFromMessageID: lastMessageID, supersedesMemoryID: memoryID)
             case .new:
                 await createMemorySuggestion(
-                    content: bullet, rationale: rationale, createdFromMessageID: recap.id, supersedesMemoryID: nil)
+                    content: bullet, rationale: rationale, createdFromMessageID: lastMessageID, supersedesMemoryID: nil)
             }
         }
         if isCloudSyncEnabled {

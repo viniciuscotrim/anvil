@@ -37,11 +37,47 @@ enum ChatSourceSelection: Equatable {
 /// equivalent, the same place Mac's own `ChatViewModel` keeps both.
 @Observable @MainActor
 final class ChatThreadsViewModel {
-    var currentThread = ChatThread(originDeviceName: DeviceIdentity.currentName)
+    /// Resets `displayedMessageCount` on an actual switch to a
+    /// different thread only (`oldValue.id != currentThread.id`), not
+    /// on every mutation *within* the same thread — see Mac's own
+    /// `ChatViewModel.currentThread` doc comment for why (`ChatThread`
+    /// is a value type, so `currentThread.messages.append(...)`
+    /// reassigns this whole property too).
+    var currentThread = ChatThread(originDeviceName: DeviceIdentity.currentName) {
+        didSet {
+            if oldValue.id != currentThread.id {
+                displayedMessageCount = Self.messageDisplayPageSize
+            }
+        }
+    }
     private(set) var allThreads: [ChatThread] = []
     private(set) var memories: [ChatMemory] = []
     private(set) var memorySuggestions: [ChatMemorySuggestion] = []
     private(set) var isSuggestingMemories = false
+    /// How many of the most recent messages are actually mounted into
+    /// the transcript's view hierarchy at once — mirrors Mac's own
+    /// `ChatViewModel.displayedMessageCount`/`.displayedMessages`; see
+    /// that type's doc comment for the request behind this
+    /// ("Ele pode ir carregando a cada X mensagens pra não sobrecarregar
+    /// o app"). The full history is always still in
+    /// `currentThread.messages`; this only limits what
+    /// `NativeChatView`'s transcript renders at once.
+    private static let messageDisplayPageSize = 60
+    private(set) var displayedMessageCount = messageDisplayPageSize
+
+    var displayedMessages: [ChatMessage] {
+        let all = currentThread.messages
+        guard all.count > displayedMessageCount else { return all }
+        return Array(all.suffix(displayedMessageCount))
+    }
+
+    var hasEarlierMessagesToLoad: Bool {
+        currentThread.messages.count > displayedMessageCount
+    }
+
+    func loadEarlierMessages() {
+        displayedMessageCount = min(currentThread.messages.count, displayedMessageCount + Self.messageDisplayPageSize)
+    }
     /// `(completed batches, total batches)` while `isSuggestingMemories`
     /// is true — see Mac's own `ChatViewModel.memorySuggestionProgress`
     /// doc comment for the real reported problem this fixes.

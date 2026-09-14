@@ -388,7 +388,26 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(chat.visibleMessages) { message in
+                    // Requested live: "Ele pode ir carregando a cada X
+                    // mensagens pra não sobrecarregar o app." The full
+                    // thread is always intact underneath
+                    // (`chat.visibleMessages`) — this just controls how
+                    // much of it is actually mounted at once. A plain
+                    // button rather than an auto-load-on-scroll trigger:
+                    // this row sits at the very top of a long thread's
+                    // initial view (which opens scrolled to the
+                    // *bottom*, the `.onChange` below), so it's never
+                    // actually on-screen until the user deliberately
+                    // scrolls all the way up to it.
+                    if chat.hasEarlierMessagesToLoad {
+                        HStack {
+                            Spacer()
+                            Button("Load Earlier Messages") { chat.loadEarlierMessages() }
+                            Spacer()
+                        }
+                        .id("load-earlier")
+                    }
+                    ForEach(chat.displayedMessages) { message in
                         bubble(for: message)
                             .id(message.id)
                     }

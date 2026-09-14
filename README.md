@@ -9,7 +9,32 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.23.0-memory-dedup-and-update-diffs (Memory Pipeline Dedup, and Update Suggestions With a Diff)
+## Current release: 0.24.0-full-history-never-compacted (Context Shift Never Touches the Transcript Anymore; Paged Loading)
+
+Requested live: "Eu não quero ver o resumo da compactação quando eu
+rolar pro histórico da conversa, eu quero ver ela inteira, cada
+palavra e mensagem desde a primeira. Ele pode ir carregando a cada X
+mensagens pra não sobrecarregar o app, mas não posso ver as memorias
+geradas no chat. As memorias são exclusivas do menu Memorias."
+
+- **Context Shift no longer reconstructs a thread's stored messages at
+  all.** `handleContextShiftReady` used to replace everything older
+  than the last 5 messages with a synthetic recap bubble; that's gone.
+  A completed compaction pass now only ever produces memory
+  suggestions — the transcript itself is untouched, forever. What
+  keeps a live turn's request within the model's context window is a
+  separate, already-existing mechanism (`ChatContextBuilder.build` in
+  `send()`) and is completely unaffected.
+- **The transcript loads in pages of 60 messages, on both platforms** —
+  a thread opens scrolled to the bottom as always, with a "Load
+  Earlier Messages" button revealing another page each tap, all the
+  way back to the first message ever sent. Nothing is ever discarded;
+  this only limits what's mounted into the view hierarchy at once.
+
+See "Full history, paged instead of compacted" below, and
+[CHANGELOG.md](CHANGELOG.md) for the full writeup.
+
+It follows 0.23.0-memory-dedup-and-update-diffs (Memory Pipeline Dedup, and Update Suggestions With a Diff)
 
 Asked while confirming how the memory pipeline reads a conversation:
 does it re-read the whole raw chat every run, or just what's new?
@@ -313,7 +338,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.23.0-memory-dedup-and-update-diffs`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.24.0-full-history-never-compacted`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -2211,6 +2236,57 @@ e negrito se for acrescentado."
   needed the exact same `supersedesMemoryID` handling as Mac's own to
   honor it rather than silently falling back to a duplicate new
   memory.
+
+## Full history, paged instead of compacted
+
+Requested live: "Eu não quero ver o resumo da compactação quando eu
+rolar pro histórico da conversa, eu quero ver ela inteira, cada
+palavra e mensagem desde a primeira. Ele pode ir carregando a cada X
+mensagens pra não sobrecarregar o app, mas não posso ver as memorias
+geradas no chat. As memorias são exclusivas do menu Memorias."
+
+**Context Shift's Phase 4 used to mutate the thread.** Every previous
+description of this feature (going back to the original spec) called
+its last step "reconstruction": `[Resumo] + [últimas 5 mensagens
+intactas]`, replacing everything older with a synthetic "🗜️ This
+conversation was compacted…" assistant bubble. That's the behavior
+this removes entirely — `handleContextShiftReady` no longer touches
+`currentThread.messages` at all, on either the automatic 90%-of-
+context trigger or manual "Suggest from Thread." A completed pass now
+only ever produces `ChatMemorySuggestion`s (already true since the
+per-bullet split and dedup/update work above); the actual conversation
+a user scrolls through is permanent, exactly as sent and received,
+word for word, from the very first message.
+
+**This doesn't reopen the problem Context Shift originally existed to
+solve.** What actually keeps one live turn's request from blowing past
+the active model's context window was never Context Shift's thread
+mutation in the first place — it's `ChatContextBuilder.build`, called
+fresh inside `send()` on every turn, which already windows the full
+thread down to `maxEstimatedContextTokens` (24,000 by default) before
+ever building a request. That mechanism is completely independent of
+Context Shift and unaffected by any of this: a very long thread still
+sends only its most recent, budget-fitting slice to the model each
+turn — it just also, now, keeps every earlier message around for a
+human to actually scroll back through, which it couldn't before.
+
+**Paged transcript loading, on both platforms** — the other half of
+the same request, since a thread that's genuinely never trimmed can
+grow arbitrarily long: `ChatViewModel.displayedMessages` (Mac) and
+`ChatThreadsViewModel.displayedMessages` (iOS) show only the most
+recent `displayedMessageCount` messages (60 by default) out of the
+full, always-intact list; a "Load Earlier Messages" button — deliberately
+not an auto-load-on-scroll trigger, since it sits at the very top of a
+thread that opens scrolled to the *bottom* and so is never on-screen
+by accident — reveals another page each tap, `min`-clamped so the last
+tap never overshoots past the very first message. `displayedMessageCount`
+resets to one page on an actual thread switch (`didSet` comparing
+`oldValue.id` against the new `currentThread.id`) but deliberately not
+on every mutation *within* the same thread — `ChatThread` being a
+value type means `currentThread.messages.append(...)` reassigns the
+whole `currentThread` property too, so a naive unconditional reset
+would have wiped out a user's scroll-back progress on every single new
+message.
 
 ## Architecture
 
