@@ -318,8 +318,24 @@ public actor ContextShiftCoordinator {
         Task { await callback?(current) }
     }
 
+    /// Deliberately NOT `JSONEncoder.anvil` — that encoder applies
+    /// `.prettyPrinted` formatting (see `ModelEntry.swift`), which is
+    /// harmless for `writeStatus`'s whole-file writes (Python reads
+    /// those with `Path.read_text()` + `json.loads()`) but fatal here:
+    /// this goes over the stdin pipe using the same one-JSON-object-
+    /// per-line protocol as `ContextShiftScript.emit`/`read_control_line`,
+    /// which is a plain `sys.stdin.readline()`. A pretty-printed
+    /// `{"event":"unload_complete"}` spans several lines, so Python
+    /// would only ever see fragments like `"{"` on their own line, each
+    /// failing `json.loads()` — `wait_for_control_event` then never
+    /// recognizes the ack and always times out
+    /// (`unload_not_acknowledged`), exactly as reported live after the
+    /// v0.20.0 trigger-fix finally let a real shift reach this
+    /// handshake. A bare, non-pretty-printed `JSONEncoder` always
+    /// produces single-line output, matching what `emit()` itself
+    /// writes in the other direction.
     private func sendControl(event: String) {
-        guard let data = try? JSONEncoder.anvil.encode(ControlEvent(event: event)) else { return }
+        guard let data = try? JSONEncoder().encode(ControlEvent(event: event)) else { return }
         stdinHandle?.write(data)
         stdinHandle?.write(Data([0x0A]))
     }

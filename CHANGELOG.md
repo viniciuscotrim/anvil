@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.20.1-context-shift-handshake-fix] - 2026-09-14
+
+### Fixed
+- **Context Shift's unload handshake never actually acknowledged,
+  always failing with `unload_not_acknowledged` after 60s** —
+  reported live right after the v0.19.2 trigger fix finally let a real
+  shift fire for the first time: "Depois de instalar o novo .dmg eu
+  mandei uma mensagem no chat chamado Sofia, e eu recebi o erro HTTP
+  502 'Could not connet to the server' .... ele ainda assim aparece a
+  mensagem 'Compacting memory ... ' mas não carrega nenhum modelo do
+  Workflow ... e depois aparece Conversation Compaction failed
+  (unload_not_acknoledged) - the model may bneed to be reloaded
+  manually". Root cause: `ContextShiftCoordinator.sendControl(event:)`
+  encoded its acknowledgement with `JSONEncoder.anvil`, the same
+  encoder `writeStatus` uses for its whole-file writes — but that
+  encoder applies `.prettyPrinted` formatting, so `sendControl`'s
+  `{"event":"unload_complete"}` went over the stdin pipe spanning
+  several lines instead of one. The Python side's protocol
+  (`read_control_line`/`wait_for_control_event`) is strictly one JSON
+  object per `sys.stdin.readline()` — matching `emit()`'s own
+  single-line `json.dumps(...)` on the other direction — so every
+  `readline()` call there only ever saw a fragment (e.g. just `"{"` on
+  its own line), which always failed `json.loads()`. The 60s
+  `unload_ack_timeout` was therefore unreachable-proof: it would fire
+  every single time, no matter how fast Swift actually replied.
+  `writeStatus` itself was never affected — those are whole-file
+  writes Python reads with `Path.read_text()` + `json.loads()`, not
+  line-oriented. Fixed by having `sendControl` use a bare
+  `JSONEncoder()` instead, which always produces single-line output.
+  Verified directly against the real, shipped pipeline script (not a
+  rewritten copy): feeding `wait_for_control_event` the old
+  pretty-printed bytes reproduces the exact timeout
+  (`ACK: None` after the full window), and the new compact bytes ack
+  in under 10ms.
+- **A chat send racing an in-flight Context Shift unload surfaced a
+  raw "Could not connect to the server" instead of failing cleanly** —
+  the other half of the same report. `send()` writes the fresh status
+  file and only then dispatches the actual chat completion request;
+  the watcher's own 1-second poll plus the round trip back through the
+  (now-fixed) handshake can land while that request is still open, so
+  `handleContextShiftUnloadRequested` was unconditionally unloading
+  the model — killing its server process out from under an open HTTP
+  connection, surfacing a raw `URLError.cannotConnectToHost` instead
+  of the friendly "Compacting conversation history…" message a *new*
+  send already gets from `isPaused`. It now cancels the in-flight
+  generation first when it targets the model about to be unloaded and
+  waits for that cancellation to finish, so `runChatLoop`'s existing
+  `CancellationError` path tears the request down cleanly (quietly
+  drops the empty in-progress assistant bubble) before the process
+  actually goes away, instead of racing it.
+
 ## [0.20.0-thread-scoped-memories] - 2026-09-14
 
 ### Added

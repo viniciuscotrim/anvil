@@ -9,9 +9,44 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.20.0-thread-scoped-memories (Memories Scoped to a Conversation by Default)
+## Current release: 0.20.1-context-shift-handshake-fix (Context Shift's Unload Handshake Actually Acknowledges Now)
 
-Requested live: "Temos que deixar memórias por thread/conversa. E elas
+Reported live right after 0.19.2 finally let a real shift trigger for
+the first time: "Depois de instalar o novo .dmg eu mandei uma mensagem
+no chat chamado Sofia, e eu recebi o erro HTTP 502 'Could not connet
+to the server' .... ele ainda assim aparece a mensagem 'Compacting
+memory ... ' mas não carrega nenhum modelo do Workflow ... e depois
+aparece Conversation Compaction failed (unload_not_acknoledged)". Two
+real, separate bugs behind that one report:
+
+- `ContextShiftCoordinator.sendControl(event:)` encoded its
+  acknowledgement with `JSONEncoder.anvil` — the same encoder
+  `writeStatus` uses, but that one applies `.prettyPrinted`
+  formatting. Fine for `writeStatus`'s whole-file writes; fatal here,
+  since this goes over the stdin pipe using a strict one-JSON-object-
+  per-line protocol (`sys.stdin.readline()` on the Python side). A
+  pretty-printed `{"event":"unload_complete"}` spans several lines, so
+  Python only ever saw fragments, `wait_for_control_event` never
+  recognized the ack, and the 60s timeout fired every time — verified
+  directly against the real, shipped pipeline script: feeding it the
+  old pretty-printed bytes reproduces the exact timeout, the new
+  compact bytes ack in under 10ms. Fixed by switching `sendControl` to
+  a bare, non-pretty-printed `JSONEncoder()`.
+- Separately, a chat send that races an in-flight unload (the
+  watcher's 1-second poll can easily land mid-request) was
+  unconditionally killing that model's server process out from under
+  an open HTTP connection, surfacing a raw "Could not connect to the
+  server" instead of a clean "Compacting…" message.
+  `handleContextShiftUnloadRequested` now cancels the in-flight
+  generation first when it targets the model about to be unloaded, so
+  the request tears down cleanly before the process actually goes
+  away.
+
+See "Context Shift's unload handshake" below, and
+[CHANGELOG.md](CHANGELOG.md) for the full writeup.
+
+It follows 0.20.0-thread-scoped-memories. Requested live: "Temos que
+deixar memórias por thread/conversa. E elas
 são geradas e consumidas dentro do thread que foram geradas. Mas
 também criar um botão pra cada memória no menu Memórias que pode
 transformar ela em Global ou voltar apenas pra conversa onde foi
@@ -200,7 +235,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.20.0-thread-scoped-memories`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.20.1-context-shift-handshake-fix`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1808,6 +1843,77 @@ suggestion's own `sourceThreadID` through as the new memory's
 the suggestion itself never recorded one) — not necessarily
 `currentThread`, since a suggestion can be reviewed on a different
 device, or a different thread, than the one that generated it.
+
+## Fixing Context Shift's unload handshake
+
+Reported live, right after 0.19.2's trigger fix finally let a real
+shift fire for the first time: "Depois de instalar o novo .dmg eu
+mandei uma mensagem no chat chamado Sofia, e eu recebi o erro HTTP 502
+'Could not connet to the server' .... ele ainda assim aparece a
+mensagem 'Compacting memory ... ' mas não carrega nenhum modelo do
+Workflow ... e depois aparece Conversation Compaction failed
+(unload_not_acknoledged) - the model may bneed to be reloaded
+manually". Two real, separate bugs, both in the code path that only
+ever runs once a shift actually triggers — meaning neither could have
+shown up until the trigger itself was fixed.
+
+**Bug 1: the ack never arrived, so the 60s timeout always fired.**
+`ContextShiftCoordinator.sendControl(event:)` encoded its
+acknowledgement with `JSONEncoder.anvil` — the same encoder
+`writeStatus` uses a few lines above it in the same file. That encoder
+applies `.prettyPrinted` formatting (confirmed by reading
+`ModelEntry.swift`, where it's defined), which is completely harmless
+for `writeStatus`: those are whole JSON *files*, and the Python side
+reads them back with `Path.read_text()` + `json.loads()` — formatting
+doesn't matter for a single parse of a whole string. `sendControl`
+looks identical at a glance but goes over the *stdin pipe*, using the
+same strict one-JSON-object-per-line protocol `ContextShiftScript
+.emit()` uses in the other direction: Python's `read_control_line()`
+calls a plain `sys.stdin.readline()` and expects one complete object
+per call. A pretty-printed `{"event":"unload_complete"}` spans several
+lines, so each `readline()` there only ever received a fragment (the
+first call would return just `{` on its own line) — every one of
+those failed `json.loads()`, `read_control_line` returned `None` every
+time, and `wait_for_control_event("unload_complete", timeout=60)`
+consequently *always* ran out its full 60 seconds before giving up,
+regardless of how fast Swift actually replied. That's exactly why the
+banner showed "Compacting memory…" with no RAG/summarize-phase model
+ever visibly loading — the process never got past this handshake to
+reach the rest of the pipeline at all.
+
+Fixed by having `sendControl` use a bare `JSONEncoder()` (no date
+strategy needed either — `ControlEvent` has no `Date` fields) instead
+of `JSONEncoder.anvil`, which always produces single-line output.
+
+**Verified directly against the real, shipped pipeline script — not a
+rewritten copy, and not just reasoning about the code.** The exact
+Python source `ContextShiftScript.swift` embeds was extracted
+byte-for-byte and driven with a small harness calling
+`wait_for_control_event` exactly the way `run_triggered_shift` does:
+feeding it the *old* pretty-printed bytes reproduces the reported
+failure precisely (`ACK: None` after the full timeout window); feeding
+it the *new* compact bytes acks in under 10ms.
+
+**Bug 2: a send racing the unload it just triggered.** Separately,
+`send()` writes the fresh status file and only *then* dispatches the
+actual chat completion request — the watcher's own 1-second poll, plus
+the round trip back through the handshake above, can easily land while
+that request is still open. `handleContextShiftUnloadRequested` was
+unconditionally unloading the model the instant Swift got asked to,
+with no regard for a generation actively reading from that exact
+model's server. Killing the process out from under an open HTTP
+connection is exactly what produces a raw `URLError
+.cannotConnectToHost` ("Could not connect to the server") — the *other*
+half of the same report — instead of the friendly "Compacting
+conversation history to free up memory — try again in a moment."
+message a brand-new send already gets from the `isPaused` guard.
+Fixed: when the model being unloaded matches the one currently
+generating a reply, `handleContextShiftUnloadRequested` now cancels
+that generation first and waits for it to actually finish before
+unloading — `runChatLoop`'s existing `CancellationError` path already
+tears a cancelled request down cleanly (quietly drops the empty
+in-progress assistant bubble, no scary error text), so the process
+only ever goes away after Swift's own side has already let go of it.
 
 ## Architecture
 

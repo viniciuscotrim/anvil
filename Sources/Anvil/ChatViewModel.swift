@@ -445,6 +445,25 @@ final class ChatViewModel: ObservableObject {
     /// the trigger firing and this callback running).
     private func handleContextShiftUnloadRequested(_ modelID: String?) async {
         guard let modelID, sessions.isLoaded(modelID: modelID) else { return }
+        // A "Stop-and-Swap" unload can land while this exact model is
+        // mid-response to the very turn that pushed the thread over 90%
+        // of its context window (`writeStatus` runs, then `send()` kicks
+        // off `generationTask` — the watcher's own 1-second poll and the
+        // handshake back to here can easily land while that request is
+        // still open). Reported live: a raw "Could not connect to the
+        // server" (a `URLError.cannotConnectToHost`) surfaced straight
+        // to the user once the model's server process was killed out
+        // from under the open HTTP connection, instead of the friendly
+        // "Compacting…" message `send()`'s own `isPaused` guard shows
+        // for a *new* send. Cancelling the in-flight generation first
+        // lets `runChatLoop`'s existing `CancellationError` path tear
+        // the request down cleanly (silently drops the empty
+        // in-progress assistant bubble, no scary error text) before the
+        // process actually goes away, instead of racing it.
+        if isSending, let currentModelID = selectedModelID, currentModelID == modelID {
+            stopGeneration()
+            await generationTask?.value
+        }
         await sessions.unload(modelID: modelID)
     }
 
