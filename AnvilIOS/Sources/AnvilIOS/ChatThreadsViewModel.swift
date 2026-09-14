@@ -529,7 +529,19 @@ final class ChatThreadsViewModel {
     /// `ChatViewModel.acceptMemorySuggestion` doc comment. Still always
     /// global *by profile* (`profileID: nil`) regardless of the
     /// thread's own profile — unrelated dimension, unchanged.
+    /// An "update" suggestion — `supersedesMemoryID` set, generated on
+    /// Mac (only Mac's Context Shift pipeline classifies bullets this
+    /// way today) and reaching this device only via sync — rewrites
+    /// the memory it supersedes in place instead of adding a second,
+    /// separate one. Falls through to the ordinary new-memory path if
+    /// that memory's since been deleted.
     func acceptMemorySuggestion(_ suggestion: ChatMemorySuggestion) async {
+        if let supersedesMemoryID = suggestion.supersedesMemoryID,
+           let existing = memories.first(where: { $0.id == supersedesMemoryID }) {
+            await editMemoryContent(existing, to: suggestion.content)
+            await removeSuggestion(suggestion.id)
+            return
+        }
         await addMemory(
             suggestion.content, kind: suggestion.kind, source: .inferred,
             confidence: suggestion.confidence, profileID: nil,

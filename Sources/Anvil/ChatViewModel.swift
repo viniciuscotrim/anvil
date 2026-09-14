@@ -481,21 +481,28 @@ final class ChatViewModel: ObservableObject {
         // hand the whole block to one all-or-nothing suggestion instead
         // of actually splitting on them the way `MemoryBulletSplitter`
         // does.
+        //
+        // Each bullet is then classified against what's already saved
+        // — requested live right after: "se for 100% identico o
+        // resultado novo em comparação com o antigo, pode ignorar
+        // imediatamente/não duplicar, mas se houver uma reinterpretação
+        // que mude uma palavra do resultado ... me mostre como
+        // precisando de aprovação, mas mostre que é um update." See
+        // `classifyBullet`'s own doc comment.
         let rationale = "Automatic context-shift compaction — \(result.textChunksIndexed) text and "
             + "\(result.codeChunksIndexed) code chunks indexed alongside it."
+        let scopedMemories = memories.filter { $0.appliesTo(threadID: currentThread.id) }
         for bullet in MemoryBulletSplitter.split(result.summary) {
-            var suggestion = ChatMemorySuggestion(
-                content: bullet,
-                kind: .summary,
-                confidence: 1,
-                rationale: rationale
-            )
-            suggestion.sourceThreadID = currentThread.id
-            suggestion.createdFromMessageID = recap.id
-            suggestion.originDeviceName = DeviceIdentity.currentName
-            if let saved = try? await suggestionStore.upsert(suggestion) { suggestion = saved }
-            memorySuggestions.append(suggestion)
-            if isCloudSyncEnabled { await cloudSync.markSuggestionChanged(suggestion) }
+            switch classifyBullet(bullet, against: scopedMemories) {
+            case .duplicate:
+                continue
+            case .update(let memoryID):
+                await createMemorySuggestion(
+                    content: bullet, rationale: rationale, createdFromMessageID: recap.id, supersedesMemoryID: memoryID)
+            case .new:
+                await createMemorySuggestion(
+                    content: bullet, rationale: rationale, createdFromMessageID: recap.id, supersedesMemoryID: nil)
+            }
         }
         if isCloudSyncEnabled {
             await cloudSync.syncNow()
@@ -779,15 +786,24 @@ final class ChatViewModel: ObservableObject {
             // Same split every automatic compaction summary gets —
             // requested live in the same breath as this: "eu quero
             // cada topico/bullet em uma memoria pra aceitar
-            // individualmente."
+            // individualmente." Each bullet is then classified against
+            // what's already saved — "se for 100% identico ... pode
+            // ignorar imediatamente/não duplicar, mas se houver uma
+            // reinterpretação ... mostre que é um update" — see
+            // `classifyBullet`'s own doc comment.
+            let scopedMemories = memories.filter { $0.appliesTo(threadID: currentThread.id) }
+            let lastMessageID = currentThread.messages.last?.id
             for bullet in MemoryBulletSplitter.split(result.summary) {
-                var suggestion = ChatMemorySuggestion(content: bullet, kind: .summary, confidence: 1, rationale: rationale)
-                suggestion.sourceThreadID = currentThread.id
-                suggestion.createdFromMessageID = currentThread.messages.last?.id
-                suggestion.originDeviceName = DeviceIdentity.currentName
-                if let saved = try? await suggestionStore.upsert(suggestion) { suggestion = saved }
-                memorySuggestions.append(suggestion)
-                if isCloudSyncEnabled { await cloudSync.markSuggestionChanged(suggestion) }
+                switch classifyBullet(bullet, against: scopedMemories) {
+                case .duplicate:
+                    continue
+                case .update(let memoryID):
+                    await createMemorySuggestion(
+                        content: bullet, rationale: rationale, createdFromMessageID: lastMessageID, supersedesMemoryID: memoryID)
+                case .new:
+                    await createMemorySuggestion(
+                        content: bullet, rationale: rationale, createdFromMessageID: lastMessageID, supersedesMemoryID: nil)
+                }
             }
             if isCloudSyncEnabled { await cloudSync.syncNow() }
             if memorySuggestions.isEmpty {
@@ -822,6 +838,73 @@ final class ChatViewModel: ObservableObject {
             return nil
         }
         return (nomic.localPath, coderank.localPath, phi4.localPath)
+    }
+
+    /// What a freshly-extracted bullet turns out to be once compared
+    /// against memories already saved — requested live: "se for 100%
+    /// identico o resultado novo em comparação com o antigo, pode
+    /// ignorar imediatamente/não duplicar, mas se houver uma
+    /// reinterpretação que mude uma palavra do resultado ... me mostre
+    /// como precisando de aprovação, mas mostre que é um update e
+    /// mostrando o antigo e o novo em um formato de texto hachurado se
+    /// algo for deletado e negrito se for acrescentado."
+    private enum BulletClassification {
+        /// Word-for-word identical (case/whitespace-insensitive) to a
+        /// memory already saved — nothing to suggest, it's already
+        /// known.
+        case duplicate
+        /// A reworded version of an existing memory — similarity at or
+        /// above `MemoryDiff.updateSimilarityThreshold`, but not
+        /// identical — offered as an update to that specific memory.
+        case update(memoryID: UUID)
+        /// Nothing close enough to any existing memory — an ordinary
+        /// new suggestion, exactly like before this classification
+        /// existed.
+        case new
+    }
+
+    /// Compares `bullet` against every memory already applying to this
+    /// thread (`ChatMemory.appliesTo(threadID:)` — the same filter chat
+    /// sends already use, so a *global* memory counts as "already
+    /// known" here too, not just a thread-scoped one) via `MemoryDiff
+    /// .similarity`. When more than one memory clears the update
+    /// threshold, the single closest match wins — comparing against
+    /// every candidate rather than stopping at the first one that
+    /// qualifies, so a mediocre early match can't steal a bullet that's
+    /// actually a near-perfect match for a later candidate.
+    private func classifyBullet(_ bullet: String, against existingMemories: [ChatMemory]) -> BulletClassification {
+        let normalizedBullet = bullet.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var bestMatch: (memory: ChatMemory, similarity: Double)?
+        for memory in existingMemories {
+            let normalizedExisting = memory.content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if normalizedExisting == normalizedBullet { return .duplicate }
+            let similarity = MemoryDiff.similarity(memory.content, bullet)
+            if bestMatch == nil || similarity > bestMatch!.similarity {
+                bestMatch = (memory, similarity)
+            }
+        }
+        if let bestMatch, bestMatch.similarity >= MemoryDiff.updateSimilarityThreshold {
+            return .update(memoryID: bestMatch.memory.id)
+        }
+        return .new
+    }
+
+    /// Persists (and, if enabled, syncs) one new `.summary` suggestion
+    /// — the shared tail end of both `handleContextShiftReady` and
+    /// `suggestMemoriesFromCurrentThread`'s own bullet loops, so the
+    /// two don't drift into two slightly different ways of doing the
+    /// same thing.
+    private func createMemorySuggestion(
+        content: String, rationale: String, createdFromMessageID: UUID?, supersedesMemoryID: UUID?
+    ) async {
+        var suggestion = ChatMemorySuggestion(content: content, kind: .summary, confidence: 1, rationale: rationale)
+        suggestion.sourceThreadID = currentThread.id
+        suggestion.createdFromMessageID = createdFromMessageID
+        suggestion.originDeviceName = DeviceIdentity.currentName
+        suggestion.supersedesMemoryID = supersedesMemoryID
+        if let saved = try? await suggestionStore.upsert(suggestion) { suggestion = saved }
+        memorySuggestions.append(suggestion)
+        if isCloudSyncEnabled { await cloudSync.markSuggestionChanged(suggestion) }
     }
 
     /// Loads `modelID` on demand for `send()` if it isn't already
@@ -953,6 +1036,18 @@ final class ChatViewModel: ObservableObject {
     /// (`profileID: nil`) regardless of the thread's own profile — that
     /// dimension is unrelated to this one and unchanged from before.
     func acceptMemorySuggestion(_ suggestion: ChatMemorySuggestion) async {
+        // An "update" suggestion (`classifyBullet`'s own doc comment)
+        // rewrites the memory it supersedes in place instead of adding
+        // a second, separate one — requested live: "mostre que é um
+        // update." Falls through to the ordinary new-memory path below
+        // if the superseded memory has since been deleted (nothing
+        // left to update), rather than silently doing nothing.
+        if let supersedesMemoryID = suggestion.supersedesMemoryID,
+           let existing = memories.first(where: { $0.id == supersedesMemoryID }) {
+            await editMemoryContent(existing, to: suggestion.content)
+            await removeSuggestion(suggestion.id)
+            return
+        }
         await addMemory(
             suggestion.content,
             kind: suggestion.kind,

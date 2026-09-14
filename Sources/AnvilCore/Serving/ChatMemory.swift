@@ -178,6 +178,18 @@ public struct ChatMemorySuggestion: Codable, Identifiable, Equatable, Sendable {
     /// exists because of it, even for one accepted well after the fact
     /// on a different device.
     public var createdFromMessageID: UUID?
+    /// When set, accepting this suggestion rewrites the *existing*
+    /// `ChatMemory` with this id instead of creating a new, separate
+    /// one — requested live: a freshly re-extracted bullet that's a
+    /// reworded version of a memory already saved (not identical, but
+    /// not a new fact either) should show up "como precisando de
+    /// aprovação, mas mostre que é um update e mostrando o antigo e o
+    /// novo em um formato de texto hachurado se algo for deletado e
+    /// negrito se for acrescentado" — see `MemoryDiff`, which both the
+    /// classification decision and the diff rendering are built on.
+    /// `nil` (the common case) means this is an ordinary new-memory
+    /// suggestion, exactly as before this field existed.
+    public var supersedesMemoryID: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -189,7 +201,8 @@ public struct ChatMemorySuggestion: Codable, Identifiable, Equatable, Sendable {
         updatedAt: Date = Date(),
         originDeviceName: String? = nil,
         sourceThreadID: UUID? = nil,
-        createdFromMessageID: UUID? = nil
+        createdFromMessageID: UUID? = nil,
+        supersedesMemoryID: UUID? = nil
     ) {
         self.id = id
         self.content = content
@@ -201,11 +214,12 @@ public struct ChatMemorySuggestion: Codable, Identifiable, Equatable, Sendable {
         self.originDeviceName = originDeviceName
         self.sourceThreadID = sourceThreadID
         self.createdFromMessageID = createdFromMessageID
+        self.supersedesMemoryID = supersedesMemoryID
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, content, kind, confidence, rationale, createdAt, updatedAt
-        case originDeviceName, sourceThreadID, createdFromMessageID
+        case originDeviceName, sourceThreadID, createdFromMessageID, supersedesMemoryID
     }
 
     public init(from decoder: Decoder) throws {
@@ -224,6 +238,7 @@ public struct ChatMemorySuggestion: Codable, Identifiable, Equatable, Sendable {
         originDeviceName = try container.decodeIfPresent(String.self, forKey: .originDeviceName)
         sourceThreadID = try container.decodeIfPresent(UUID.self, forKey: .sourceThreadID)
         createdFromMessageID = try container.decodeIfPresent(UUID.self, forKey: .createdFromMessageID)
+        supersedesMemoryID = try container.decodeIfPresent(UUID.self, forKey: .supersedesMemoryID)
     }
 }
 

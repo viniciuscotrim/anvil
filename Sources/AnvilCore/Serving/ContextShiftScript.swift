@@ -497,7 +497,30 @@ enum ContextShiftScript {
             return store
 
         def add(self, records: list[VectorRecord]) -> None:
-            self.records.extend(records)
+            """Upserts by id rather than blindly appending — `id` is
+            deterministic per source message (`split_text_and_code`'s
+            `f"{message_id}:text"`/`f"{message_id}:code:{index}"`), so
+            re-running the pipeline against overlapping history
+            (Suggest from Thread run twice, or Suggest followed by an
+            automatic trigger over the same messages) used to append
+            every chunk again verbatim — confirmed directly: nothing
+            here ever checked for an existing row with the same id.
+            An unchanged chunk (same id, identical text) is now left
+            alone instead of duplicated; a changed one (same id,
+            different text — the same message re-embedded with
+            different wording, e.g. after an edit) replaces the old
+            row in place. This store is never reviewed by the user the
+            way a memory suggestion is, so there's no approval step at
+            this layer — just keep-the-latest, silently.
+            """
+            index_by_id = {record.id: index for index, record in enumerate(self.records)}
+            for record in records:
+                existing_index = index_by_id.get(record.id)
+                if existing_index is None:
+                    self.records.append(record)
+                    index_by_id[record.id] = len(self.records) - 1
+                elif self.records[existing_index].text != record.text:
+                    self.records[existing_index] = record
 
         def save(self) -> None:
             import numpy as np
@@ -873,6 +896,22 @@ enum ContextShiftScript {
             check("vector store search finds the closest text match", top and top[0].text == "the cat sat on the mat")
             code_only = reloaded.search([0.0, 1.0, 0.0], top_k=5, kind="code")
             check("vector store search respects the kind filter", all(r.kind == "code" for r in code_only))
+
+            # --- LocalVectorStore.add upserts by id instead of duplicating -----
+            reloaded.add([
+                VectorRecord(id=records[0].id, text=records[0].text, embedding=[1.0, 0.0, 0.0],
+                             kind="text", source_message_id="m1", source_role="user"),
+            ])
+            check("re-adding an identical chunk (same id, same text) doesn't duplicate it",
+                  len(reloaded.records) == len(records))
+
+            reloaded.add([
+                VectorRecord(id=records[0].id, text="the cat sat on the rug", embedding=[1.0, 0.0, 0.0],
+                             kind="text", source_message_id="m1", source_role="user"),
+            ])
+            check("re-adding a changed chunk (same id, different text) replaces it in place, still no duplicate",
+                  len(reloaded.records) == len(records)
+                  and reloaded.records[0].text == "the cat sat on the rug")
 
         # --- context_window_for -------------------------------------------
         with tempfile.TemporaryDirectory() as tmp:

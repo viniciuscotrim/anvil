@@ -9,7 +9,38 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.22.0-suggest-from-thread-on-context-shift ("Suggest from Thread" Now Runs the Context Shift Pipeline, Mac)
+## Current release: 0.23.0-memory-dedup-and-update-diffs (Memory Pipeline Dedup, and Update Suggestions With a Diff)
+
+Asked while confirming how the memory pipeline reads a conversation:
+does it re-read the whole raw chat every run, or just what's new?
+Answer — always the whole thing (no incremental tracking, by design),
+which surfaced a real gap: the Context Shift pipeline's local vector
+store had no dedup at all, so re-running it against overlapping
+history silently duplicated every chunk's row. Requested live, once
+that was confirmed: "Pode corrigir, mas com duas melhorias ... ou se
+for 100% identico o resultado novo em comparação com o antigo, pode
+ignorar imediatamente/não duplicar, mas se houver uma reinterpretação
+que mude uma palavra do resultado ... me mostre como precisando de
+aprovação, mas mostre que é um update e mostrando o antigo e o novo em
+um formato de texto hachurado se algo for deletado e negrito se for
+acrescentado."
+
+- The vector store's `add()` now upserts by id (deterministic per
+  source message) — identical chunks are left alone, changed ones
+  replace the old row in place, silently (nothing here is ever
+  reviewed by the user).
+- A new `MemoryDiff` (word-level diff + similarity score, both from
+  one longest-common-subsequence computation) classifies every
+  freshly-extracted bullet against memories already saved: identical
+  → skipped, a reworded version of one already known → offered as an
+  "Update to an existing memory" suggestion with a diff (struck-
+  through removals, bold additions) needing the same approval as
+  ever, genuinely new → suggested as before.
+
+See "Memory pipeline dedup and update diffs" below, and
+[CHANGELOG.md](CHANGELOG.md) for the full writeup.
+
+It follows 0.22.0-suggest-from-thread-on-context-shift ("Suggest from Thread" Now Runs the Context Shift Pipeline, Mac)
 
 Requested live: "Ao clicar no botão Suggest From Thread ... ele tem
 que rodar o novo workflow de memoria que temos." Mac's "Suggest from
@@ -282,7 +313,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.22.0-suggest-from-thread-on-context-shift`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.23.0-memory-dedup-and-update-diffs`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -2100,6 +2131,86 @@ compiles.
   run there. iOS's `ChatThreadsViewModel`, its own "Model for
   suggestions" picker, and its `NativeChatEngine`-based batch
   extraction are all untouched.
+
+## Memory pipeline dedup and update diffs
+
+Asked directly, to confirm understanding rather than as a bug report:
+"Apenas me confirme o pipeline de memoria, le todo o chat raw
+novamente ou rele apenas o que já salvou e o novo?" Confirmed against
+the actual code: every run — automatic trigger or manual "Suggest from
+Thread" — sends the *entire* current thread (minus the last 5 "intact
+tail" messages, always excluded from summarization) through RAG-
+indexing and recursive summarization again, with no incremental
+tracking of what a previous run already covered. That answer surfaced
+a real, previously-unflagged consequence: `LocalVectorStore.add()`
+never checked for an existing row before appending, so re-running the
+pipeline against overlapping history — Suggest from Thread run twice,
+or Suggest followed later by an automatic trigger over the same
+messages — silently duplicated every chunk's row in the local index.
+
+**Fixed with two layers, matching two different levels of "someone
+reviews this."** Requested live: "Pode corrigir, mas com duas
+melhorias ... ou se for 100% identico o resultado novo em comparação
+com o antigo, pode ignorar imediatamente/não duplicar, mas se houver
+uma reinterpretação que mude uma palavra do resultado ... me mostre
+como precisando de aprovação, mas mostre que é um update e mostrando o
+antigo e o novo em um formato de texto hachurado se algo for deletado
+e negrito se for acrescentado."
+
+- **The vector store itself** — nobody reviews an embedding row the
+  way they review a memory, so this layer just silently keeps the
+  latest version. `LocalVectorStore.add()` now upserts by `id`
+  (deterministic per source message, from `split_text_and_code`): an
+  unchanged chunk (same id, identical text) is left alone instead of
+  duplicated; a changed one (same id, different text — the source
+  message got edited, say) replaces the old row in place. Verified
+  directly against the real, unmodified pipeline script — two new
+  self-test checks (`re-adding an identical chunk ... doesn't
+  duplicate it`, `re-adding a changed chunk ... replaces it in place`)
+  pass alongside the existing round-trip/search coverage.
+- **Memory suggestions** — these *are* reviewed, so this layer needs
+  an actual decision surfaced to the user, not a silent overwrite. A
+  new `MemoryDiff` (`Sources/AnvilCore/Serving/MemoryDiff.swift`)
+  computes a word-level diff between two strings via their longest
+  common subsequence — the same core algorithm `difflib
+  .SequenceMatcher` uses, simplified for equal-weight word tokens —
+  and a `0.0`–`1.0` similarity score (`2·|LCS| / (|old words| + |new
+  words|)`) from that same computation, both unit-tested directly
+  (identical text, a one-word change, a pure addition, a pure removal,
+  completely unrelated text, empty-string edge cases).
+
+  Both `handleContextShiftReady` (automatic trigger) and
+  `suggestMemoriesFromCurrentThread` (manual, Mac) now run every
+  freshly-split bullet through a new `classifyBullet`, comparing it
+  against every memory already applying to the thread
+  (`ChatMemory.appliesTo(threadID:)` — so a *global* memory counts as
+  "already known" here too, not just a thread-scoped one):
+  - **Identical** (normalized string equality) to an existing memory →
+    skipped entirely, no suggestion created at all — "pode ignorar
+    imediatamente/não duplicar."
+  - **Similar but not identical** (similarity ≥
+    `MemoryDiff.updateSimilarityThreshold`, `0.5` — comfortably
+    cleared by "changes one word" of an ordinary sentence, while
+    staying well clear of an actually-unrelated fact) → a new
+    `ChatMemorySuggestion.supersedesMemoryID` points at the existing
+    memory. The Memory screen's suggestion row, on both platforms,
+    then renders `MemoryDiff.diff(from: existing.content, to:
+    suggestion.content)` as one styled `Text` instead of plain content
+    — unchanged words plain, removed ones struck through, added ones
+    bold — behind an orange "Update to an existing memory" label, and
+    `acceptMemorySuggestion` rewrites that existing memory's text in
+    place (the same `editMemoryContent` the manual pencil-edit button
+    uses) instead of adding a second, separate memory alongside it.
+  - **Below that threshold** → an ordinary new suggestion, exactly as
+    before this existed.
+
+  iOS never *generates* an update suggestion today (only Mac's Context
+  Shift pipeline runs `classifyBullet` at all), but it does render and
+  accept one correctly — a Mac-made suggestion syncs to an iPhone the
+  same as any other, and `ChatThreadsViewModel.acceptMemorySuggestion`
+  needed the exact same `supersedesMemoryID` handling as Mac's own to
+  honor it rather than silently falling back to a duplicate new
+  memory.
 
 ## Architecture
 

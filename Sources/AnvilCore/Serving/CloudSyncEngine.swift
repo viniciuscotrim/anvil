@@ -278,6 +278,7 @@ public actor CloudSyncEngine {
         if let origin = suggestion.originDeviceName { record["originDeviceName"] = origin as CKRecordValue }
         if let sourceThreadID = suggestion.sourceThreadID { record["sourceThreadID"] = sourceThreadID.uuidString as CKRecordValue }
         if let sourceMessageID = suggestion.createdFromMessageID { record["createdFromMessageID"] = sourceMessageID.uuidString as CKRecordValue }
+        if let supersedesMemoryID = suggestion.supersedesMemoryID { record["supersedesMemoryID"] = supersedesMemoryID.uuidString as CKRecordValue }
         return record
     }
 
@@ -344,11 +345,13 @@ public actor CloudSyncEngine {
         else { return nil }
         let sourceThreadID = (record["sourceThreadID"] as? String).flatMap(UUID.init(uuidString:))
         let createdFromMessageID = (record["createdFromMessageID"] as? String).flatMap(UUID.init(uuidString:))
+        let supersedesMemoryID = (record["supersedesMemoryID"] as? String).flatMap(UUID.init(uuidString:))
         return ChatMemorySuggestion(
             id: id, content: content, kind: kind, confidence: confidence, rationale: rationale,
             createdAt: createdAt, updatedAt: updatedAt,
             originDeviceName: record["originDeviceName"] as? String,
-            sourceThreadID: sourceThreadID, createdFromMessageID: createdFromMessageID)
+            sourceThreadID: sourceThreadID, createdFromMessageID: createdFromMessageID,
+            supersedesMemoryID: supersedesMemoryID)
     }
 
     // MARK: - Applying remote changes locally

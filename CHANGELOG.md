@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.23.0-memory-dedup-and-update-diffs] - 2026-09-14
+
+### Added
+- **The Context Shift pipeline no longer silently duplicates entries
+  in its local vector store on repeated runs** — a real gap confirmed
+  while answering a question about how "Suggest from Thread" reads a
+  conversation: chunk ids are deterministic per source message, but
+  `LocalVectorStore.add()` unconditionally appended every chunk,
+  meaning running the pipeline more than once against overlapping
+  history (Suggest from Thread run twice, or Suggest followed by an
+  automatic trigger over the same messages) duplicated every one of
+  those chunks' rows. `add()` now upserts by id: an unchanged chunk
+  (same id, identical text) is left alone; a changed one (same id,
+  different text) replaces the old row in place. No approval concept
+  applies at this layer — this index is never reviewed by the user the
+  way a memory suggestion is — so it's silent, always. Verified
+  directly against the real, unmodified pipeline script, including two
+  new self-test checks.
+- **Memory suggestions are now compared against what's already saved,
+  not blindly re-suggested every run** — requested live: "se for 100%
+  identico o resultado novo em comparação com o antigo, pode ignorar
+  imediatamente/não duplicar, mas se houver uma reinterpretação que
+  mude uma palavra do resultado ... me mostre como precisando de
+  aprovação, mas mostre que é um update e mostrando o antigo e o novo
+  em um formato de texto hachurado se algo for deletado e negrito se
+  for acrescentado." A new, unit-tested `MemoryDiff` (word-level diff
+  via longest-common-subsequence, plus a `0.0`–`1.0` similarity score
+  from the same computation) backs a new classification every freshly-
+  extracted bullet goes through against memories already applying to
+  the thread, on both the automatic Context Shift trigger and manual
+  "Suggest from Thread" (Mac):
+  - **Word-for-word identical** to an existing memory → skipped
+    entirely, no suggestion created.
+  - **A reworded version** of an existing memory (similarity ≥ 0.5,
+    but not identical) → offered as a suggestion needing the same
+    approval as ever, but flagged "Update to an existing memory" and
+    rendered as a diff against that memory's current text — removed
+    words struck through, added words bold, unchanged words plain —
+    on both Mac and iOS (iOS never *generates* these today, only Mac's
+    Context Shift pipeline does, but a Mac-made update suggestion can
+    reach an iPhone through sync, so both platforms render and accept
+    it correctly). Accepting one rewrites the existing memory's text
+    in place (`editMemoryContent`) instead of adding a second, separate
+    memory alongside it.
+  - **Nothing close enough** to any existing memory → an ordinary new
+    suggestion, exactly as before this existed.
+
 ## [0.22.0-suggest-from-thread-on-context-shift] - 2026-09-14
 
 ### Changed

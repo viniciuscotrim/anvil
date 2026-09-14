@@ -186,9 +186,23 @@ struct MemoryView: View {
     }
 
     private func suggestionRow(_ suggestion: ChatMemorySuggestion) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        // An "update" suggestion (`supersedesMemoryID` — generated on
+        // Mac today, reaching here only via sync) shows a word-level
+        // diff against the memory it would replace instead of just its
+        // own new text. Falls back to plain content if that memory's
+        // since been deleted.
+        let supersededMemory = suggestion.supersedesMemoryID.flatMap { id in threads.memories.first(where: { $0.id == id }) }
+
+        return HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(suggestion.content)
+                if let supersededMemory {
+                    Label("Update to an existing memory", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    diffText(MemoryDiff.diff(from: supersededMemory.content, to: suggestion.content))
+                } else {
+                    Text(suggestion.content)
+                }
                 Text("\(suggestion.kind.label) · \(Int(suggestion.confidence * 100))% · \(suggestion.rationale)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -264,6 +278,27 @@ struct MemoryView: View {
             }
             .tint(.orange)
         }
+    }
+
+    /// Renders `MemoryDiff.Segment`s as one styled `Text` — unchanged
+    /// words plain, removed ones struck through, added ones bold.
+    /// Mirrors Mac's own `MemoryView.diffText`, kept as separate
+    /// platform code since `AnvilCore` (where `MemoryDiff` itself
+    /// lives) has no SwiftUI dependency at all.
+    private func diffText(_ segments: [MemoryDiff.Segment]) -> Text {
+        var result = Text("")
+        for (index, segment) in segments.enumerated() {
+            if index > 0 { result = result + Text(" ") }
+            switch segment {
+            case .unchanged(let text):
+                result = result + Text(text)
+            case .removed(let text):
+                result = result + Text(text).strikethrough().foregroundColor(.secondary)
+            case .added(let text):
+                result = result + Text(text).bold()
+            }
+        }
+        return result
     }
 
     private func threadScopeLabel(for memory: ChatMemory) -> String {
