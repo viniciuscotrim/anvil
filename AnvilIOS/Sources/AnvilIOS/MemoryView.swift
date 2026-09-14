@@ -77,7 +77,7 @@ struct MemoryView: View {
                                 threads.rejectAllMemorySuggestions()
                             }
                         }
-                        ForEach(threads.memorySuggestions) { suggestion in
+                        ForEach(threads.sortedMemorySuggestions) { suggestion in
                             suggestionRow(suggestion)
                         }
                     }
@@ -211,6 +211,13 @@ struct MemoryView: View {
                 Text("\(suggestion.kind.label) · \(Int(suggestion.confidence * 100))% · \(suggestion.rationale)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                // Requested live, right after a first real digest
+                // surfaced 100+ suggestions in one pass: "temos que ter
+                // uma avaliação da IA do quão relevante a memória
+                // parece ser, e me deixar editar essa relevancia."
+                RelevanceSlider(value: suggestion.relevance ?? 0.5) { newValue in
+                    Task { await threads.setSuggestionRelevance(suggestion, to: newValue) }
+                }
             }
             Spacer()
             Button {
@@ -255,6 +262,9 @@ struct MemoryView: View {
                 Text(threadScopeLabel(for: memory))
                     .font(.caption2)
                     .foregroundStyle(memory.isGlobal ? Color.secondary : Color.accentColor)
+                RelevanceSlider(value: memory.relevance) { newValue in
+                    Task { await threads.setMemoryRelevance(memory, to: newValue) }
+                }
             }
         }
         .swipeActions {
@@ -353,5 +363,36 @@ private struct EditMemorySheet: View {
                 }
             }
         }
+    }
+}
+
+/// A relevance slider with its own local, live-dragging state,
+/// committing to the view model only once the drag actually ends —
+/// mirrors Mac's own `RelevanceSlider` exactly. Requested live: "temos
+/// que ter uma avaliação da IA do quão relevante a memória parece ser,
+/// e me deixar editar essa relevancia."
+private struct RelevanceSlider: View {
+    let value: Double
+    let onCommit: (Double) -> Void
+    @State private var draftValue: Double
+
+    init(value: Double, onCommit: @escaping (Double) -> Void) {
+        self.value = value
+        self.onCommit = onCommit
+        _draftValue = State(initialValue: value)
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("Relevance").font(.caption2).foregroundStyle(.secondary)
+            Slider(value: $draftValue, in: 0...1) { editing in
+                if !editing, draftValue != value { onCommit(draftValue) }
+            }
+            Text("\(Int(draftValue * 100))%")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: 32, alignment: .trailing)
+        }
+        .onChange(of: value) { _, newValue in draftValue = newValue }
     }
 }

@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.25.0-memory-relevance-scoring] - 2026-09-14
+
+### Added
+- **Memory suggestions now come with an AI-estimated relevance score
+  you can edit, instead of a plain accept/reject choice** — requested
+  live, after a first real digest surfaced 100+ suggestions in one
+  pass: "Ao revisar manualmente algumas eram triviais, outras
+  interessantes e algumas imperdíveis. Então ao invés de simplesmente
+  aceitar ou recusar temos que ter uma avaliação da IA do quão
+  relevante a memória parece ser, e me deixar editar essa relevancia.
+  Assim a IA pode aprender com a relevancia que eu dou, e melhorar o
+  pipeline com o tempo. As recusadas podem ser ignoradas, mas assim as
+  triviais serão mantidas menos tendo menor relevância."
+  - `HIDDEN_SYSTEM_PROMPT` now asks Phi-4 to rate every bullet's
+    relevance from 0 to 1 (trivial/interesting/unmissable, in the
+    user's own three words), appended as `[relevance: X]`; a new,
+    unit-tested `MemoryBulletSplitter.splitWithRelevance` parses that
+    tag back off each bullet on the Swift side.
+  - `ChatMemory` and `ChatMemorySuggestion` both gained `relevance`
+    (editable, `0`–`1`) and `aiRelevance` (the AI's original guess,
+    immutable once set) — a new slider on both platforms, on every
+    suggestion and every saved memory, commits only once the drag
+    actually ends (not continuously, mid-drag).
+  - Suggestions now sort most-relevant first
+    (`sortedMemorySuggestions`), so the "imperdíveis" aren't buried
+    below a hundred trivial ones during review — the actual point of
+    scoring relevance at all.
+  - Accepting a suggestion (new or "update") carries its relevance
+    through to the resulting memory.
+- **A lightweight feedback loop, so corrections actually calibrate
+  future runs** — "Assim a IA pode aprender com a relevancia que eu
+  dou, e melhorar o pipeline com o tempo." A new `RelevanceFeedback`/
+  `RelevanceFeedbackStore` (Mac-local, not synced) logs a correction
+  whenever an edit diverges from the AI's own original score by more
+  than 0.15. A new `load_relevance_calibration_examples` (Python)
+  reads up to 5 of the most-divergent past corrections and feeds them
+  back into the summarization prompt as few-shot examples — not real
+  model fine-tuning, just concrete anchors for what this particular
+  user considers trivial versus unmissable. A fresh install, or one
+  with no corrections logged yet, summarizes exactly as before this
+  existed.
+  - Manual "Suggest from Thread" (Mac) now also passes the active
+    persona's system prompt into the pipeline (previously `nil`) — it
+    was missing the same persona-attribution grounding the automatic
+    trigger already got in the previous release, an oversight this
+    closes.
+  - Verified directly against the real, unmodified pipeline script:
+    11 new self-test checks (relevance-tag parsing, calibration
+    example selection and ranking, malformed-entry handling, the full
+    prompt-construction wiring) pass alongside all existing coverage.
+  - iOS renders and edits relevance on any suggestion or memory (its
+    own local corrections stay local to that device), but doesn't
+    generate relevance scores itself — only Mac's Context Shift
+    pipeline does that today.
+
 ## [0.24.2-summarizer-persona-attribution-fix] - 2026-09-14
 
 ### Fixed

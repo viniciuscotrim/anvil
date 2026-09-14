@@ -57,6 +57,20 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var availableProfiles: [ChatProfile] = []
     @Published private(set) var memories: [ChatMemory] = []
     @Published private(set) var memorySuggestions: [ChatMemorySuggestion] = []
+
+    /// `memorySuggestions`, most-relevant first (`sortedDescending`,
+    /// the same nils-last helper `ModelSearchSortOption` already uses
+    /// for Search) — requested live, once a first real digest surfaced
+    /// 100+ suggestions in one pass: the whole point of scoring
+    /// relevance at all is so the "imperdíveis" aren't buried below a
+    /// hundred trivial ones during manual review. An unscored
+    /// suggestion (`relevance == nil`, only ever the older per-fact
+    /// JSON extraction — this pipeline's own bullets are always
+    /// scored) sorts after every scored one, not assumed trivial or
+    /// unmissable either way.
+    var sortedMemorySuggestions: [ChatMemorySuggestion] {
+        memorySuggestions.sortedDescending { $0.relevance }
+    }
     @Published private(set) var isSuggestingMemories = false
     /// Unused since `suggestMemoriesFromCurrentThread` switched to the
     /// single-shot Context Shift pipeline (no more per-batch chat
@@ -137,6 +151,7 @@ final class ChatViewModel: ObservableObject {
     private let profileStore: ChatProfileStore
     private let memoryStore: ChatMemoryStore
     private let suggestionStore: ChatMemorySuggestionStore
+    private let relevanceFeedbackStore: RelevanceFeedbackStore
     private let contextShift: ContextShiftCoordinator
     private let modelRegistry: ModelRegistry
     private let requirements: RequirementsManager
@@ -181,6 +196,7 @@ final class ChatViewModel: ObservableObject {
         profileStore: ChatProfileStore,
         memoryStore: ChatMemoryStore,
         suggestionStore: ChatMemorySuggestionStore = ChatMemorySuggestionStore(),
+        relevanceFeedbackStore: RelevanceFeedbackStore = RelevanceFeedbackStore(),
         contextShift: ContextShiftCoordinator = ContextShiftCoordinator(),
         modelRegistry: ModelRegistry,
         requirements: RequirementsManager
@@ -192,6 +208,7 @@ final class ChatViewModel: ObservableObject {
         self.profileStore = profileStore
         self.memoryStore = memoryStore
         self.suggestionStore = suggestionStore
+        self.relevanceFeedbackStore = relevanceFeedbackStore
         self.contextShift = contextShift
         self.modelRegistry = modelRegistry
         self.requirements = requirements
@@ -547,16 +564,23 @@ final class ChatViewModel: ObservableObject {
         // equivalent, same convention `suggestMemoriesFromCurrentThread`
         // already uses for its own suggestions.
         let lastMessageID = currentThread.messages.last?.id
-        for bullet in MemoryBulletSplitter.split(result.summary) {
-            switch classifyBullet(bullet, against: scopedMemories) {
+        // Requested live, next to relevance itself: 100+ suggestions
+        // from one digest is too many to review as plain accept/
+        // reject — `MemoryBulletSplitter.splitWithRelevance` pulls
+        // Phi-4's own "[relevance: X]" tag (see `HIDDEN_SYSTEM_PROMPT`)
+        // off each bullet, carried through to the suggestion below.
+        for bullet in MemoryBulletSplitter.splitWithRelevance(result.summary) {
+            switch classifyBullet(bullet.content, against: scopedMemories) {
             case .duplicate:
                 continue
             case .update(let memoryID):
                 await createMemorySuggestion(
-                    content: bullet, rationale: rationale, createdFromMessageID: lastMessageID, supersedesMemoryID: memoryID)
+                    content: bullet.content, rationale: rationale, createdFromMessageID: lastMessageID,
+                    supersedesMemoryID: memoryID, relevance: bullet.relevance)
             case .new:
                 await createMemorySuggestion(
-                    content: bullet, rationale: rationale, createdFromMessageID: lastMessageID, supersedesMemoryID: nil)
+                    content: bullet.content, rationale: rationale, createdFromMessageID: lastMessageID,
+                    supersedesMemoryID: nil, relevance: bullet.relevance)
             }
         }
         if isCloudSyncEnabled {
@@ -694,7 +718,9 @@ final class ChatViewModel: ObservableObject {
         profileID: UUID? = nil,
         createdFromMessageID: UUID? = nil,
         originThreadID: UUID? = nil,
-        isGlobal: Bool = false
+        isGlobal: Bool = false,
+        relevance: Double = 0.5,
+        aiRelevance: Double? = nil
     ) async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -707,7 +733,9 @@ final class ChatViewModel: ObservableObject {
             originDeviceName: DeviceIdentity.currentName,
             createdFromMessageID: createdFromMessageID,
             originThreadID: originThreadID ?? currentThread.id,
-            isGlobal: isGlobal
+            isGlobal: isGlobal,
+            relevance: relevance,
+            aiRelevance: aiRelevance
         )
         guard let saved = try? await memoryStore.upsert(memory) else { return }
         memories = await memoryStore.all()
@@ -748,6 +776,63 @@ final class ChatViewModel: ObservableObject {
         updated.content = trimmed
         await updateMemory(updated)
     }
+
+    /// Rewrites how relevant a saved memory actually is — requested
+    /// live: "temos que ter uma avaliação da IA do quão relevante a
+    /// memória parece ser, e me deixar editar essa relevancia." Logs
+    /// the correction (`RelevanceFeedbackStore`) whenever it meaningfully
+    /// diverges from the AI's own original score, so a later compaction
+    /// pass has real calibration examples of what this user actually
+    /// considers trivial versus unmissable — "Assim a IA pode aprender
+    /// com a relevancia que eu dou, e melhorar o pipeline com o
+    /// tempo." A memory with no `aiRelevance` at all (an explicit
+    /// "Remember", or one saved before this existed) has nothing to
+    /// compare against, so no feedback is ever logged for it — there
+    /// was no AI guess to correct in the first place.
+    func setMemoryRelevance(_ memory: ChatMemory, to newValue: Double) async {
+        let clamped = min(1, max(0, newValue))
+        guard clamped != memory.relevance else { return }
+        if let aiRelevance = memory.aiRelevance, abs(clamped - aiRelevance) >= Self.relevanceFeedbackThreshold {
+            _ = try? await relevanceFeedbackStore.record(RelevanceFeedback(
+                content: memory.content, aiRelevance: aiRelevance, userRelevance: clamped))
+        }
+        var updated = memory
+        updated.relevance = clamped
+        await updateMemory(updated)
+    }
+
+    /// Same idea, before a suggestion's even been accepted — editing a
+    /// suggestion's relevance doesn't touch `updatedAt`/persistence
+    /// timestamps the way accepting or dismissing it does, just its own
+    /// `relevance` field in place, both in memory and in the store (so
+    /// the edit survives a relaunch even if the suggestion itself is
+    /// never actually accepted).
+    func setSuggestionRelevance(_ suggestion: ChatMemorySuggestion, to newValue: Double) async {
+        let clamped = min(1, max(0, newValue))
+        guard Optional(clamped) != suggestion.relevance else { return }
+        if let aiRelevance = suggestion.aiRelevance, abs(clamped - aiRelevance) >= Self.relevanceFeedbackThreshold {
+            _ = try? await relevanceFeedbackStore.record(RelevanceFeedback(
+                content: suggestion.content, aiRelevance: aiRelevance, userRelevance: clamped))
+        }
+        var updated = suggestion
+        updated.relevance = clamped
+        if let index = memorySuggestions.firstIndex(where: { $0.id == suggestion.id }) {
+            memorySuggestions[index] = updated
+        }
+        if let saved = try? await suggestionStore.upsert(updated) {
+            if let index = memorySuggestions.firstIndex(where: { $0.id == saved.id }) {
+                memorySuggestions[index] = saved
+            }
+        }
+        if isCloudSyncEnabled { await cloudSync.markSuggestionChanged(updated) }
+    }
+
+    /// How far a user's correction has to diverge from the AI's own
+    /// original guess before it's worth logging as calibration
+    /// feedback — a tiny nudge (rounding, a slightly-off slider drag)
+    /// isn't a real correction and would just dilute the examples
+    /// `load_relevance_calibration_examples` picks from later.
+    private static let relevanceFeedbackThreshold = 0.15
 
     func deleteMemory(_ memory: ChatMemory) async {
         try? await memoryStore.delete(id: memory.id)
@@ -829,7 +914,14 @@ final class ChatViewModel: ObservableObject {
 
         do {
             let result = try await contextShift.runManualSummarization(
-                systemPrompt: nil,
+                // The active persona's own instructions — grounds
+                // Phi-4 on who it's roleplaying as, the same real
+                // attribution fix the automatic trigger already gets
+                // (see `handleContextShiftReady`'s own call and
+                // `HIDDEN_SYSTEM_PROMPT`'s doc comment); leaving this
+                // `nil` would have quietly left the manual path
+                // exposed to the exact misattribution that was fixed.
+                systemPrompt: composedSystemPrompt(offeringTools: false),
                 messages: currentThread.messages,
                 nomicModelPath: paths.nomic,
                 coderankModelPath: paths.coderank,
@@ -848,16 +940,18 @@ final class ChatViewModel: ObservableObject {
             // `classifyBullet`'s own doc comment.
             let scopedMemories = memories.filter { $0.appliesTo(threadID: currentThread.id) }
             let lastMessageID = currentThread.messages.last?.id
-            for bullet in MemoryBulletSplitter.split(result.summary) {
-                switch classifyBullet(bullet, against: scopedMemories) {
+            for bullet in MemoryBulletSplitter.splitWithRelevance(result.summary) {
+                switch classifyBullet(bullet.content, against: scopedMemories) {
                 case .duplicate:
                     continue
                 case .update(let memoryID):
                     await createMemorySuggestion(
-                        content: bullet, rationale: rationale, createdFromMessageID: lastMessageID, supersedesMemoryID: memoryID)
+                        content: bullet.content, rationale: rationale, createdFromMessageID: lastMessageID,
+                        supersedesMemoryID: memoryID, relevance: bullet.relevance)
                 case .new:
                     await createMemorySuggestion(
-                        content: bullet, rationale: rationale, createdFromMessageID: lastMessageID, supersedesMemoryID: nil)
+                        content: bullet.content, rationale: rationale, createdFromMessageID: lastMessageID,
+                        supersedesMemoryID: nil, relevance: bullet.relevance)
                 }
             }
             if isCloudSyncEnabled { await cloudSync.syncNow() }
@@ -950,13 +1044,15 @@ final class ChatViewModel: ObservableObject {
     /// two don't drift into two slightly different ways of doing the
     /// same thing.
     private func createMemorySuggestion(
-        content: String, rationale: String, createdFromMessageID: UUID?, supersedesMemoryID: UUID?
+        content: String, rationale: String, createdFromMessageID: UUID?, supersedesMemoryID: UUID?, relevance: Double? = nil
     ) async {
         var suggestion = ChatMemorySuggestion(content: content, kind: .summary, confidence: 1, rationale: rationale)
         suggestion.sourceThreadID = currentThread.id
         suggestion.createdFromMessageID = createdFromMessageID
         suggestion.originDeviceName = DeviceIdentity.currentName
         suggestion.supersedesMemoryID = supersedesMemoryID
+        suggestion.relevance = relevance
+        suggestion.aiRelevance = relevance
         if let saved = try? await suggestionStore.upsert(suggestion) { suggestion = saved }
         memorySuggestions.append(suggestion)
         if isCloudSyncEnabled { await cloudSync.markSuggestionChanged(suggestion) }
@@ -1099,7 +1195,15 @@ final class ChatViewModel: ObservableObject {
         // left to update), rather than silently doing nothing.
         if let supersedesMemoryID = suggestion.supersedesMemoryID,
            let existing = memories.first(where: { $0.id == supersedesMemoryID }) {
-            await editMemoryContent(existing, to: suggestion.content)
+            // Carries the suggestion's own (possibly user-edited)
+            // relevance over too, not just its text — an "update"
+            // suggestion is otherwise identical to any other memory
+            // edit.
+            var updated = existing
+            let trimmed = suggestion.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { updated.content = trimmed }
+            if let relevance = suggestion.relevance { updated.relevance = relevance }
+            if updated != existing { await updateMemory(updated) }
             await removeSuggestion(suggestion.id)
             return
         }
@@ -1116,7 +1220,9 @@ final class ChatViewModel: ObservableObject {
             // device, once suggestions sync).
             createdFromMessageID: suggestion.createdFromMessageID,
             originThreadID: suggestion.sourceThreadID ?? currentThread.id,
-            isGlobal: false
+            isGlobal: false,
+            relevance: suggestion.relevance ?? 0.5,
+            aiRelevance: suggestion.aiRelevance
         )
         await removeSuggestion(suggestion.id)
     }

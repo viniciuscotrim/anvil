@@ -93,7 +93,7 @@ struct MemoryView: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
-                    ForEach(chat.memorySuggestions) { suggestion in
+                    ForEach(chat.sortedMemorySuggestions) { suggestion in
                         suggestionRow(suggestion)
                     }
                 }
@@ -216,6 +216,16 @@ struct MemoryView: View {
                 Text("\(suggestion.kind.label) · \(Int(suggestion.confidence * 100))% · \(suggestion.rationale)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                // Requested live, right after a first real digest
+                // surfaced 100+ suggestions in one pass: "temos que ter
+                // uma avaliação da IA do quão relevante a memória
+                // parece ser, e me deixar editar essa relevancia. As
+                // recusadas podem ser ignoradas, mas assim as triviais
+                // serão mantidas mas com menor relevância." — nil only
+                // for the older per-fact JSON path (still unscored).
+                RelevanceSlider(value: suggestion.relevance ?? 0.5) { newValue in
+                    Task { await chat.setSuggestionRelevance(suggestion, to: newValue) }
+                }
             }
             Spacer()
             Button {
@@ -279,6 +289,9 @@ struct MemoryView: View {
                 Text(threadScopeLabel(for: memory))
                     .font(.caption2)
                     .foregroundStyle(memory.isGlobal ? Color.secondary : Color.accentColor)
+                RelevanceSlider(value: memory.relevance) { newValue in
+                    Task { await chat.setMemoryRelevance(memory, to: newValue) }
+                }
             }
             Spacer()
             if editingMemoryID != memory.id {
@@ -353,5 +366,43 @@ struct MemoryView: View {
         }
         let threadTitle = chat.allThreads.first(where: { $0.id == originThreadID })?.title
         return "Only in: \(threadTitle ?? "a deleted conversation")"
+    }
+}
+
+/// A relevance slider with its own local, live-dragging state,
+/// committing to the view model only once the drag actually ends
+/// (`Slider`'s own `onEditingChanged`) — requested live: "temos que
+/// ter uma avaliação da IA do quão relevante a memória parece ser, e
+/// me deixar editar essa relevancia." A plain view-model-backed
+/// `Binding` with no local state would call `onCommit` continuously,
+/// many times a second, while dragging; this calls it exactly once,
+/// when the user actually lets go. Mirrors iOS's own `RelevanceSlider`.
+private struct RelevanceSlider: View {
+    let value: Double
+    let onCommit: (Double) -> Void
+    @State private var draftValue: Double
+
+    init(value: Double, onCommit: @escaping (Double) -> Void) {
+        self.value = value
+        self.onCommit = onCommit
+        _draftValue = State(initialValue: value)
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("Relevance").font(.caption2).foregroundStyle(.secondary)
+            Slider(value: $draftValue, in: 0...1) { editing in
+                if !editing, draftValue != value { onCommit(draftValue) }
+            }
+            .frame(maxWidth: 140)
+            Text("\(Int(draftValue * 100))%")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: 32, alignment: .trailing)
+        }
+        // Keeps this in sync if `value` changes from outside this
+        // control (synced in from another device, say) while it's on
+        // screen but not actively being dragged.
+        .onChange(of: value) { _, newValue in draftValue = newValue }
     }
 }

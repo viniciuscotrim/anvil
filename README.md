@@ -9,7 +9,36 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.24.2-summarizer-persona-attribution-fix (Compaction Summaries No Longer Swap Who Said What)
+## Current release: 0.25.0-memory-relevance-scoring (AI-Scored, Editable Memory Relevance — And a Feedback Loop)
+
+Requested live, after a first real digest surfaced 100+ suggestions in
+one pass: "+100 memorias pra um primeiro load, foram muitas. Ao
+revisar manualmente algumas eram triviais, outras interessantes e
+algumas imperdíveis. Então ao invés de simplesmente aceitar ou recusar
+temos que ter uma avaliação da IA do quão relevante a memória parece
+ser, e me deixar editar essa relevancia. Assim a IA pode aprender com
+a relevancia que eu dou, e melhorar o pipeline com o tempo. As
+recusadas podem ser ignoradas, mas assim as triviais serão mantidas
+menos tendo menor relevância."
+
+- Phi-4 now rates every bullet's relevance (0–1) inline; a new slider
+  on both platforms, on every suggestion and every saved memory, lets
+  you correct it — committing once the drag ends, not continuously.
+- Suggestions sort most-relevant first, so the unmissable ones aren't
+  buried below a hundred trivial ones.
+- A lightweight feedback loop: a correction that diverges meaningfully
+  from the AI's own guess gets logged locally and fed back into future
+  summarization prompts as a calibration example — not real training,
+  just concrete anchors for what this user actually considers trivial
+  versus unmissable.
+- Manual "Suggest from Thread" also picked up the persona-attribution
+  grounding the automatic trigger already had — an oversight from the
+  previous release, closed here too.
+
+See "Memory relevance scoring and feedback" below, and
+[CHANGELOG.md](CHANGELOG.md) for the full writeup.
+
+It follows 0.24.2-summarizer-persona-attribution-fix (Compaction Summaries No Longer Swap Who Said What)
 
 Reported live, confirmed against a real thread's raw export: "essa
 memoria foi a primeira que foi gerada ... mas ela assim como as demais
@@ -362,7 +391,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.24.2-summarizer-persona-attribution-fix`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.25.0-memory-relevance-scoring`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -2367,6 +2396,105 @@ truncation of an overly long system prompt) pass alongside all
 existing coverage. Actually confirming the *summarization quality*
 improved needs a real run against real model weights — self-test
 deliberately covers only what doesn't need a model on disk.
+
+## Memory relevance scoring and feedback
+
+Requested live, after a first real digest surfaced 100+ suggestions in
+one pass: "+100 memorias pra um primeiro load, foram muitas. Ao
+revisar manualmente algumas eram triviais, outras interessantes e
+algumas imperdíveis. Então ao invés de simplesmente aceitar ou recusar
+temos que ter uma avaliação da IA do quão relevante a memória parece
+ser, e me deixar editar essa relevancia. Assim a IA pode aprender com
+a relevancia que eu dou, e melhorar o pipeline com o tempo. As
+recusadas podem ser ignoradas, mas assim as triviais serão mantidas
+menos tendo menor relevância."
+
+**The AI rates relevance inline with each bullet.** `HIDDEN_SYSTEM_PROMPT`
+now asks Phi-4 to append `[relevance: X]` to every bullet — `X` from 0
+to 1, with an explicit rubric using the user's own three words back at
+them: 0.0–0.3 trivial, 0.4–0.7 interesting, 0.8–1.0 unmissable. A new
+`MemoryBulletSplitter.splitWithRelevance` (unit-tested: plain tags,
+parenthesized tags, whole-number tags, a bullet with no tag at all, a
+malformed one) parses that tag back off each bullet on the Swift side,
+next to the existing `split(_:)` it's built on top of, unchanged.
+
+**Both `ChatMemory` and `ChatMemorySuggestion` carry two relevance
+fields**, mirrored exactly: `relevance` (editable — what actually gets
+shown and used) and `aiRelevance` (the AI's own original guess, set
+once at creation, never touched again). Keeping them separate is what
+makes the feedback loop below possible at all — without an immutable
+baseline, a second edit would have nothing meaningful left to compare
+against. `classifyBullet`'s own `.update`/`.new`/`.duplicate` decision
+and `MemoryDiff`-based rendering (from the previous release) are
+unaffected; relevance just rides alongside.
+
+**A slider, not free-typed text — and no chatty writes while
+dragging.** A new `RelevanceSlider` (mirrored, nearly line-for-line,
+on both platforms) holds its own local `@State`, live during the drag,
+and calls its `onCommit` closure exactly once — when `Slider`'s own
+`onEditingChanged` reports the drag actually ended — rather than a
+plain view-model-backed `Binding`, which would call into `ChatViewModel`
+many times a second while dragging. Every suggestion row and every
+saved-memory row gets one; `Section` order for suggestions is now
+`sortedMemorySuggestions` (reusing `sortedDescending`, the same
+nils-last helper `ModelSearchSortOption` uses for Search) — the whole
+point of scoring relevance is defeated if the "imperdíveis" still sit
+below a hundred low-relevance ones during review.
+
+**Accepting a suggestion carries relevance through.** Both the "new
+memory" path (`addMemory`) and the "update an existing memory" path
+(`classifyBullet`'s own `.update` case) now pass the suggestion's
+`relevance`/`aiRelevance` on to the resulting `ChatMemory`, instead of
+leaving it at the type's own default.
+
+**The feedback loop — "Assim a IA pode aprender com a relevancia que
+eu dou, e melhorar o pipeline com o tempo."** No real training
+infrastructure exists here, so this is deliberately a lightweight,
+honest substitute: in-context calibration examples, not weight
+updates. A new `RelevanceFeedback`/`RelevanceFeedbackStore`
+(`Sources/AnvilCore/Serving/RelevanceFeedback.swift`, Mac-local, never
+synced via CloudKit — a correction calibrates *this Mac's* Phi-4
+pipeline specifically) logs `{content, aiRelevance, userRelevance}`
+whenever `setMemoryRelevance`/`setSuggestionRelevance` sees an edit
+diverge from `aiRelevance` by at least 0.15 (a small nudge isn't a
+real correction, and would just dilute the pool). `ContextShiftCoordinator`
+now passes a new `--relevance-feedback <path>` argument through both
+`startWatchingIfNeeded` and `runManualSummarization`, matching the
+existing `--vector-store` pattern; `PipelineConfig.relevance_feedback_path`
+is fully optional, so an older Swift build simply omitting the flag
+degrades to "no calibration" rather than erroring.
+
+On the Python side, a new `load_relevance_calibration_examples` reads
+that file once per `summarize()` call, ranks entries by how far the
+AI's original guess was from the user's correction (the *most*
+divergent — the most informative — corrections win, not simply the
+most recent), and formats up to 5 as a short few-shot block; `build_summarization_user_content`
+was extended to carry this alongside the existing persona grounding,
+both optional and independently gated — a fresh install with no
+custom persona and no correction history summarizes exactly as before
+either of these existed.
+
+**A gap this also closed in passing:** manual "Suggest from Thread"
+(Mac) was still calling `runManualSummarization` with `systemPrompt:
+nil` — meaning it never actually got the persona-attribution grounding
+`0.24.2` added for the automatic trigger. Now passes
+`composedSystemPrompt(offeringTools: false)`, the same real persona
+instructions a live chat turn gets.
+
+**Verified directly against the real, unmodified pipeline script**: 11
+new self-test checks — relevance-tag parsing and prompt construction,
+calibration-example selection/ranking/malformed-entry handling, the
+full wiring through `build_summarization_user_content` — pass
+alongside all existing coverage.
+
+**iOS renders and edits relevance on any suggestion or memory**
+(`RelevanceSlider`, `sortedMemorySuggestions`, both `ChatMemory`
+fields) but doesn't generate relevance scores itself — only Mac's
+Context Shift pipeline runs `HIDDEN_SYSTEM_PROMPT` at all. A
+correction logged on iPhone stays local to that device (`RelevanceFeedbackStore`
+is per-device, by design) — it edits what's shown there, but doesn't
+feed Mac's own calibration unless the same correction is also made on
+Mac.
 
 ## Architecture
 

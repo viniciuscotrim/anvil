@@ -75,6 +75,7 @@ public actor ContextShiftCoordinator {
 
     private let statusFilePath: URL
     private let vectorStorePath: URL
+    private let relevanceFeedbackPath: URL
 
     public private(set) var status = Status()
 
@@ -90,10 +91,13 @@ public actor ContextShiftCoordinator {
         statusFilePath: URL = RuntimePaths.applicationSupportDirectory
             .appendingPathComponent("context_shift_status.json"),
         vectorStorePath: URL = RuntimePaths.applicationSupportDirectory
-            .appendingPathComponent("context_shift_vectors", isDirectory: false)
+            .appendingPathComponent("context_shift_vectors", isDirectory: false),
+        relevanceFeedbackPath: URL = RuntimePaths.applicationSupportDirectory
+            .appendingPathComponent("relevance_feedback.json")
     ) {
         self.statusFilePath = statusFilePath
         self.vectorStorePath = vectorStorePath
+        self.relevanceFeedbackPath = relevanceFeedbackPath
     }
 
     /// Set once, right after construction — `ChatViewModel` supplies
@@ -179,6 +183,7 @@ public actor ContextShiftCoordinator {
             "--coderank-model", coderankModelPath,
             "--phi4-model", phi4ModelPath,
             "--vector-store", vectorStorePath.path,
+            "--relevance-feedback", relevanceFeedbackPath.path,
         ]
 
         let launcher = await NamedLauncher.shared.makeLauncher(displayName: "Anvil - Context Shift")
@@ -279,6 +284,7 @@ public actor ContextShiftCoordinator {
             "--coderank-model", coderankModelPath,
             "--phi4-model", phi4ModelPath,
             "--vector-store", vectorStorePath.path,
+            "--relevance-feedback", relevanceFeedbackPath.path,
         ]
 
         let launcher = await NamedLauncher.shared.makeLauncher(displayName: "Anvil - Memory Suggestions")

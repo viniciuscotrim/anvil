@@ -53,6 +53,14 @@ final class ChatThreadsViewModel {
     private(set) var allThreads: [ChatThread] = []
     private(set) var memories: [ChatMemory] = []
     private(set) var memorySuggestions: [ChatMemorySuggestion] = []
+    /// `memorySuggestions`, most-relevant first — mirrors Mac's own
+    /// `ChatViewModel.sortedMemorySuggestions`. Only Mac's own Context
+    /// Shift pipeline ever scores relevance at all today, but a scored
+    /// suggestion can still reach here through sync, same as an
+    /// "update" one does.
+    var sortedMemorySuggestions: [ChatMemorySuggestion] {
+        memorySuggestions.sortedDescending { $0.relevance }
+    }
     private(set) var isSuggestingMemories = false
     /// How many of the most recent messages are actually mounted into
     /// the transcript's view hierarchy at once — mirrors Mac's own
@@ -149,6 +157,7 @@ final class ChatThreadsViewModel {
     private let store = ChatThreadStore()
     private let memoryStore = ChatMemoryStore()
     private let suggestionStore = ChatMemorySuggestionStore()
+    private let relevanceFeedbackStore = RelevanceFeedbackStore()
     private let modelRegistry = ModelRegistry()
     private let syncClient = AnvilSyncClient()
     private var syncLoopTask: Task<Void, Never>?
@@ -390,14 +399,17 @@ final class ChatThreadsViewModel {
         profileID: UUID? = nil,
         createdFromMessageID: UUID? = nil,
         originThreadID: UUID? = nil,
-        isGlobal: Bool = false
+        isGlobal: Bool = false,
+        relevance: Double = 0.5,
+        aiRelevance: Double? = nil
     ) async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let memory = ChatMemory(
             content: trimmed, kind: kind, source: source, confidence: confidence, profileID: profileID,
             originDeviceName: DeviceIdentity.currentName, createdFromMessageID: createdFromMessageID,
-            originThreadID: originThreadID ?? currentThread.id, isGlobal: isGlobal)
+            originThreadID: originThreadID ?? currentThread.id, isGlobal: isGlobal,
+            relevance: relevance, aiRelevance: aiRelevance)
         _ = try? await memoryStore.upsert(memory)
         memories = await memoryStore.all()
         await pushMemoryIfMacActive(memory)
@@ -431,6 +443,49 @@ final class ChatThreadsViewModel {
         updated.content = trimmed
         await updateMemory(updated)
     }
+
+    /// Rewrites how relevant a saved memory actually is — mirrors
+    /// Mac's own `ChatViewModel.setMemoryRelevance`. Logs the
+    /// correction locally too (`RelevanceFeedbackStore`), though only
+    /// Mac's own Context Shift pipeline ever actually reads it back
+    /// for calibration — this device's own copy stays local, same as
+    /// every device's.
+    func setMemoryRelevance(_ memory: ChatMemory, to newValue: Double) async {
+        let clamped = min(1, max(0, newValue))
+        guard clamped != memory.relevance else { return }
+        if let aiRelevance = memory.aiRelevance, abs(clamped - aiRelevance) >= Self.relevanceFeedbackThreshold {
+            _ = try? await relevanceFeedbackStore.record(RelevanceFeedback(
+                content: memory.content, aiRelevance: aiRelevance, userRelevance: clamped))
+        }
+        var updated = memory
+        updated.relevance = clamped
+        await updateMemory(updated)
+    }
+
+    /// Mirrors Mac's own `ChatViewModel.setSuggestionRelevance` — a
+    /// suggestion scored on iOS at all is only ever one synced in from
+    /// Mac (`supersedesMemoryID`'s own doc comment), but is still
+    /// editable here like any other.
+    func setSuggestionRelevance(_ suggestion: ChatMemorySuggestion, to newValue: Double) async {
+        let clamped = min(1, max(0, newValue))
+        guard Optional(clamped) != suggestion.relevance else { return }
+        if let aiRelevance = suggestion.aiRelevance, abs(clamped - aiRelevance) >= Self.relevanceFeedbackThreshold {
+            _ = try? await relevanceFeedbackStore.record(RelevanceFeedback(
+                content: suggestion.content, aiRelevance: aiRelevance, userRelevance: clamped))
+        }
+        var updated = suggestion
+        updated.relevance = clamped
+        if let index = memorySuggestions.firstIndex(where: { $0.id == suggestion.id }) {
+            memorySuggestions[index] = updated
+        }
+        if let saved = try? await suggestionStore.upsert(updated),
+           let index = memorySuggestions.firstIndex(where: { $0.id == saved.id }) {
+            memorySuggestions[index] = saved
+        }
+        if isCloudSyncEnabled { await cloudSync.markSuggestionChanged(updated) }
+    }
+
+    private static let relevanceFeedbackThreshold = 0.15
 
     func deleteMemory(_ memory: ChatMemory) async {
         try? await memoryStore.delete(id: memory.id)
@@ -574,7 +629,14 @@ final class ChatThreadsViewModel {
     func acceptMemorySuggestion(_ suggestion: ChatMemorySuggestion) async {
         if let supersedesMemoryID = suggestion.supersedesMemoryID,
            let existing = memories.first(where: { $0.id == supersedesMemoryID }) {
-            await editMemoryContent(existing, to: suggestion.content)
+            // Carries the suggestion's own (possibly user-edited)
+            // relevance over too — mirrors Mac's own
+            // `ChatViewModel.acceptMemorySuggestion`.
+            var updated = existing
+            let trimmed = suggestion.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { updated.content = trimmed }
+            if let relevance = suggestion.relevance { updated.relevance = relevance }
+            if updated != existing { await updateMemory(updated) }
             await removeSuggestion(suggestion.id)
             return
         }
@@ -583,7 +645,9 @@ final class ChatThreadsViewModel {
             confidence: suggestion.confidence, profileID: nil,
             createdFromMessageID: suggestion.createdFromMessageID ?? currentThread.messages.last?.id,
             originThreadID: suggestion.sourceThreadID ?? currentThread.id,
-            isGlobal: false)
+            isGlobal: false,
+            relevance: suggestion.relevance ?? 0.5,
+            aiRelevance: suggestion.aiRelevance)
         await removeSuggestion(suggestion.id)
     }
 

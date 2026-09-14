@@ -59,4 +59,48 @@ public enum MemoryBulletSplitter {
         let trimmedWhole = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedWhole.isEmpty ? [] : [trimmedWhole]
     }
+
+    /// One bullet, plus whatever relevance score Phi-4 tagged it with
+    /// — see `splitWithRelevance`'s own doc comment.
+    public struct Bullet: Equatable, Sendable {
+        public let content: String
+        /// `nil` when no `[relevance: …]` tag was found on this bullet
+        /// at all, or it didn't parse — callers should treat that as
+        /// "unscored", not as zero/trivial.
+        public let relevance: Double?
+
+        public init(content: String, relevance: Double?) {
+            self.content = content
+            self.relevance = relevance
+        }
+    }
+
+    private static let relevanceTagPattern = #"\s*[\[(]\s*relevance:\s*(0(?:\.\d+)?|1(?:\.0+)?)\s*[\])]\s*$"#
+
+    /// Same splitting as `split(_:)`, additionally pulling a trailing
+    /// `[relevance: 0.0-1.0]` tag off each bullet — requested live,
+    /// after a first real digest surfaced 100+ suggestions in one
+    /// pass: "ao revisar manualmente algumas eram triviais, outras
+    /// interessantes e algumas imperdíveis. Então ao invés de
+    /// simplesmente aceitar ou recusar temos que ter uma avaliação da
+    /// IA do quão relevante a memória parece ser." `HIDDEN_SYSTEM_PROMPT`
+    /// is what actually asks Phi-4 to append this tag; a bullet with no
+    /// tag at all (an older summary generated before this existed, or
+    /// the model simply not following the format for one line) still
+    /// splits correctly, just with `relevance: nil`.
+    public static func splitWithRelevance(_ text: String) -> [Bullet] {
+        split(text).map { bullet in
+            guard let range = bullet.range(of: relevanceTagPattern, options: .regularExpression) else {
+                return Bullet(content: bullet, relevance: nil)
+            }
+            let tag = String(bullet[range])
+            guard let numberRange = tag.range(of: #"(0(?:\.\d+)?|1(?:\.0+)?)"#, options: .regularExpression),
+                  let value = Double(tag[numberRange]) else {
+                return Bullet(content: bullet, relevance: nil)
+            }
+            let content = String(bullet[bullet.startIndex..<range.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Bullet(content: content, relevance: min(1, max(0, value)))
+        }
+    }
 }

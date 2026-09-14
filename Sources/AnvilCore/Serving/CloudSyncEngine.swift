@@ -264,6 +264,8 @@ public actor CloudSyncEngine {
         if let sourceMessageID = memory.createdFromMessageID { record["createdFromMessageID"] = sourceMessageID.uuidString as CKRecordValue }
         if let originThreadID = memory.originThreadID { record["originThreadID"] = originThreadID.uuidString as CKRecordValue }
         record["isGlobal"] = (memory.isGlobal ? 1 : 0) as CKRecordValue
+        record["relevance"] = memory.relevance as CKRecordValue
+        if let aiRelevance = memory.aiRelevance { record["aiRelevance"] = aiRelevance as CKRecordValue }
         return record
     }
 
@@ -279,6 +281,8 @@ public actor CloudSyncEngine {
         if let sourceThreadID = suggestion.sourceThreadID { record["sourceThreadID"] = sourceThreadID.uuidString as CKRecordValue }
         if let sourceMessageID = suggestion.createdFromMessageID { record["createdFromMessageID"] = sourceMessageID.uuidString as CKRecordValue }
         if let supersedesMemoryID = suggestion.supersedesMemoryID { record["supersedesMemoryID"] = supersedesMemoryID.uuidString as CKRecordValue }
+        if let relevance = suggestion.relevance { record["relevance"] = relevance as CKRecordValue }
+        if let aiRelevance = suggestion.aiRelevance { record["aiRelevance"] = aiRelevance as CKRecordValue }
         return record
     }
 
@@ -326,12 +330,16 @@ public actor CloudSyncEngine {
         // Absent on a record written before thread-scoping existed —
         // same "global" fallback `ChatMemory`'s own decoder uses.
         let isGlobal = (record["isGlobal"] as? Int).map { $0 != 0 } ?? true
+        // Absent on a record written before relevance existed — same
+        // "neutral" fallback `ChatMemory`'s own decoder uses.
+        let relevance = record["relevance"] as? Double ?? 0.5
         return ChatMemory(
             id: id, content: content, kind: kind, source: source,
             confidence: record["confidence"] as? Double, profileID: profileID,
             createdAt: createdAt, updatedAt: updatedAt,
             originDeviceName: record["originDeviceName"] as? String, createdFromMessageID: createdFromMessageID,
-            originThreadID: originThreadID, isGlobal: isGlobal)
+            originThreadID: originThreadID, isGlobal: isGlobal,
+            relevance: relevance, aiRelevance: record["aiRelevance"] as? Double)
     }
 
     private static func suggestion(from record: CKRecord) -> ChatMemorySuggestion? {
@@ -351,7 +359,8 @@ public actor CloudSyncEngine {
             createdAt: createdAt, updatedAt: updatedAt,
             originDeviceName: record["originDeviceName"] as? String,
             sourceThreadID: sourceThreadID, createdFromMessageID: createdFromMessageID,
-            supersedesMemoryID: supersedesMemoryID)
+            supersedesMemoryID: supersedesMemoryID, relevance: record["relevance"] as? Double,
+            aiRelevance: record["aiRelevance"] as? Double)
     }
 
     // MARK: - Applying remote changes locally

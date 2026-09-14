@@ -83,6 +83,27 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
     /// this — "transformar ela em Global ou voltar apenas pra
     /// conversa onde foi gerada."
     public var isGlobal: Bool
+    /// How worth remembering this actually is, `0`–`1` — distinct from
+    /// `confidence` (how sure the *extraction* was this is accurate).
+    /// Requested live, after a first real digest surfaced 100+
+    /// suggestions in one pass: "ao revisar manualmente algumas eram
+    /// triviais, outras interessantes e algumas imperdíveis. Então ao
+    /// invés de simplesmente aceitar ou recusar temos que ter uma
+    /// avaliação da IA do quão relevante a memória parece ser, e me
+    /// deixar editar essa relevancia." Always editable — see
+    /// `ChatViewModel.setMemoryRelevance` — and defaults to `0.5`
+    /// (`aiRelevance`'s own default) for anything saved before this
+    /// existed or added through a path that doesn't score it at all
+    /// (an explicit "Remember").
+    public var relevance: Double
+    /// The AI's own original relevance score, from whichever pipeline
+    /// produced this — immutable once set, `nil` when nothing ever
+    /// scored it (an explicit "Remember", or a memory saved before
+    /// this existed). Kept separate from the editable `relevance`
+    /// above specifically so a later edit can be compared against
+    /// what the AI actually guessed — see `RelevanceFeedbackStore`,
+    /// "para que a IA possa aprender com a relevancia que eu dou."
+    public var aiRelevance: Double?
 
     public init(
         id: UUID = UUID(),
@@ -96,7 +117,9 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         originDeviceName: String? = nil,
         createdFromMessageID: UUID? = nil,
         originThreadID: UUID? = nil,
-        isGlobal: Bool = true
+        isGlobal: Bool = true,
+        relevance: Double = 0.5,
+        aiRelevance: Double? = nil
     ) {
         self.id = id
         self.content = content
@@ -110,11 +133,13 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         self.createdFromMessageID = createdFromMessageID
         self.originThreadID = originThreadID
         self.isGlobal = isGlobal
+        self.relevance = relevance
+        self.aiRelevance = aiRelevance
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, content, kind, source, confidence, profileID, createdAt, updatedAt, originDeviceName, createdFromMessageID
-        case originThreadID, isGlobal
+        case originThreadID, isGlobal, relevance, aiRelevance
     }
 
     public init(from decoder: Decoder) throws {
@@ -133,6 +158,10 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         // Absent only on a memory saved before thread-scoping existed
         // at all — treated as global, exactly how it already behaved.
         isGlobal = try container.decodeIfPresent(Bool.self, forKey: .isGlobal) ?? true
+        // Absent only on a memory saved before relevance existed —
+        // "neutral" rather than assuming trivial or unmissable.
+        relevance = try container.decodeIfPresent(Double.self, forKey: .relevance) ?? 0.5
+        aiRelevance = try container.decodeIfPresent(Double.self, forKey: .aiRelevance)
     }
 
     /// Whether this memory should be pulled into a request being sent
@@ -190,6 +219,21 @@ public struct ChatMemorySuggestion: Codable, Identifiable, Equatable, Sendable {
     /// `nil` (the common case) means this is an ordinary new-memory
     /// suggestion, exactly as before this field existed.
     public var supersedesMemoryID: UUID?
+    /// The AI's own relevance rating for this specific bullet, `0`–`1`,
+    /// editable before ever accepting (`ChatViewModel
+    /// .setSuggestionRelevance`) — see `ChatMemory.relevance`'s own
+    /// doc comment for the full request. `nil` only for a suggestion
+    /// from a path that doesn't score relevance at all (the older
+    /// JSON-array extraction, still iOS's own mechanism) — shown as
+    /// unscored rather than assumed trivial.
+    public var relevance: Double?
+    /// The AI's *original* relevance rating — set once, at creation,
+    /// never touched again, specifically so an edit to `relevance`
+    /// above can still be compared against what the AI actually
+    /// guessed. Mirrors `ChatMemory.aiRelevance` exactly, and is what
+    /// both `relevance` and `aiRelevance` get seeded from on the
+    /// resulting `ChatMemory` when this suggestion is accepted.
+    public var aiRelevance: Double?
 
     public init(
         id: UUID = UUID(),
@@ -202,7 +246,9 @@ public struct ChatMemorySuggestion: Codable, Identifiable, Equatable, Sendable {
         originDeviceName: String? = nil,
         sourceThreadID: UUID? = nil,
         createdFromMessageID: UUID? = nil,
-        supersedesMemoryID: UUID? = nil
+        supersedesMemoryID: UUID? = nil,
+        relevance: Double? = nil,
+        aiRelevance: Double? = nil
     ) {
         self.id = id
         self.content = content
@@ -215,11 +261,13 @@ public struct ChatMemorySuggestion: Codable, Identifiable, Equatable, Sendable {
         self.sourceThreadID = sourceThreadID
         self.createdFromMessageID = createdFromMessageID
         self.supersedesMemoryID = supersedesMemoryID
+        self.relevance = relevance
+        self.aiRelevance = aiRelevance
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, content, kind, confidence, rationale, createdAt, updatedAt
-        case originDeviceName, sourceThreadID, createdFromMessageID, supersedesMemoryID
+        case originDeviceName, sourceThreadID, createdFromMessageID, supersedesMemoryID, relevance, aiRelevance
     }
 
     public init(from decoder: Decoder) throws {
@@ -238,6 +286,8 @@ public struct ChatMemorySuggestion: Codable, Identifiable, Equatable, Sendable {
         originDeviceName = try container.decodeIfPresent(String.self, forKey: .originDeviceName)
         sourceThreadID = try container.decodeIfPresent(UUID.self, forKey: .sourceThreadID)
         createdFromMessageID = try container.decodeIfPresent(UUID.self, forKey: .createdFromMessageID)
+        relevance = try container.decodeIfPresent(Double.self, forKey: .relevance)
+        aiRelevance = try container.decodeIfPresent(Double.self, forKey: .aiRelevance)
         supersedesMemoryID = try container.decodeIfPresent(UUID.self, forKey: .supersedesMemoryID)
     }
 }

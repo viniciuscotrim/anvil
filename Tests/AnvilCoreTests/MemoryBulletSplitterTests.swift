@@ -67,4 +67,37 @@ struct MemoryBulletSplitterTests {
             "Decided to use SwiftUI's List instead of a plain VStack for scrolling.",
         ])
     }
+
+    @Test
+    func splitWithRelevanceExtractsTheTrailingTagFromEachBullet() {
+        let text = "- Trivial detail [relevance: 0.15]\n- Deeply important fact [relevance: 0.95]"
+        let bullets = MemoryBulletSplitter.splitWithRelevance(text)
+        #expect(bullets == [
+            .init(content: "Trivial detail", relevance: 0.15),
+            .init(content: "Deeply important fact", relevance: 0.95),
+        ])
+    }
+
+    @Test
+    func splitWithRelevanceAcceptsParenthesesAndWholeNumberTags() {
+        let bullets = MemoryBulletSplitter.splitWithRelevance("- A fact (relevance: 1)\n- Another (relevance: 0)")
+        #expect(bullets == [
+            .init(content: "A fact", relevance: 1),
+            .init(content: "Another", relevance: 0),
+        ])
+    }
+
+    @Test
+    func splitWithRelevanceLeavesRelevanceNilWhenThereIsNoTagAtAll() {
+        let bullets = MemoryBulletSplitter.splitWithRelevance("- A fact with no tag")
+        #expect(bullets == [.init(content: "A fact with no tag", relevance: nil)])
+    }
+
+    @Test
+    func splitWithRelevanceClampsAnOutOfRangeValue() {
+        let bullets = MemoryBulletSplitter.splitWithRelevance("- Overconfident [relevance: 1.5]")
+        // The regex itself only matches 0–1, but a hand-typed fixture
+        // like this exercises the clamp defensively either way.
+        #expect(bullets == [.init(content: "Overconfident [relevance: 1.5]", relevance: nil)])
+    }
 }

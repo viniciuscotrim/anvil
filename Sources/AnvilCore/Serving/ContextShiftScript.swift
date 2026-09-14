@@ -123,6 +123,16 @@ enum ContextShiftScript {
     # pinned to the turn it came from once it's paraphrasing into
     # third-person bullets — this instruction exists specifically to
     # counter that.
+    # The relevance-tag instruction below was added live: after a first
+    # real digest surfaced 100+ suggestions in one pass, "ao revisar
+    # manualmente algumas eram triviais, outras interessantes e
+    # algumas imperdíveis. Então ao invés de simplesmente aceitar ou
+    # recusar temos que ter uma avaliação da IA do quão relevante a
+    # memória parece ser, e me deixar editar essa relevancia." The 0/
+    # 0.5/1 rubric anchors below are deliberately the user's own three
+    # words back at them (trivial/interesting/unmissable) — see
+    # `MemoryBulletSplitter.splitWithRelevance`, which is what actually
+    # parses this tag back out on the Swift side.
     HIDDEN_SYSTEM_PROMPT = (
         "You are Anvil's internal context-compaction assistant. You will be shown "
         "an excerpt from an older part of a conversation, formatted as alternating "
@@ -137,9 +147,16 @@ enum ContextShiftScript {
         "turn (for example, the Assistant saying \"I'm surprised\") belongs to "
         "the Assistant or its persona, never to the User, even when the "
         "Assistant is speaking in character using its own name — do not swap, "
-        "merge, or reverse which speaker did or felt something. Do not address "
-        "the user directly, do not add commentary or preamble, and never invent "
-        "information that isn't in the excerpt. Return only the bullet points, "
+        "merge, or reverse which speaker did or felt something. After every "
+        "bullet point, append a relevance rating in the exact format "
+        "'[relevance: X]', where X is a number from 0 to 1 with up to two decimal "
+        "places, estimating how worth remembering long-term this specific bullet "
+        "is: 0.0-0.3 for trivial or throwaway details, 0.4-0.7 for moderately "
+        "useful or merely interesting facts, 0.8-1.0 for critical, unmissable "
+        "information. Rate every bullet independently — do not give them all the "
+        "same score. Do not address the user directly, do not add commentary or "
+        "preamble, and never invent information that isn't in the excerpt. "
+        "Return only the bullet points (each ending with its own relevance tag), "
         "nothing else."
     )
 
@@ -762,35 +779,116 @@ enum ContextShiftScript {
         return "\n".join(lines)
 
 
-    def build_summarization_user_content(excerpt: str, system_prompt: Optional[str]) -> str:
+    def build_summarization_user_content(excerpt: str, system_prompt: Optional[str], calibration: str = "") -> str:
         """Grounds Phi-4 on who the Assistant is actually playing in
-        this conversation before handing it the excerpt itself —
-        without this, a small model summarizing plain "User:"/
-        "Assistant:"-labeled dialogue has nothing telling it the
-        Assistant might be speaking in character as a named persona,
-        which is exactly what led to the real misattribution
-        `HIDDEN_SYSTEM_PROMPT`'s own doc comment describes. Returns the
-        excerpt unchanged when there's no system prompt to ground with
-        (a thread with no custom persona at all). Truncated to 1000
-        characters: this only needs enough of a custom system prompt
-        to establish who's who, not the full instructions verbatim —
-        a very long one would otherwise crowd out the actual excerpt
-        in a small model's limited context.
+        this conversation, and (when available) how this particular
+        user has corrected its relevance ratings before, ahead of the
+        excerpt itself.
+
+        The persona grounding exists because a small model summarizing
+        plain "User:"/"Assistant:"-labeled dialogue has nothing telling
+        it the Assistant might be speaking in character as a named
+        persona, which is exactly what led to the real misattribution
+        `HIDDEN_SYSTEM_PROMPT`'s own doc comment describes. Truncated
+        to 1000 characters: this only needs enough of a custom system
+        prompt to establish who's who, not the full instructions
+        verbatim — a very long one would otherwise crowd out the
+        actual excerpt in a small model's limited context.
+
+        `calibration` — built by `load_relevance_calibration_examples`
+        — is the "aprender com a relevancia que eu dou" half: past
+        instances of the user overriding an AI-given relevance score,
+        so the model has concrete anchors for what this specific user
+        considers trivial versus unmissable, not just the bare 0/0.5/1
+        rubric in `HIDDEN_SYSTEM_PROMPT`.
+
+        Returns the excerpt completely unchanged when there's neither
+        a system prompt nor any calibration examples to ground with
+        (a thread with no custom persona, on a fresh install with no
+        correction history yet) — the original, pre-relevance
+        behavior.
         """
-        if not system_prompt or not system_prompt.strip():
+        parts: list[str] = []
+        if system_prompt and system_prompt.strip():
+            grounding = system_prompt.strip()[:1000]
+            parts.append(
+                "For context, the Assistant in this conversation follows these "
+                "instructions (it may be roleplaying as a named persona — treat any "
+                "first-person statement in an Assistant turn as belonging to that "
+                f"persona, never to the User):\n{grounding}"
+            )
+        if calibration:
+            parts.append(calibration)
+        if not parts:
             return excerpt
-        grounding = system_prompt.strip()[:1000]
-        return (
-            "For context, the Assistant in this conversation follows these "
-            "instructions (it may be roleplaying as a named persona — treat any "
-            "first-person statement in an Assistant turn as belonging to that "
-            "persona, never to the User):\n"
-            f"{grounding}\n\n---\n\n{excerpt}"
-        )
+        parts.append(excerpt)
+        return "\n\n---\n\n".join(parts)
 
 
-    def summarize(phi4_model_path: Path, old_messages: list[dict], system_prompt: Optional[str] = None) -> str:
+    def load_relevance_calibration_examples(path: Optional[Path], max_examples: int = 5) -> str:
+        """Formats up to `max_examples` past relevance corrections as a
+        short few-shot block — the closest thing to Phi-4 actually
+        "aprender com a relevancia que eu dou, e melhorar o pipeline
+        com o tempo" without any real training infrastructure. Picks
+        the corrections with the *largest* gap between the AI's own
+        original guess and what the user actually set it to — the most
+        informative examples of where its calibration was furthest
+        off, not simply the most recent ones. Returns an empty string
+        (no calibration section at all, `build_summarization_user_content`
+        falling back to exactly its pre-relevance behavior) when
+        there's no feedback file yet, it's empty, or nothing in it
+        parses — a fresh install, or one with no corrections logged
+        yet, summarizes exactly as before this existed.
+        """
+        if path is None or not path.exists():
+            return ""
+        try:
+            entries = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return ""
+        if not isinstance(entries, list) or not entries:
+            return ""
+
+        scored: list[tuple[float, str, float, float]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                content = str(entry["content"]).strip()
+                ai_relevance = float(entry["ai_relevance"])
+                user_relevance = float(entry["user_relevance"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not content:
+                continue
+            scored.append((abs(ai_relevance - user_relevance), content, ai_relevance, user_relevance))
+
+        if not scored:
+            return ""
+        scored.sort(key=lambda item: item[0], reverse=True)
+
+        lines = [
+            "For calibration, here is how the user has corrected relevance ratings on "
+            "past memories before (your own past rating, then what the user actually "
+            "set it to) — use these as a guide for what this particular user "
+            "considers trivial versus unmissable:"
+        ]
+        for _, content, ai_relevance, user_relevance in scored[:max_examples]:
+            lines.append(f'- "{content}" — you rated {ai_relevance:.2f}, the user corrected it to {user_relevance:.2f}.')
+        return "\n".join(lines)
+
+
+    def summarize(
+        phi4_model_path: Path,
+        old_messages: list[dict],
+        system_prompt: Optional[str] = None,
+        relevance_feedback_path: Optional[Path] = None,
+    ) -> str:
         from mlx_lm import load, generate
+
+        # Computed once per call, not once per batch — the same
+        # calibration examples apply to every excerpt in this run.
+        calibration = load_relevance_calibration_examples(relevance_feedback_path)
 
         with MemoryMonitor("summarize") as monitor:
             emit("model_loading", phase="summarize", model="Phi-4-mini-instruct")
@@ -805,7 +903,7 @@ enum ContextShiftScript {
                     continue
                 conversation = [
                     {"role": "system", "content": HIDDEN_SYSTEM_PROMPT},
-                    {"role": "user", "content": build_summarization_user_content(excerpt, system_prompt)},
+                    {"role": "user", "content": build_summarization_user_content(excerpt, system_prompt, calibration)},
                 ]
                 prompt = tokenizer.apply_chat_template(conversation, add_generation_prompt=True)
                 text = generate(model, tokenizer, prompt=prompt, max_tokens=800, verbose=False)
@@ -819,9 +917,13 @@ enum ContextShiftScript {
         return "\n".join(part for part in bullet_summaries if part)
 
 
-    def run_summarization_phase(old_messages: list[dict], config: "PipelineConfig", system_prompt: Optional[str] = None) -> str:
+    def run_summarization_phase(
+        old_messages: list[dict],
+        config: "PipelineConfig",
+        system_prompt: Optional[str] = None,
+    ) -> str:
         emit("phase_started", phase="summarize")
-        summary = summarize(config.phi4_model_path, old_messages, system_prompt)
+        summary = summarize(config.phi4_model_path, old_messages, system_prompt, config.relevance_feedback_path)
         emit("phase_completed", phase="summarize", summary_chars=len(summary))
         return summary
 
@@ -838,6 +940,11 @@ enum ContextShiftScript {
         vector_store_path: Path
         unload_ack_timeout: float = 60.0
         intact_tail_messages: int = INTACT_TAIL_MESSAGES
+        # Optional: absent on an older Swift build that doesn't pass
+        # `--relevance-feedback` yet, or simply not created until the
+        # first correction is logged — `load_relevance_calibration_examples`
+        # already treats `None` the same as "nothing to calibrate with."
+        relevance_feedback_path: Optional[Path] = None
 
 
     def run_compaction(thread: dict, config: PipelineConfig) -> dict:
@@ -944,6 +1051,40 @@ enum ContextShiftScript {
         check("build_summarization_user_content truncates an overly long system prompt rather than crowding out the excerpt",
               len(build_summarization_user_content(excerpt, long_prompt)) < len(long_prompt) + len(excerpt))
 
+        # --- load_relevance_calibration_examples / calibration wiring ----------
+        check("load_relevance_calibration_examples returns nothing for a missing file",
+              load_relevance_calibration_examples(None) == "")
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_path = Path(tmp) / "does_not_exist.json"
+            check("load_relevance_calibration_examples returns nothing when the path doesn't exist",
+                  load_relevance_calibration_examples(missing_path) == "")
+
+            empty_path = Path(tmp) / "empty.json"
+            empty_path.write_text("[]")
+            check("load_relevance_calibration_examples returns nothing for an empty feedback log",
+                  load_relevance_calibration_examples(empty_path) == "")
+
+            feedback_path = Path(tmp) / "relevance_feedback.json"
+            feedback_path.write_text(json.dumps([
+                {"content": "User's favorite pizza topping is pineapple", "ai_relevance": 0.7, "user_relevance": 0.1},
+                {"content": "User's dog passed away in March", "ai_relevance": 0.4, "user_relevance": 0.95},
+                {"content": "A near-perfect original guess", "ai_relevance": 0.5, "user_relevance": 0.52},
+                {"malformed": "entry missing required keys"},
+            ]))
+            calibration = load_relevance_calibration_examples(feedback_path)
+            check("load_relevance_calibration_examples includes a real correction",
+                  "User's dog passed away in March" in calibration)
+            check("load_relevance_calibration_examples formats both the AI's and the user's rating",
+                  "you rated 0.40" in calibration and "corrected it to 0.95" in calibration)
+            check("load_relevance_calibration_examples ranks the biggest correction first",
+                  calibration.index("pineapple") < calibration.index("near-perfect"))
+            check("load_relevance_calibration_examples silently skips a malformed entry instead of failing",
+                  "malformed" not in calibration)
+
+            grounded_with_calibration = build_summarization_user_content(excerpt, None, calibration)
+            check("build_summarization_user_content includes calibration examples even with no persona to ground with",
+                  "pineapple" in grounded_with_calibration and grounded_with_calibration.endswith(excerpt))
+
         # --- LocalVectorStore round trip --------------------------------------
         with tempfile.TemporaryDirectory() as tmp:
             store_path = Path(tmp) / "vectors"
@@ -1032,6 +1173,7 @@ enum ContextShiftScript {
         parser.add_argument("--coderank-model", help="Local path to CodeRankEmbed.")
         parser.add_argument("--phi4-model", help="Local path to Phi-4-mini-instruct-mlx-fp16.")
         parser.add_argument("--vector-store", help="Path (no extension) for the local vector store's .npz/.json pair.")
+        parser.add_argument("--relevance-feedback", help="Path to the local relevance-correction log, for few-shot calibration.")
         parser.add_argument("--trigger-fraction", type=float, default=DEFAULT_TRIGGER_FRACTION)
         parser.add_argument("--intact-tail-messages", type=int, default=INTACT_TAIL_MESSAGES)
         parser.add_argument("--unload-ack-timeout", type=float, default=60.0)
@@ -1057,6 +1199,7 @@ enum ContextShiftScript {
             vector_store_path=Path(args.vector_store),
             unload_ack_timeout=args.unload_ack_timeout,
             intact_tail_messages=args.intact_tail_messages,
+            relevance_feedback_path=Path(args.relevance_feedback) if args.relevance_feedback else None,
         )
 
         if args.run_once:
