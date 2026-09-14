@@ -246,8 +246,26 @@ struct MemoryView: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                Text(threadScopeLabel(for: memory))
+                    .font(.caption2)
+                    .foregroundStyle(memory.isGlobal ? Color.secondary : Color.accentColor)
             }
             Spacer()
+            // Requested live: "criar um botão pra cada memória no menu
+            // Memórias que pode transformar ela em Global ou voltar
+            // apenas pra conversa onde foi gerada." Hidden for a
+            // memory with no recorded origin at all (nothing to
+            // restrict it back down to — see `ChatMemory.appliesTo`'s
+            // own doc comment).
+            if memory.originThreadID != nil {
+                Button {
+                    Task { await chat.toggleMemoryGlobal(memory) }
+                } label: {
+                    Image(systemName: memory.isGlobal ? "globe" : "bubble.left")
+                }
+                .buttonStyle(.borderless)
+                .help(memory.isGlobal ? "Used in every conversation — click to restrict to just where it was generated." : "Only used in the conversation it was generated in — click to make it Global.")
+            }
             Button(role: .destructive) {
                 Task { await chat.deleteMemory(memory) }
             } label: {
@@ -257,5 +275,16 @@ struct MemoryView: View {
             .help("Delete this memory")
         }
         .padding(.vertical, 4)
+    }
+
+    private func threadScopeLabel(for memory: ChatMemory) -> String {
+        // No recorded origin at all (a memory saved before thread-
+        // scoping existed) behaves as global regardless of `isGlobal`
+        // — see `ChatMemory.appliesTo`'s own doc comment for why.
+        guard !memory.isGlobal, let originThreadID = memory.originThreadID else {
+            return "All conversations"
+        }
+        let threadTitle = chat.allThreads.first(where: { $0.id == originThreadID })?.title
+        return "Only in: \(threadTitle ?? "a deleted conversation")"
     }
 }

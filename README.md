@@ -9,12 +9,27 @@ No terminal, no manual dependency setup, ever.
 
 Full spec: [docs/build-brief.md](docs/build-brief.md).
 
-## Current release: 0.19.2-context-shift-trigger-fix (Context Shift's Trigger Actually Fires Now)
+## Current release: 0.20.0-thread-scoped-memories (Memories Scoped to a Conversation by Default)
 
-Reported live: "Eu mandei mensagem pra um chat chamado Sofia, e ele
-iniciou a geração, mas o contexto deve estar bem longo já… mas não
-estou vendo ele executando o fluxo de memoria, parece que simplesmente
-está travado de fundo." Investigated directly: the model server was
+Requested live: "Temos que deixar memórias por thread/conversa. E elas
+são geradas e consumidas dentro do thread que foram geradas. Mas
+também criar um botão pra cada memória no menu Memórias que pode
+transformar ela em Global ou voltar apenas pra conversa onde foi
+gerada." `ChatMemory` gained `originThreadID` (set once, at creation)
+and `isGlobal` (defaults to thread-scoped for anything new; a memory
+saved before this existed keeps working everywhere, unchanged). A
+button next to each memory in the Memory screen toggles between the
+two. Every place that decides which memories go into a chat request —
+six real call sites across both platforms, local and remote chat, plus
+Mac Sync's own server-side generation path — now checks this
+alongside the existing Profile filter. See "Thread-scoped memories"
+below.
+
+It follows 0.19.2-context-shift-trigger-fix. Reported live: "Eu mandei
+mensagem pra um chat chamado Sofia, e ele iniciou a geração, mas o
+contexto deve estar bem longo já… mas não estou vendo ele executando
+o fluxo de memoria, parece que simplesmente está travado de fundo."
+Investigated directly: the model server was
 genuinely deadlocked (unresponsive to a brand-new test request sent
 straight to its port), and Context Shift's compaction pipeline had
 never triggered even once. Root cause: `ChatViewModel.send()` was
@@ -185,7 +200,7 @@ queue/image-version-history/Prompt-to-Model work, the iOS chat/sync
 parity and iCloud sync fixes that followed it (`0.7.x`–`0.9.0`), and
 the Models tab fixes and CivitAI support at `0.8.x`.
 
-The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.19.2-context-shift-trigger-fix`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+The Mac release artifact is signed with Apple Developer ID. Build with `scripts/package-dmg.sh 0.20.0-thread-scoped-memories`. See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ## Status
 
@@ -1745,6 +1760,54 @@ Fixed to compute a fresh estimate over the full, untruncated
 whether the real conversation has grown enough to need compacting,
 independent of whatever `ChatContextBuilder` separately decides to
 send this particular turn.
+
+## Thread-scoped memories
+
+Requested live: "Temos que deixar memórias por thread/conversa. E
+elas são geradas e consumidas dentro do thread que foram geradas. Mas
+também criar um botão pra cada memória no menu Memórias que pode
+transformar ela em Global ou voltar apenas pra conversa onde foi
+gerada."
+
+**Two new fields, one existing pattern.** `ChatMemory` gained
+`originThreadID` (the thread this memory was actually generated in —
+set once, immutably, whether it came from an explicit "Remember" or
+an accepted "Suggest from Thread" suggestion, and never touched again
+afterward) and `isGlobal` (whether that origin currently *restricts*
+where the memory applies). Both new memories default to
+`isGlobal: false` now — thread-scoped is the default going forward,
+matching the request directly. A memory decoded without these fields
+at all (anything saved before this existed) defaults to `isGlobal:
+true` — exactly how every memory already behaved, so nothing already
+saved silently stops working.
+
+**One shared check, not six copies of the same logic.** A new
+`ChatMemory.appliesTo(threadID:)` — `isGlobal || originThreadID == nil
+|| originThreadID == threadID` — is the single place this decision is
+made. Every site across the app that filters which memories go into a
+chat request now calls it alongside the existing Profile check:
+Mac's `ChatViewModel.send()` and its own tool-call follow-up, iOS's
+`NativeChatEngine`-backed local path and `RemoteChatEngine`'s
+Mac-backed one (both its main send and its own follow-up), and Mac
+Sync's server-side generation path (`AnvilSyncServer
+.runBackgroundGeneration`, servicing a phone that's using this Mac
+as its own chat backend) — six real call sites, found by grepping for
+the existing Profile-only filter pattern, not guessed at.
+
+**The button.** A memory's row in the Memory screen (Mac: an inline
+globe/bubble icon; iOS: a swipe action) toggles `isGlobal` — labeled
+"Global" for the Mac icon's tooltip and iOS's swipe label, restricting
+back down shows which conversation it's scoped to by name (or "a
+deleted conversation" if that thread's since been removed). A memory
+with no `originThreadID` at all doesn't get the button — there's
+nothing to restrict it back down to.
+
+`acceptMemorySuggestion` on both platforms now threads the
+suggestion's own `sourceThreadID` through as the new memory's
+`originThreadID` (falling back to whatever's currently open only if
+the suggestion itself never recorded one) — not necessarily
+`currentThread`, since a suggestion can be reviewed on a different
+device, or a different thread, than the one that generated it.
 
 ## Architecture
 

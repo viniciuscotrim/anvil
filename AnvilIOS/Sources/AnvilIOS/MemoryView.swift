@@ -224,12 +224,36 @@ struct MemoryView: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                Text(threadScopeLabel(for: memory))
+                    .font(.caption2)
+                    .foregroundStyle(memory.isGlobal ? Color.secondary : Color.accentColor)
             }
         }
         .swipeActions {
             Button("Delete", role: .destructive) {
                 Task { await threads.deleteMemory(memory) }
             }
+            // Requested live: "criar um botão pra cada memória no menu
+            // Memórias que pode transformar ela em Global ou voltar
+            // apenas pra conversa onde foi gerada." Hidden for a
+            // memory with no recorded origin at all — see
+            // `ChatMemory.appliesTo`'s own doc comment.
+            if memory.originThreadID != nil {
+                Button {
+                    Task { await threads.toggleMemoryGlobal(memory) }
+                } label: {
+                    Label(memory.isGlobal ? "Restrict" : "Make Global", systemImage: memory.isGlobal ? "bubble.left" : "globe")
+                }
+                .tint(.blue)
+            }
         }
+    }
+
+    private func threadScopeLabel(for memory: ChatMemory) -> String {
+        guard !memory.isGlobal, let originThreadID = memory.originThreadID else {
+            return "All conversations"
+        }
+        let threadTitle = threads.allThreads.first(where: { $0.id == originThreadID })?.title
+        return "Only in: \(threadTitle ?? "a deleted conversation")"
     }
 }

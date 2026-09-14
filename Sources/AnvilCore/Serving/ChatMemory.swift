@@ -62,6 +62,27 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
     /// because of it and whatever came after, instead of leaving orphaned
     /// "facts" behind that trace back to a question that no longer exists.
     public var createdFromMessageID: UUID?
+    /// The thread this memory was actually generated in — set once,
+    /// immutably, at creation time (both an explicit "Remember" and an
+    /// accepted "Suggest from Thread" suggestion record whichever
+    /// thread was open at that moment). Independent of `isGlobal`,
+    /// which controls whether that origin currently *restricts* where
+    /// the memory applies — toggling Global off always restores
+    /// exactly this thread, never guesses at a different one. `nil`
+    /// only for a memory persisted before this field existed, or one
+    /// somehow created with no thread context at all; such a memory is
+    /// treated as global regardless of `isGlobal`'s own value, since
+    /// there's no thread left to scope it back down to.
+    public var originThreadID: UUID?
+    /// Requested live: "memórias por thread/conversa... geradas e
+    /// consumidas dentro do thread que foram geradas" — `true` means
+    /// usable from any conversation (matching every memory's behavior
+    /// before this field existed, and still the default for anything
+    /// decoded without it); `false` restricts it to `originThreadID`
+    /// alone. A button next to each memory in the Memory screen flips
+    /// this — "transformar ela em Global ou voltar apenas pra
+    /// conversa onde foi gerada."
+    public var isGlobal: Bool
 
     public init(
         id: UUID = UUID(),
@@ -73,7 +94,9 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         originDeviceName: String? = nil,
-        createdFromMessageID: UUID? = nil
+        createdFromMessageID: UUID? = nil,
+        originThreadID: UUID? = nil,
+        isGlobal: Bool = true
     ) {
         self.id = id
         self.content = content
@@ -85,10 +108,13 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.originDeviceName = originDeviceName
         self.createdFromMessageID = createdFromMessageID
+        self.originThreadID = originThreadID
+        self.isGlobal = isGlobal
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, content, kind, source, confidence, profileID, createdAt, updatedAt, originDeviceName, createdFromMessageID
+        case originThreadID, isGlobal
     }
 
     public init(from decoder: Decoder) throws {
@@ -103,6 +129,22 @@ public struct ChatMemory: Codable, Identifiable, Equatable, Sendable {
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         originDeviceName = try container.decodeIfPresent(String.self, forKey: .originDeviceName)
         createdFromMessageID = try container.decodeIfPresent(UUID.self, forKey: .createdFromMessageID)
+        originThreadID = try container.decodeIfPresent(UUID.self, forKey: .originThreadID)
+        // Absent only on a memory saved before thread-scoping existed
+        // at all — treated as global, exactly how it already behaved.
+        isGlobal = try container.decodeIfPresent(Bool.self, forKey: .isGlobal) ?? true
+    }
+
+    /// Whether this memory should be pulled into a request being sent
+    /// from `threadID` — the one check both platforms' own context
+    /// filters call, so "global or scoped to this thread" is decided
+    /// in exactly one place. A memory with no recorded origin at all
+    /// (`originThreadID == nil`, e.g. persisted before this field
+    /// existed) always applies, matching how every memory behaved
+    /// before thread-scoping existed regardless of `isGlobal`'s own
+    /// value — there's no thread left to restrict it back down to.
+    public func appliesTo(threadID: UUID) -> Bool {
+        isGlobal || originThreadID == nil || originThreadID == threadID
     }
 }
 

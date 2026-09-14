@@ -124,7 +124,9 @@ final class RemoteChatEngine: ObservableObject {
         let contextBuilder = ChatContextBuilder(
             maxEstimatedTokens: maxEstimatedContextTokens, recentMessageCount: recentMessageCount)
         let activeProfileID = threads.currentThread.profileID
-        let scopedMemories = memories.filter { $0.profileID == nil || $0.profileID == activeProfileID }
+        let scopedMemories = memories.filter {
+            ($0.profileID == nil || $0.profileID == activeProfileID) && $0.appliesTo(threadID: threads.currentThread.id)
+        }
         let context = contextBuilder.build(messages: threads.currentThread.messages, memories: scopedMemories)
         let systemPrompt = Self.composedSystemPrompt(
             profile: profile, offeringTools: !tools.isEmpty, memoryPrompt: context.memoryPrompt)
@@ -305,7 +307,8 @@ final class RemoteChatEngine: ObservableObject {
                 let followUpBuilder = ChatContextBuilder(
                     maxEstimatedTokens: maxEstimatedContextTokens, recentMessageCount: recentMessageCount)
                 let followUpMemories = memories.filter {
-                    $0.profileID == nil || $0.profileID == threads.currentThread.profileID
+                    ($0.profileID == nil || $0.profileID == threads.currentThread.profileID)
+                        && $0.appliesTo(threadID: threads.currentThread.id)
                 }
                 let followUpContext = followUpBuilder.build(
                     messages: threads.currentThread.messages, memories: followUpMemories)

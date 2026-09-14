@@ -431,7 +431,9 @@ struct NativeChatView: View {
         if let prompt = profile?.prompt.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
             parts.append(prompt)
         }
-        let scopedMemories = threads.memories.filter { $0.profileID == nil || $0.profileID == profile?.id }
+        let scopedMemories = threads.memories.filter {
+            ($0.profileID == nil || $0.profileID == profile?.id) && $0.appliesTo(threadID: threads.currentThread.id)
+        }
         if let memoryPrompt = ChatContextBuilder().build(messages: [], memories: scopedMemories).memoryPrompt {
             parts.append(memoryPrompt)
         }

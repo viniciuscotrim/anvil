@@ -262,6 +262,8 @@ public actor CloudSyncEngine {
         if let profileID = memory.profileID { record["profileID"] = profileID.uuidString as CKRecordValue }
         if let origin = memory.originDeviceName { record["originDeviceName"] = origin as CKRecordValue }
         if let sourceMessageID = memory.createdFromMessageID { record["createdFromMessageID"] = sourceMessageID.uuidString as CKRecordValue }
+        if let originThreadID = memory.originThreadID { record["originThreadID"] = originThreadID.uuidString as CKRecordValue }
+        record["isGlobal"] = (memory.isGlobal ? 1 : 0) as CKRecordValue
         return record
     }
 
@@ -319,11 +321,16 @@ public actor CloudSyncEngine {
         else { return nil }
         let profileID = (record["profileID"] as? String).flatMap(UUID.init(uuidString:))
         let createdFromMessageID = (record["createdFromMessageID"] as? String).flatMap(UUID.init(uuidString:))
+        let originThreadID = (record["originThreadID"] as? String).flatMap(UUID.init(uuidString:))
+        // Absent on a record written before thread-scoping existed —
+        // same "global" fallback `ChatMemory`'s own decoder uses.
+        let isGlobal = (record["isGlobal"] as? Int).map { $0 != 0 } ?? true
         return ChatMemory(
             id: id, content: content, kind: kind, source: source,
             confidence: record["confidence"] as? Double, profileID: profileID,
             createdAt: createdAt, updatedAt: updatedAt,
-            originDeviceName: record["originDeviceName"] as? String, createdFromMessageID: createdFromMessageID)
+            originDeviceName: record["originDeviceName"] as? String, createdFromMessageID: createdFromMessageID,
+            originThreadID: originThreadID, isGlobal: isGlobal)
     }
 
     private static func suggestion(from record: CKRecord) -> ChatMemorySuggestion? {

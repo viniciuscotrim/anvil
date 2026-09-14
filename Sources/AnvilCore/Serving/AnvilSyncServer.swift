@@ -381,7 +381,9 @@ public actor AnvilSyncServer {
             profile = await profileStore.get(id: profileID)
         }
         let allMemories = await memoryStore.all()
-        let scopedMemories = allMemories.filter { $0.profileID == nil || $0.profileID == thread.profileID }
+        let scopedMemories = allMemories.filter {
+            ($0.profileID == nil || $0.profileID == thread.profileID) && $0.appliesTo(threadID: thread.id)
+        }
 
         let settings = AppSettings.load()
         let contextBuilder = ChatContextBuilder(

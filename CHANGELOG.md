@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.20.0-thread-scoped-memories] - 2026-09-14
+
+### Added
+- **Memories are thread-scoped by default now, with a button to
+  promote one to Global or send it back**: requested live — "Temos
+  que deixar memórias por thread/conversa. E elas são geradas e
+  consumidas dentro do thread que foram geradas. Mas também criar um
+  botão pra cada memória no menu Memórias que pode transformar ela em
+  Global ou voltar apenas pra conversa onde foi gerada." `ChatMemory`
+  gained two fields: `originThreadID` (the thread it was actually
+  generated in, set once and never changed) and `isGlobal` (`true` by
+  default only for a memory saved before this existed — everything new
+  starts thread-scoped). Both an explicit "Remember" and an accepted
+  "Suggest from Thread" suggestion now default to `isGlobal: false`,
+  tied to whichever thread was open (the suggestion's own recorded
+  origin thread for an accepted suggestion, not necessarily whatever's
+  open right now if it's being reviewed elsewhere).
+  - A globe/bubble icon button next to each memory in the Memory
+    screen (Mac: inline; iOS: a swipe action) toggles `isGlobal` —
+    "Global" means every conversation; the other state shows which
+    conversation it's restricted to, by name.
+  - Every place that filters which memories to send with a chat
+    request now also checks the memory's own `appliesTo(threadID:)` —
+    a new shared `AnvilCore` helper covering both platforms' local and
+    remote chat paths, plus Mac Sync's own server-side generation path
+    (`AnvilSyncServer`) — six real call sites total, previously only
+    filtering by Profile.
+  - A memory with no recorded origin at all (anything saved before
+    this feature existed) keeps applying everywhere it already did,
+    regardless of `isGlobal`'s own value — there's no thread left to
+    restrict it back down to, and the toggle button doesn't offer that
+    option for one.
+
+Verified: `swift build` + `swift test` (130/130, 7 new — `ChatMemory
+.appliesTo` covering thread-scoped/global/no-origin/round-trip cases
+directly); iOS build succeeded and installed + launched on the
+physical iPhone.
+
 ## [0.19.2-context-shift-trigger-fix] - 2026-09-14
 
 ### Fixed

@@ -611,13 +611,23 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// `originThreadID`/`isGlobal` default to thread-scoped, tied to
+    /// whichever thread is current — requested live: "Temos que deixar
+    /// memórias por thread/conversa. E elas são geradas e consumidas
+    /// dentro do thread que foram geradas." A caller with a more
+    /// specific origin in mind (`acceptMemorySuggestion`, tied to
+    /// whichever thread the suggestion actually came from) passes its
+    /// own `originThreadID` explicitly instead of relying on this
+    /// default.
     func addMemory(
         _ content: String,
         kind: ChatMemoryKind = .fact,
         source: ChatMemorySource = .explicit,
         confidence: Double? = nil,
         profileID: UUID? = nil,
-        createdFromMessageID: UUID? = nil
+        createdFromMessageID: UUID? = nil,
+        originThreadID: UUID? = nil,
+        isGlobal: Bool = false
     ) async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -628,7 +638,9 @@ final class ChatViewModel: ObservableObject {
             confidence: confidence,
             profileID: profileID,
             originDeviceName: DeviceIdentity.currentName,
-            createdFromMessageID: createdFromMessageID
+            createdFromMessageID: createdFromMessageID,
+            originThreadID: originThreadID ?? currentThread.id,
+            isGlobal: isGlobal
         )
         guard let saved = try? await memoryStore.upsert(memory) else { return }
         memories = await memoryStore.all()
@@ -645,6 +657,16 @@ final class ChatViewModel: ObservableObject {
             await cloudSync.markMemoryChanged(saved)
             await cloudSync.syncNow()
         }
+    }
+
+    /// Flips whether `memory` applies everywhere or only within the
+    /// thread it was originally generated in. Requested live: "criar
+    /// um botão pra cada memória no menu Memórias que pode transformar
+    /// ela em Global ou voltar apenas pra conversa onde foi gerada."
+    func toggleMemoryGlobal(_ memory: ChatMemory) async {
+        var updated = memory
+        updated.isGlobal.toggle()
+        await updateMemory(updated)
     }
 
     func deleteMemory(_ memory: ChatMemory) async {
@@ -929,14 +951,15 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    /// Always global (`profileID: nil`), regardless of the thread's own
-    /// profile — the whole point of this tool is picking a conversation
-    /// back up from *any* fresh thread, which `send()`'s own memory
-    /// filter (`profileID == nil || profileID == activeProfileID`) only
-    /// guarantees for a memory with no profile of its own. Scoping to
-    /// `currentThread.profileID` would silently hide these from a new
-    /// thread using a different profile (or none) — exactly the
-    /// scenario this exists for.
+    /// Thread-scoped by default (`isGlobal: false`), tied to wherever
+    /// the suggestion was actually generated — requested live: "Temos
+    /// que deixar memórias por thread/conversa. E elas são geradas e
+    /// consumidas dentro do thread que foram geradas." The button next
+    /// to it in the Memory screen promotes it to Global whenever a fact
+    /// genuinely ought to follow the user into a brand-new conversation
+    /// (`toggleMemoryGlobal`). Still always global *by profile*
+    /// (`profileID: nil`) regardless of the thread's own profile — that
+    /// dimension is unrelated to this one and unchanged from before.
     func acceptMemorySuggestion(_ suggestion: ChatMemorySuggestion) async {
         await addMemory(
             suggestion.content,
@@ -949,7 +972,9 @@ final class ChatViewModel: ObservableObject {
             // different conversation entirely by the time this
             // suggestion is actually reviewed (possibly on another
             // device, once suggestions sync).
-            createdFromMessageID: suggestion.createdFromMessageID
+            createdFromMessageID: suggestion.createdFromMessageID,
+            originThreadID: suggestion.sourceThreadID ?? currentThread.id,
+            isGlobal: false
         )
         await removeSuggestion(suggestion.id)
     }
@@ -1262,7 +1287,9 @@ final class ChatViewModel: ObservableObject {
             recentMessageCount: recentMessageCount
         )
         let activeProfileID = currentThread.profileID
-        let contextMemories = memories.filter { $0.profileID == nil || $0.profileID == activeProfileID }
+        let contextMemories = memories.filter {
+            ($0.profileID == nil || $0.profileID == activeProfileID) && $0.appliesTo(threadID: currentThread.id)
+        }
         let context = contextBuilder.build(messages: currentThread.messages, memories: contextMemories)
         lastEstimatedContextTokens = context.messages.reduce(0) { $0 + ChatContextBuilder.estimateTokens($1.content) }
         let systemPrompt = composedSystemPrompt(offeringTools: !tools.isEmpty, memoryPrompt: context.memoryPrompt)
@@ -1425,7 +1452,9 @@ final class ChatViewModel: ObservableObject {
                     maxEstimatedTokens: maxEstimatedContextTokens,
                     recentMessageCount: recentMessageCount
                 )
-                let followUpMemories = memories.filter { $0.profileID == nil || $0.profileID == currentThread.profileID }
+                let followUpMemories = memories.filter {
+                    ($0.profileID == nil || $0.profileID == currentThread.profileID) && $0.appliesTo(threadID: currentThread.id)
+                }
                 let followUpContext = followUpBuilder.build(messages: currentThread.messages, memories: followUpMemories)
                 lastEstimatedContextTokens = followUpContext.messages.reduce(0) { $0 + ChatContextBuilder.estimateTokens($1.content) }
                 let followUpStream = client.streamSend(

@@ -341,19 +341,27 @@ final class ChatThreadsViewModel {
         try? settings.save()
     }
 
+    /// `originThreadID`/`isGlobal` default to thread-scoped, tied to
+    /// whichever thread is current — requested live: "Temos que deixar
+    /// memórias por thread/conversa. E elas são geradas e consumidas
+    /// dentro do thread que foram geradas." Mirrors Mac's own
+    /// `ChatViewModel.addMemory`.
     func addMemory(
         _ content: String,
         kind: ChatMemoryKind = .fact,
         source: ChatMemorySource = .explicit,
         confidence: Double? = nil,
         profileID: UUID? = nil,
-        createdFromMessageID: UUID? = nil
+        createdFromMessageID: UUID? = nil,
+        originThreadID: UUID? = nil,
+        isGlobal: Bool = false
     ) async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let memory = ChatMemory(
             content: trimmed, kind: kind, source: source, confidence: confidence, profileID: profileID,
-            originDeviceName: DeviceIdentity.currentName, createdFromMessageID: createdFromMessageID)
+            originDeviceName: DeviceIdentity.currentName, createdFromMessageID: createdFromMessageID,
+            originThreadID: originThreadID ?? currentThread.id, isGlobal: isGlobal)
         _ = try? await memoryStore.upsert(memory)
         memories = await memoryStore.all()
         await pushMemoryIfMacActive(memory)
@@ -365,6 +373,15 @@ final class ChatThreadsViewModel {
         memories = await memoryStore.all()
         await pushMemoryIfMacActive(memory)
         await pushMemoryToCloudIfEnabled(memory)
+    }
+
+    /// Flips whether `memory` applies everywhere or only within the
+    /// thread it was originally generated in — mirrors Mac's own
+    /// `ChatViewModel.toggleMemoryGlobal`.
+    func toggleMemoryGlobal(_ memory: ChatMemory) async {
+        var updated = memory
+        updated.isGlobal.toggle()
+        await updateMemory(updated)
     }
 
     func deleteMemory(_ memory: ChatMemory) async {
@@ -495,16 +512,18 @@ final class ChatThreadsViewModel {
         }
     }
 
-    /// Always global (`profileID: nil`) — see Mac's own
-    /// `ChatViewModel.acceptMemorySuggestion` doc comment for why
-    /// scoping to the originating thread's profile would silently hide
-    /// these from exactly the fresh-thread-different-profile case this
-    /// tool exists for.
+    /// Thread-scoped by default (`isGlobal: false`), tied to wherever
+    /// the suggestion was actually generated — see Mac's own
+    /// `ChatViewModel.acceptMemorySuggestion` doc comment. Still always
+    /// global *by profile* (`profileID: nil`) regardless of the
+    /// thread's own profile — unrelated dimension, unchanged.
     func acceptMemorySuggestion(_ suggestion: ChatMemorySuggestion) async {
         await addMemory(
             suggestion.content, kind: suggestion.kind, source: .inferred,
             confidence: suggestion.confidence, profileID: nil,
-            createdFromMessageID: suggestion.createdFromMessageID ?? currentThread.messages.last?.id)
+            createdFromMessageID: suggestion.createdFromMessageID ?? currentThread.messages.last?.id,
+            originThreadID: suggestion.sourceThreadID ?? currentThread.id,
+            isGlobal: false)
         await removeSuggestion(suggestion.id)
     }
 
