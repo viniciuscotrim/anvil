@@ -378,9 +378,7 @@ public struct DrawThingsCatalog: Sendable {
 
         guard let url = components.url else { return [] }
         var request = URLRequest(url: url)
-        if let token = HFTokenStore.load(), !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        request.setBearerToken(HFTokenStore.load())
 
         guard let (data, response) = try? await session.data(for: request),
               let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {

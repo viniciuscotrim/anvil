@@ -161,9 +161,7 @@ public struct HuggingFaceCatalog: Sendable {
         // up the user's own private/gated repos in search results too,
         // not just public ones, and gets Hugging Face's higher
         // authenticated rate limit.
-        if let token = HFTokenStore.load(), !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        request.setBearerToken(HFTokenStore.load())
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -198,9 +196,7 @@ public struct HuggingFaceCatalog: Sendable {
         }
 
         var request = URLRequest(url: url)
-        if let token = HFTokenStore.load(), !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        request.setBearerToken(HFTokenStore.load())
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -233,9 +229,7 @@ public struct HuggingFaceCatalog: Sendable {
         }
 
         var request = URLRequest(url: url)
-        if let token = HFTokenStore.load(), !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        request.setBearerToken(HFTokenStore.load())
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {

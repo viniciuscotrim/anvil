@@ -40,9 +40,7 @@ public struct CivitAIDownloader: Sendable {
         let destinationFile = destinationDir.appendingPathComponent(file.filename)
 
         var request = URLRequest(url: file.downloadURL)
-        if let token = CivitAITokenStore.load(), !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        request.setBearerToken(CivitAITokenStore.load())
 
         #if os(iOS)
         // See `HFRepoDownloader`'s matching branch — a background

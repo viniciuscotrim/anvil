@@ -152,16 +152,7 @@ public actor LLMServer {
     }
 
     public func stop() async {
-        if let process, process.isRunning {
-            process.terminate()
-            for _ in 0..<20 {
-                if !process.isRunning { break }
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-            if process.isRunning {
-                kill(process.processIdentifier, SIGKILL)
-            }
-        }
+        await process?.terminateAndWaitOrKill()
         self.process = nil
 
         if let launcherURL {

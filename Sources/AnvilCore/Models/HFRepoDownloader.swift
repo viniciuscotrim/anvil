@@ -76,9 +76,7 @@ public struct HFRepoDownloader: Sendable {
                 throw ModelError.downloadFailed("Could not build a download URL for \(filePath)")
             }
             var request = URLRequest(url: fileURL)
-            if let token, !token.isEmpty {
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            }
+            request.setBearerToken(token)
 
             try FileManager.default.createDirectory(
                 at: destinationFile.deletingLastPathComponent(),

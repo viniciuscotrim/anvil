@@ -168,9 +168,7 @@ public struct CivitAICatalog: Sendable {
         }
 
         var request = URLRequest(url: url)
-        if let token = CivitAITokenStore.load(), !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        request.setBearerToken(CivitAITokenStore.load())
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
