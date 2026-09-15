@@ -120,7 +120,10 @@ public enum TranscriptFormatter {
         }
     }
 
-    private static let isoFormatter: ISO8601DateFormatter = {
+    // `nonisolated(unsafe)`: see `anvilDateFormatter`'s doc comment
+    // (ModelEntry.swift) for why a shared, configured-once-then-only-
+    // read `ISO8601DateFormatter` is safe despite not being `Sendable`.
+    nonisolated(unsafe) private static let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter

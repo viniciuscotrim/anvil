@@ -109,18 +109,8 @@ public struct HFModelSummary: Codable, Sendable, Equatable, Identifiable {
     // ("2025-06-27T16:22:19.000Z"); a plain `ISO8601DateFormatter`
     // rejects that unless `.withFractionalSeconds` is set. Falls back
     // to the plain format too, just in case a response ever omits them.
-    private static let iso8601Fractional: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-    private static let iso8601Plain: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
     private static func parseHFDate(_ string: String) -> Date? {
-        iso8601Fractional.date(from: string) ?? iso8601Plain.date(from: string)
+        Date.parseFlexibleISO8601(string)
     }
 
     private static func bytesPerParameter(dtype: String) -> Int64 {

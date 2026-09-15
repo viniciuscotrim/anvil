@@ -4,10 +4,24 @@ import Foundation
 /// don't belong on any one model/thread/profile — today just the
 /// optional custom folder for downloaded/imported models, plus the Code
 /// agent's own settings. One JSON file, same pattern as the other
-/// stores, but a plain struct (not an actor) since it's only ever
-/// touched from the main actor UI and writes are small and infrequent —
-/// callers just re-`load()`/`save()` around each change instead of
-/// holding a long-lived instance.
+/// stores, but a plain struct (not an actor): callers just re-`load()`/
+/// `save()` around each change instead of holding a long-lived
+/// instance.
+///
+/// Not actually main-actor-only in practice — `load()` runs from
+/// background download-preparation code too (`ModelDownloader`'s own
+/// `destinationDirectory`, for one), concurrently with a UI-driven
+/// `save()`. That's an accepted, narrow trade-off rather than an
+/// oversight: `save()` writes atomically, so a concurrent `load()`
+/// always sees either the old or the new complete file, never a torn
+/// one — the only real failure mode is a rare "lost update" (two
+/// concurrent load-mutate-save cycles racing, the later one winning
+/// outright) for a value that's just a user preference, cheaply
+/// corrected by setting it again. Serializing every read/write behind
+/// an actor (like `ModelRegistry` does) would close that gap, but at
+/// the cost of making all ~40 call sites across both apps `async` for
+/// a race this unlikely and this recoverable — not a trade worth
+/// making today.
 public struct AppSettings: Codable, Sendable, Equatable {
     /// Where new downloads land and where "scan for existing models"
     /// looks — nil means the default, `RuntimePaths.modelsDirectory`.

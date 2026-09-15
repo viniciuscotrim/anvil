@@ -130,11 +130,45 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
 /// Plain `.iso8601` truncates to whole seconds, which would make a
 /// freshly-created entry compare unequal to itself after a save/reload
 /// round trip. Fractional seconds keep that lossless.
-private let anvilDateFormatter: ISO8601DateFormatter = {
+///
+/// `nonisolated(unsafe)`: `ISO8601DateFormatter` isn't `Sendable` (it
+/// has mutable configuration state), which Swift 6's strict
+/// concurrency checking flags on any shared `static`/global instance
+/// regardless of how it's actually used. Safe here in practice —
+/// `formatOptions` is set once, above, and never touched again; every
+/// later use only ever calls `string(from:)`/`date(from:)`, which
+/// don't mutate the formatter's configuration.
+nonisolated(unsafe) private let anvilDateFormatter: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return formatter
 }()
+
+/// Shared by `HuggingFaceCatalog`/`CivitAICatalog`, whose API responses
+/// both carry timestamps with fractional seconds
+/// ("2025-06-27T16:22:19.000Z"), which a plain `ISO8601DateFormatter`
+/// rejects unless `.withFractionalSeconds` is set — falls back to the
+/// plain format too, just in case a response ever omits them. Extracted
+/// here (rather than duplicated in each catalog, as it used to be)
+/// since both need exactly the same fractional-then-plain fallback.
+public extension Date {
+    static func parseFlexibleISO8601(_ string: String) -> Date? {
+        Self.iso8601Fractional.date(from: string) ?? Self.iso8601Plain.date(from: string)
+    }
+
+    // See `anvilDateFormatter`'s doc comment for why `nonisolated(unsafe)`
+    // is safe here: configured once, only ever read from afterward.
+    nonisolated(unsafe) private static let iso8601Fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    nonisolated(unsafe) private static let iso8601Plain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+}
 
 public extension JSONEncoder {
     static var anvil: JSONEncoder {

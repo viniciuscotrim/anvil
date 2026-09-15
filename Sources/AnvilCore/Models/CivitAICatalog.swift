@@ -138,18 +138,8 @@ public struct CivitAIModelSummary: Codable, Sendable, Equatable, Identifiable {
     // CivitAI's `publishedAt` carries fractional seconds
     // ("2024-08-02T23:46:31.363Z"), same shape as Hugging Face's own
     // `lastModified` — see that type's identical formatter pair.
-    private static let iso8601Fractional: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-    private static let iso8601Plain: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
     private static func parseCivitAIDate(_ string: String) -> Date? {
-        iso8601Fractional.date(from: string) ?? iso8601Plain.date(from: string)
+        Date.parseFlexibleISO8601(string)
     }
 }
 
