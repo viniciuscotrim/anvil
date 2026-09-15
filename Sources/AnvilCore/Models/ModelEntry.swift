@@ -1,6 +1,6 @@
 import Foundation
 
-extension URL {
+public extension URL {
     /// A path key for identifying "the same files on disk", resolving
     /// symlinks first — two paths that reach the same real directory
     /// through different symlinks (common on an externally-mounted

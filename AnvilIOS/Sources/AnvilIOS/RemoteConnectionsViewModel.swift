@@ -2,11 +2,15 @@ import AnvilCore
 import Foundation
 import Observation
 
-/// Owns the list of Macs this phone knows about, and finding new ones —
-/// shared by Chat's "On Your Mac" source picker and the Images tab's own
-/// connection sheet, so there's exactly one place that loads/saves
-/// `remote_connections.json` and runs `LocalNetworkScanner`, instead of
-/// two screens each keeping their own copy that could drift apart.
+/// Owns the list of Macs this phone knows about, and finding new ones.
+/// Chat's "On Your Mac" source picker (`NativeChatView`) and the Images
+/// tab's own connection sheet (`RemoteMacView`) each hold their own
+/// separate instance of this type — not a shared one — but both read
+/// and write the same underlying `remote_connections.json` via
+/// `RemoteMacConnectionStore`, so the *saved* list of Macs never drifts
+/// apart between the two; only in-flight, in-memory state (a scan
+/// currently running, its progress, what it's found so far) is
+/// per-screen.
 ///
 /// Frictionless by design: no IP, no port, ever typed for this to work.
 /// `refreshConnections()` first re-checks whatever's already saved (fast:
@@ -33,15 +37,19 @@ final class RemoteConnectionsViewModel {
 
     @ObservationIgnored
     private let store = RemoteMacConnectionStore()
-    /// `refreshConnections()` runs every time a tab appears — switching
-    /// back and forth between Chat and Images (both share this view
-    /// model) could otherwise repeat the *entire* subnet scan on every
-    /// visit, worst case tens of seconds of Bonjour discovery plus a
-    /// 254-host/20-port fallback sweep, just to reappear on a screen
-    /// the user already saw a moment ago. A short cooldown skips
-    /// repeating that scan (previous results stay shown, still
-    /// filtered against whatever's saved) when the last one finished
-    /// too recently to plausibly have changed.
+    /// `refreshConnections()` runs every time this screen's sheet
+    /// appears — since each screen holds its own instance (see this
+    /// type's own header comment), this cooldown only helps repeatedly
+    /// reopening the *same* screen's sheet within the window, not
+    /// switching between Chat's and Images' separate ones — but that's
+    /// still a real, common case (dismissing and reopening the same
+    /// sheet to glance at scan progress) that could otherwise repeat
+    /// the *entire* subnet scan every time, worst case tens of seconds
+    /// of Bonjour discovery plus a 254-host/20-port fallback sweep, just
+    /// to reappear on a screen the user already saw a moment ago. A
+    /// short cooldown skips repeating that scan (previous results stay
+    /// shown, still filtered against whatever's saved) when the last
+    /// one finished too recently to plausibly have changed.
     @ObservationIgnored
     private static let scanCooldown: TimeInterval = 30
     @ObservationIgnored

@@ -13,10 +13,17 @@ struct AnvilSyncClient {
     /// happens to use — the sync server is a separate listener on the
     /// same Mac, not tied to any one model's own port.
     static let port = 8090
-    /// Short on purpose: this runs on a 3-second merge loop, so a Mac
-    /// that's gone offline mid-cycle must fail fast rather than tie up
-    /// that loop for `URLSession.shared`'s default 60s timeout.
-    private static let requestTimeout: TimeInterval = 8
+    /// Shorter than `URLSession.shared`'s default 60s on purpose: this
+    /// runs on a 3-second merge loop, so a Mac that's gone offline
+    /// mid-cycle should fail reasonably fast rather than tie up that
+    /// loop. Not cut all the way down to a few seconds, though — this
+    /// same timeout also bounds PUT-ing a full `ChatThread` (whose
+    /// history is never compacted, so it can genuinely be large) and
+    /// GET-ing the complete threads list, both of which need real time
+    /// to transfer over a slow or congested Wi-Fi link even when the
+    /// Mac is perfectly reachable; a value tuned only for "detect
+    /// offline fast" would abort those mid-transfer instead.
+    private static let requestTimeout: TimeInterval = 20
 
     init(session: URLSession = .shared) {
         self.session = session

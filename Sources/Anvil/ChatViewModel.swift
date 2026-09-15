@@ -1933,7 +1933,25 @@ final class ChatViewModel {
             if currentThread.id == saved.id, saved.updatedAt >= currentThread.updatedAt {
                 currentThread = saved
             }
-            allThreads = await threadStore.all()
+            // Updates the one changed entry in place and re-sorts,
+            // rather than `allThreads = await threadStore.all()` — a
+            // full reload used to mean re-reading and re-decoding every
+            // saved thread's file from disk on every single message
+            // send (this runs on essentially every turn), which only
+            // got more expensive as `PerItemJSONStore` made a *single*
+            // save cheap but a full listing still O(thread count).
+            // Guarded the same way `currentThread` above is: a stale
+            // save resuming after a newer one already landed must not
+            // overwrite it here either.
+            if let index = allThreads.firstIndex(where: { $0.id == saved.id }) {
+                if saved.updatedAt >= allThreads[index].updatedAt {
+                    allThreads[index] = saved
+                    allThreads.sort { $0.updatedAt > $1.updatedAt }
+                }
+            } else {
+                allThreads.append(saved)
+                allThreads.sort { $0.updatedAt > $1.updatedAt }
+            }
             if cloudEnabled {
                 await cloudSync.markThreadChanged(saved)
                 await cloudSync.syncNow()

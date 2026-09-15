@@ -27,6 +27,43 @@ struct ChatContextBuilderTests {
         #expect(result.messages.count < messages.count)
     }
 
+    /// The degenerate case call out in `build`'s own comment: no
+    /// `.user` message anywhere (so there's no "first turn" to seed
+    /// `selected`), and the recent window's own messages are too big
+    /// to fit the budget either — `selected` is still completely empty
+    /// by the time the "middle" block gets inserted. The single bulk
+    /// `insert(contentsOf:at:)` must still produce correct chronological
+    /// order here, which the old per-message `insert(at: min(1,
+    /// selected.count))` loop this replaced did not (each successive
+    /// insert at a growing `selected.count` scrambled the order once it
+    /// passed 1) — a real fix, not just an equivalent-but-faster
+    /// rewrite.
+    @Test
+    func middleMessagesLandInChronologicalOrderEvenWithNoFirstUserTurn() {
+        // `ChatContextBuilder.init` clamps `maxEstimatedTokens` to at
+        // least 512, so the budget below is exactly that floor, not a
+        // custom small value.
+        //
+        // Indices 0-9: ~100 tokens each (1000 total — more than fits).
+        // Indices 10-11 (the `recentMessageCount: 2` window): ~1000
+        // tokens each — too big to fit the 512-token budget, so
+        // `recent` contributes nothing to `selected` either.
+        let smallMessages = (0..<10).map { _ in
+            ChatMessage(role: .assistant, content: String(repeating: "x", count: 400))
+        }
+        let largeMessages = (0..<2).map { _ in
+            ChatMessage(role: .assistant, content: String(repeating: "x", count: 4_000))
+        }
+        let messages = smallMessages + largeMessages
+
+        let result = ChatContextBuilder(maxEstimatedTokens: 512, recentMessageCount: 2).build(messages: messages)
+
+        // Budget 512 fits exactly 5 of the ~100-token small messages —
+        // the five most recent ones *not* in the (too-expensive) recent
+        // window, i.e. indices 5-9 — in ascending (chronological) order.
+        #expect(result.messages.map(\.id) == (5...9).map { messages[$0].id })
+    }
+
     /// Pins the exact ordering `build`'s "middle" (non-recent, non-first)
     /// selection produces once more than one of those messages fits the
     /// budget — a regression guard for the O(n) rewrite of what used to

@@ -431,16 +431,8 @@ private struct ChatCompletionResponse: Decodable {
         }
         let message: Message
     }
-    struct Usage: Decodable {
-        let completionTokens: Int
-        let promptTokensDetails: PromptTokensDetails?
-        enum CodingKeys: String, CodingKey {
-            case completionTokens = "completion_tokens"
-            case promptTokensDetails = "prompt_tokens_details"
-        }
-    }
     let choices: [Choice]
-    let usage: Usage?
+    let usage: WireUsage?
 }
 
 /// One `data:` line's JSON payload from a streamed
@@ -467,16 +459,20 @@ private struct ChatCompletionChunk: Decodable {
         }
         let delta: Delta
     }
-    struct Usage: Decodable {
-        let completionTokens: Int
-        let promptTokensDetails: PromptTokensDetails?
-        enum CodingKeys: String, CodingKey {
-            case completionTokens = "completion_tokens"
-            case promptTokensDetails = "prompt_tokens_details"
-        }
-    }
     let choices: [Choice]
-    let usage: Usage?
+    let usage: WireUsage?
+}
+
+/// Shared by `ChatCompletionResponse` (a full, non-streamed reply) and
+/// `ChatCompletionChunk` (one piece of a streamed one) — both report
+/// the same usage shape, just at different points in the response.
+private struct WireUsage: Decodable {
+    let completionTokens: Int
+    let promptTokensDetails: PromptTokensDetails?
+    enum CodingKeys: String, CodingKey {
+        case completionTokens = "completion_tokens"
+        case promptTokensDetails = "prompt_tokens_details"
+    }
 }
 
 private struct PromptTokensDetails: Decodable {

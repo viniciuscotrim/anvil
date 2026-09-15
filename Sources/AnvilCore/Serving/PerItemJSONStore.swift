@@ -90,7 +90,18 @@ actor PerItemJSONStore<Item: Codable & Sendable> {
     func delete(id: UUID) throws {
         ensureMigrated()
         try ensureDirectoryExists()
-        try? FileManager.default.removeItem(at: fileURL(for: id))
+        let url = fileURL(for: id)
+        // Only a no-op for "already gone" (matches the old single-file
+        // store's behavior — deleting an id that was never there did
+        // nothing). A `try?` here would also have swallowed a *real*
+        // removal failure (permissions, a read-only volume, an I/O
+        // error) — the file would stay on disk, still returned by
+        // `all()`/`get(id:)`, while the caller's tombstone (recorded
+        // right after this returns) marks it deleted for sync purposes:
+        // a "deleted" item silently reappears locally while staying
+        // invisible to sync merges.
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
     }
 
     private func fileURL(for id: UUID) -> URL {
@@ -119,22 +130,40 @@ actor PerItemJSONStore<Item: Codable & Sendable> {
 
     /// One-time, idempotent migration from the old single-file format.
     /// Safe to call from multiple already-loaded instances racing at
-    /// app launch: each checks the directory's existence before
-    /// touching anything, and a legacy file already renamed by another
-    /// instance by the time this one gets to it is simply ignored —
-    /// the migration itself, not this guard, is what actually matters
-    /// for correctness.
+    /// app launch (`ChatViewModel` and `AnvilSyncServer` each hold
+    /// their own separate store instance pointed at the same
+    /// directory): every item is written into a *temporary* sibling
+    /// directory first, which is only renamed to the real directory
+    /// name once complete. `fileExists(atPath: directoryURL.path)`
+    /// (the guard every instance checks before touching anything) can
+    /// therefore only ever see "not migrated yet" or "fully migrated"
+    /// — never a partially-written directory a slower instance's
+    /// `loadAll()` could read an incomplete result from. If two
+    /// instances still race past that check, `moveItem` only succeeds
+    /// for whichever renames first (into a destination that doesn't
+    /// exist yet); the loser's redundant copy (both read the same
+    /// legacy file, so it's identical) is discarded by `defer` below.
     private func ensureMigrated() {
         guard !didEnsureMigration else { return }
         didEnsureMigration = true
         guard !FileManager.default.fileExists(atPath: directoryURL.path) else { return }
         guard let data = try? Data(contentsOf: legacyFileURL),
               let items = try? JSONDecoder.anvil.decode([Item].self, from: data) else { return }
-        guard (try? ensureDirectoryExists()) != nil else { return }
+
+        let tempDirectoryURL = directoryURL.deletingLastPathComponent()
+            .appendingPathComponent(".\(directoryURL.lastPathComponent)-migrating-\(UUID().uuidString)")
+        guard (try? FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)) != nil
+        else { return }
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
         for item in items {
             guard let encoded = try? JSONEncoder.anvil.encode(item) else { continue }
-            try? encoded.write(to: fileURL(for: idOf(item)), options: .atomic)
+            let destination = tempDirectoryURL.appendingPathComponent("\(idOf(item).uuidString).json")
+            try? encoded.write(to: destination, options: .atomic)
         }
+
+        guard (try? FileManager.default.moveItem(at: tempDirectoryURL, to: directoryURL)) != nil else { return }
+
         // Kept as a backup rather than deleted — if the migration above
         // missed something, the original data is still on disk to
         // recover from by hand.

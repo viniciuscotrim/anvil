@@ -48,11 +48,21 @@ public struct ChatContextBuilder: Sendable {
         }
         // Collected newest-old-first (matching `prefix.reversed()`'s own
         // order), then reversed once and inserted as a single block —
-        // equivalent to the old per-message `insert(at: min(1, ...))`
-        // (each insert at index 1 pushed the previous one rightward, so
-        // the net effect was always this same oldest-to-newest ordering
-        // right after the first turn), without an O(prefix.count) shift
-        // on every accepted message.
+        // matches the old per-message `insert(at: min(1, ...))`'s
+        // result whenever `selected` already has at least the first
+        // user turn in it (the common case: each insert at index 1
+        // pushed the previous one rightward, so the net effect was
+        // always this same oldest-to-newest ordering right after the
+        // first turn), without an O(prefix.count) shift on every
+        // accepted message. When `selected` is still empty at this
+        // point (no `.user` message anywhere in `messages`, and nothing
+        // from `recent` fit the budget either — a genuinely degenerate
+        // thread), this single-block insert at index 0 produces correct
+        // chronological order; the old per-message loop did not (each
+        // successive insert at `min(1, 0/1/2/...)` scrambled the order
+        // once `selected.count` grew past 1), so this is a real fix for
+        // that edge case, not just a faster equivalent — see
+        // `middleMessagesLandInChronologicalOrderEvenWithNoFirstUserTurn`.
         var middleMessagesNewestFirst: [ChatMessage] = []
         for message in prefix.reversed() {
             if selectedIDs.contains(message.id) { continue }

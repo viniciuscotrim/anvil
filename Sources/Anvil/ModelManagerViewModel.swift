@@ -558,8 +558,14 @@ final class ModelManagerViewModel {
     /// models folder — the "Move" button only makes sense otherwise
     /// (drives whether the View shows/enables it).
     func isUnderCurrentModelsFolder(_ entry: ModelEntry) -> Bool {
-        let root = AppSettings.load().effectiveModelsRoot.standardizedFileURL.path
-        let path = URL(fileURLWithPath: entry.localPath).standardizedFileURL.path
+        // `canonicalModelPathKey` (resolving symlinks, not just
+        // standardizing) — same reasoning as `ModelRegistry
+        // .deduplicateByLocalPath`/`ModelImporter`: on an externally-
+        // mounted volume reached through a symlink, a model's real path
+        // could compare unequal to the models root here even though
+        // both point at the same actual directory.
+        let root = AppSettings.load().effectiveModelsRoot.canonicalModelPathKey
+        let path = URL(fileURLWithPath: entry.localPath).canonicalModelPathKey
         return path == root || path.hasPrefix(root + "/")
     }
 

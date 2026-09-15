@@ -177,4 +177,41 @@ struct ChatThreadStoreTests {
             atPath: fileURL.deletingLastPathComponent().appendingPathComponent("threads.json.pre-migration").path
         ))
     }
+
+    /// `ChatViewModel` and `AnvilSyncServer` each hold their own
+    /// separate `ChatThreadStore` instance pointed at the same
+    /// directory — both can race to migrate a legacy file the first
+    /// time either one touches it. Neither instance's `all()` should
+    /// ever observe a partially-migrated directory (some threads
+    /// written, others still missing) partway through.
+    @Test
+    func concurrentMigrationFromMultipleInstancesNeverExposesAPartialResult() async throws {
+        let fileURL = tempStoreFile()
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let legacyThreads = (0..<20).map { ChatThread(title: "Thread \($0)") }
+        try JSONEncoder.anvil.encode(legacyThreads).write(to: fileURL)
+
+        let instances = (0..<8).map { _ in ChatThreadStore(fileURL: fileURL) }
+        let allResults = try await withThrowingTaskGroup(of: [ChatThread].self) { group in
+            for instance in instances {
+                group.addTask { await instance.all() }
+            }
+            var results: [[ChatThread]] = []
+            for try await result in group { results.append(result) }
+            return results
+        }
+
+        // Every racing instance must see either the full set or (only
+        // if it read before any instance finished migrating) none at
+        // all from this call — never some-but-not-all of the 20.
+        for result in allResults {
+            #expect(result.isEmpty || result.count == 20)
+        }
+        // At least one instance must have actually seen the migrated
+        // data — this isn't just trivially true because everyone saw
+        // an empty pre-migration state.
+        #expect(allResults.contains { $0.count == 20 })
+    }
 }
