@@ -5,10 +5,7 @@ import Testing
 @Suite("ModelImporter")
 struct ModelImporterTests {
     private func makeTempDirectory() throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("anvil-import-tests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try AnvilCoreTests.makeTempDirectory(name: "anvil-import-tests")
     }
 
     @Test

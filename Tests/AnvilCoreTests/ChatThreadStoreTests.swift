@@ -53,13 +53,15 @@ struct ChatThreadStoreTests {
 
     @Test
     func allSortsByMostRecentlyUpdatedFirst() async throws {
-        // upsert stamps `updatedAt` with the current time on every save
-        // (so editing a thread always bumps it to the top), so ordering
-        // here comes from call order, not a value passed in.
+        // Explicit, controlled timestamps via `upsertPreservingTimestamp`
+        // instead of two `upsert` calls separated by a real `Task.sleep`
+        // — deterministic and instant, rather than depending on the
+        // system clock advancing measurably between two calls.
         let store = ChatThreadStore(fileURL: tempStoreFile())
-        _ = try await store.upsert(ChatThread(title: "Older"))
-        try await Task.sleep(nanoseconds: 10_000_000)
-        _ = try await store.upsert(ChatThread(title: "Newer"))
+        let older = Date(timeIntervalSince1970: 1_700_000_000)
+        let newer = Date(timeIntervalSince1970: 1_700_000_100)
+        _ = try await store.upsertPreservingTimestamp(ChatThread(title: "Older", updatedAt: older))
+        _ = try await store.upsertPreservingTimestamp(ChatThread(title: "Newer", updatedAt: newer))
 
         let all = await store.all()
 

@@ -5,10 +5,7 @@ import Testing
 @Suite("ModelKindDetector")
 struct ModelKindDetectorTests {
     private func makeTempDirectory() throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("anvil-kind-tests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try AnvilCoreTests.makeTempDirectory(name: "anvil-kind-tests")
     }
 
     /// Builds a minimal, real safetensors file — an 8-byte

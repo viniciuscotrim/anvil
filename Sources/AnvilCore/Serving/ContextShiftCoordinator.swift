@@ -69,7 +69,9 @@ public actor ContextShiftCoordinator {
     }
 
     private var process: Process?
-    private var stdinHandle: FileHandle?
+    // Not `private`: see `sendControl`'s own doc comment for why tests
+    // need to set this directly.
+    var stdinHandle: FileHandle?
     private var launcherURL: URL?
     private var lineBuffer = Data()
 
@@ -455,7 +457,15 @@ public actor ContextShiftCoordinator {
     /// handshake. A bare, non-pretty-printed `JSONEncoder` always
     /// produces single-line output, matching what `emit()` itself
     /// writes in the other direction.
-    private func sendControl(event: String) {
+    ///
+    /// Not `private`: `stdinHandle`/`sendControl` widened to `internal`
+    /// specifically so `ContextShiftCoordinatorTests` can inject a pipe
+    /// and assert on the actual bytes written — the v0.20.1 regression
+    /// this guards against (`JSONEncoder.anvil`'s `.prettyPrinted`
+    /// spanning several lines over what must be a strict one-JSON-
+    /// object-per-line stdin protocol) is exactly the kind of thing a
+    /// type-level review can't catch, only a real byte-level test can.
+    func sendControl(event: String) {
         guard let data = try? JSONEncoder().encode(ControlEvent(event: event)) else { return }
         stdinHandle?.write(data)
         stdinHandle?.write(Data([0x0A]))
