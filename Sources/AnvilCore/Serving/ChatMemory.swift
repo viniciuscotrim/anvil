@@ -292,188 +292,108 @@ public struct ChatMemorySuggestion: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+/// Persists memory suggestions — see `PerItemJSONStore`'s doc comment
+/// for the on-disk shape and why it replaced one JSON file holding
+/// every suggestion.
 public actor ChatMemorySuggestionStore {
-    private let fileURL: URL
+    private let storage: PerItemJSONStore<ChatMemorySuggestion>
+    private let tombstones: TombstoneLog
 
     public init(
         fileURL: URL = RuntimePaths.applicationSupportDirectory
             .appendingPathComponent("chats", isDirectory: true)
             .appendingPathComponent("memory_suggestions.json")
     ) {
-        self.fileURL = fileURL
+        storage = PerItemJSONStore(legacyFileURL: fileURL, idOf: \.id)
+        tombstones = TombstoneLog(
+            fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("memory_suggestions_deleted.json")
+        )
     }
 
-    public func all() -> [ChatMemorySuggestion] {
-        load().sorted { $0.createdAt > $1.createdAt }
+    public func all() async -> [ChatMemorySuggestion] {
+        await storage.all().sorted { $0.createdAt > $1.createdAt }
     }
 
     /// Local-generation entry point — stamps `updatedAt` to now. See
     /// `ChatThreadStore.upsert`/`upsertPreservingTimestamp` for why a
     /// sync/merge write must use the other method below instead.
     @discardableResult
-    public func upsert(_ suggestion: ChatMemorySuggestion) throws -> ChatMemorySuggestion {
+    public func upsert(_ suggestion: ChatMemorySuggestion) async throws -> ChatMemorySuggestion {
         var updated = suggestion
         updated.updatedAt = Date()
-        return try store(updated)
+        return try await storage.store(updated)
     }
 
     /// Sync/merge entry point — keeps the caller-supplied `updatedAt`
     /// exactly as given.
     @discardableResult
-    public func upsertPreservingTimestamp(_ suggestion: ChatMemorySuggestion) throws -> ChatMemorySuggestion {
-        try store(suggestion)
+    public func upsertPreservingTimestamp(_ suggestion: ChatMemorySuggestion) async throws -> ChatMemorySuggestion {
+        try await storage.store(suggestion)
     }
 
-    private func store(_ suggestion: ChatMemorySuggestion) throws -> ChatMemorySuggestion {
-        var suggestions = load()
-        if let index = suggestions.firstIndex(where: { $0.id == suggestion.id }) {
-            suggestions[index] = suggestion
-        } else {
-            suggestions.append(suggestion)
-        }
-        try persist(suggestions)
-        return suggestion
-    }
-
-    public func delete(id: UUID) throws {
-        var suggestions = load()
-        suggestions.removeAll { $0.id == id }
-        try persist(suggestions)
-        try recordDeletion(id: id)
+    public func delete(id: UUID) async throws {
+        try await storage.delete(id: id)
+        try await tombstones.record(id)
     }
 
     /// See `ChatThreadStore.deletionTimestamps` — same tombstone
     /// mechanism: without it, accepting or dismissing a suggestion on
     /// one device would have it silently resurface from another
     /// device's next periodic sync/merge.
-    public func deletionTimestamps() -> [UUID: Date] {
-        loadTombstones()
-    }
-
-    private var tombstoneFileURL: URL {
-        fileURL.deletingLastPathComponent().appendingPathComponent("memory_suggestions_deleted.json")
-    }
-
-    private func recordDeletion(id: UUID) throws {
-        var tombstones = loadTombstones()
-        tombstones[id] = Date()
-        try persistTombstones(tombstones)
-    }
-
-    private func loadTombstones() -> [UUID: Date] {
-        guard let data = try? Data(contentsOf: tombstoneFileURL) else { return [:] }
-        return (try? JSONDecoder.anvil.decode([UUID: Date].self, from: data)) ?? [:]
-    }
-
-    private func persistTombstones(_ tombstones: [UUID: Date]) throws {
-        let data = try JSONEncoder.anvil.encode(tombstones)
-        try data.write(to: tombstoneFileURL, options: .atomic)
-    }
-
-    private func load() -> [ChatMemorySuggestion] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
-        return (try? JSONDecoder.anvil.decode([ChatMemorySuggestion].self, from: data)) ?? []
-    }
-
-    private func persist(_ suggestions: [ChatMemorySuggestion]) throws {
-        let directory = fileURL.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: directory.path) {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        }
-        let data = try JSONEncoder.anvil.encode(suggestions)
-        try data.write(to: fileURL, options: .atomic)
+    public func deletionTimestamps() async -> [UUID: Date] {
+        await tombstones.all()
     }
 }
 
+/// Persists saved memories — see `PerItemJSONStore`'s doc comment for
+/// the on-disk shape and why it replaced one JSON file holding every
+/// memory.
 public actor ChatMemoryStore {
-    private let fileURL: URL
+    private let storage: PerItemJSONStore<ChatMemory>
+    private let tombstones: TombstoneLog
 
     public init(
         fileURL: URL = RuntimePaths.applicationSupportDirectory
             .appendingPathComponent("chats", isDirectory: true)
             .appendingPathComponent("memories.json")
     ) {
-        self.fileURL = fileURL
+        storage = PerItemJSONStore(legacyFileURL: fileURL, idOf: \.id)
+        tombstones = TombstoneLog(
+            fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("memories_deleted.json")
+        )
     }
 
-    public func all() -> [ChatMemory] {
-        load().sorted { $0.updatedAt > $1.updatedAt }
+    public func all() async -> [ChatMemory] {
+        await storage.all().sorted { $0.updatedAt > $1.updatedAt }
     }
 
     /// Local-edit entry point — stamps `updatedAt` to now. See
     /// `ChatThreadStore.upsert`/`upsertPreservingTimestamp` for why a
     /// sync/merge write must use the other method below instead.
     @discardableResult
-    public func upsert(_ memory: ChatMemory) throws -> ChatMemory {
+    public func upsert(_ memory: ChatMemory) async throws -> ChatMemory {
         var updated = memory
         updated.updatedAt = Date()
-        return try store(updated)
+        return try await storage.store(updated)
     }
 
     /// Sync/merge entry point — keeps the caller-supplied `updatedAt`
     /// exactly as given. See `ChatThreadStore.upsertPreservingTimestamp`
     /// for the full story of the bug this avoids.
     @discardableResult
-    public func upsertPreservingTimestamp(_ memory: ChatMemory) throws -> ChatMemory {
-        try store(memory)
+    public func upsertPreservingTimestamp(_ memory: ChatMemory) async throws -> ChatMemory {
+        try await storage.store(memory)
     }
 
-    private func store(_ memory: ChatMemory) throws -> ChatMemory {
-        var memories = load()
-        if let index = memories.firstIndex(where: { $0.id == memory.id }) {
-            memories[index] = memory
-        } else {
-            memories.append(memory)
-        }
-        try persist(memories)
-        return memory
-    }
-
-    public func delete(id: UUID) throws {
-        var memories = load()
-        memories.removeAll { $0.id == id }
-        try persist(memories)
-        try recordDeletion(id: id)
+    public func delete(id: UUID) async throws {
+        try await storage.delete(id: id)
+        try await tombstones.record(id)
     }
 
     /// See `ChatThreadStore.deletionTimestamps` — same tombstone
     /// mechanism, same reason: without it, a periodic union-style merge
     /// resurrects a deliberately-deleted memory.
-    public func deletionTimestamps() -> [UUID: Date] {
-        loadTombstones()
-    }
-
-    private var tombstoneFileURL: URL {
-        fileURL.deletingLastPathComponent().appendingPathComponent("memories_deleted.json")
-    }
-
-    private func recordDeletion(id: UUID) throws {
-        var tombstones = loadTombstones()
-        tombstones[id] = Date()
-        try persistTombstones(tombstones)
-    }
-
-    private func loadTombstones() -> [UUID: Date] {
-        guard let data = try? Data(contentsOf: tombstoneFileURL) else { return [:] }
-        return (try? JSONDecoder.anvil.decode([UUID: Date].self, from: data)) ?? [:]
-    }
-
-    private func persistTombstones(_ tombstones: [UUID: Date]) throws {
-        let data = try JSONEncoder.anvil.encode(tombstones)
-        try data.write(to: tombstoneFileURL, options: .atomic)
-    }
-
-    private func load() -> [ChatMemory] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
-        return (try? JSONDecoder.anvil.decode([ChatMemory].self, from: data)) ?? []
-    }
-
-    private func persist(_ memories: [ChatMemory]) throws {
-        let directory = fileURL.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: directory.path) {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        }
-        let data = try JSONEncoder.anvil.encode(memories)
-        try data.write(to: fileURL, options: .atomic)
+    public func deletionTimestamps() async -> [UUID: Date] {
+        await tombstones.all()
     }
 }

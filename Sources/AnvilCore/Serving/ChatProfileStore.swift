@@ -8,11 +8,15 @@ import Foundation
 /// are infrequent, so re-reading every time costs nothing that matters.
 public actor ChatProfileStore {
     private let fileURL: URL
+    private let tombstones: TombstoneLog
 
     public init(
         fileURL: URL = RuntimePaths.applicationSupportDirectory.appendingPathComponent("profiles.json")
     ) {
         self.fileURL = fileURL
+        tombstones = TombstoneLog(
+            fileURL: fileURL.deletingLastPathComponent().appendingPathComponent("profiles_deleted.json")
+        )
     }
 
     /// Newest first.
@@ -50,11 +54,11 @@ public actor ChatProfileStore {
         return profile
     }
 
-    public func delete(id: UUID) throws {
+    public func delete(id: UUID) async throws {
         var profiles = load()
         profiles.removeAll { $0.id == id }
         try persist(profiles)
-        try recordDeletion(id: id)
+        try await tombstones.record(id)
     }
 
     /// See `ChatThreadStore.deletionTimestamps` — same tombstone
@@ -65,28 +69,8 @@ public actor ChatProfileStore {
     /// other side" from "existed, but was just deleted" — every ~3s
     /// merge tick after a delete would see the profile "missing" here
     /// and immediately restore it from whichever device still had it.
-    public func deletionTimestamps() -> [UUID: Date] {
-        loadTombstones()
-    }
-
-    private var tombstoneFileURL: URL {
-        fileURL.deletingLastPathComponent().appendingPathComponent("profiles_deleted.json")
-    }
-
-    private func recordDeletion(id: UUID) throws {
-        var tombstones = loadTombstones()
-        tombstones[id] = Date()
-        try persistTombstones(tombstones)
-    }
-
-    private func loadTombstones() -> [UUID: Date] {
-        guard let data = try? Data(contentsOf: tombstoneFileURL) else { return [:] }
-        return (try? JSONDecoder.anvil.decode([UUID: Date].self, from: data)) ?? [:]
-    }
-
-    private func persistTombstones(_ tombstones: [UUID: Date]) throws {
-        let data = try JSONEncoder.anvil.encode(tombstones)
-        try data.write(to: tombstoneFileURL, options: .atomic)
+    public func deletionTimestamps() async -> [UUID: Date] {
+        await tombstones.all()
     }
 
     private func load() -> [ChatProfile] {

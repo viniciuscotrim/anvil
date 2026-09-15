@@ -138,4 +138,41 @@ struct ChatThreadStoreTests {
 
         #expect(await store.deletionTimestamps()[thread.id] != nil)
     }
+
+    /// The store now keeps one file per thread instead of one big
+    /// `threads.json`, migrated automatically the first time a store
+    /// touches a directory that doesn't exist yet. This is the
+    /// migration itself: a pre-existing legacy file, written in the old
+    /// all-in-one-array shape by hand (simulating an install from
+    /// before this change), must still read back byte-for-byte through
+    /// the new store with nothing lost.
+    @Test
+    func migratesFromTheOldSingleFileFormatWithoutLosingAnything() async throws {
+        let fileURL = tempStoreFile()
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        // `createdAt` is pinned to a whole second (not `Date()`'s default
+        // sub-millisecond precision) so the equality check below isn't
+        // comparing a pre-round-trip value against the ISO8601-with-
+        // milliseconds precision `JSONEncoder.anvil` actually persists.
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let legacyThreads = [
+            ChatThread(title: "First", messages: [ChatMessage(role: .user, content: "hi", createdAt: fixedDate)]),
+            ChatThread(title: "Second", messages: [ChatMessage(role: .assistant, content: "hello", createdAt: fixedDate)])
+        ]
+        try JSONEncoder.anvil.encode(legacyThreads).write(to: fileURL)
+
+        let store = ChatThreadStore(fileURL: fileURL)
+        let all = await store.all()
+
+        #expect(Set(all.map(\.title)) == Set(["First", "Second"]))
+        for thread in legacyThreads {
+            #expect(await store.get(id: thread.id)?.messages == thread.messages)
+        }
+        // The legacy file is kept as a backup, not deleted outright.
+        #expect(FileManager.default.fileExists(
+            atPath: fileURL.deletingLastPathComponent().appendingPathComponent("threads.json.pre-migration").path
+        ))
+    }
 }
