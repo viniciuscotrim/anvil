@@ -9,8 +9,8 @@ import AnvilCore
 /// again from there adds a new version to that same lineage (even
 /// across a model change) instead of overwriting anything.
 struct ImageGenerationView: View {
-    @EnvironmentObject private var imageSessions: ImageSessionManager
-    @EnvironmentObject private var viewModel: ImageGenerationViewModel
+    @Environment(ImageSessionManager.self) private var imageSessions
+    @Environment(ImageGenerationViewModel.self) private var viewModel
 
     var body: some View {
         HStack(spacing: 0) {

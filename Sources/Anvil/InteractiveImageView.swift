@@ -8,7 +8,7 @@ import AppKit
 struct InteractiveImageView<ExtraMenuItems: View>: View {
     let path: String
     @ViewBuilder var extraMenuItems: () -> ExtraMenuItems
-    @StateObject private var state = InteractiveImageState()
+    @State private var isSavePresented = false
 
     init(path: String, @ViewBuilder extraMenuItems: @escaping () -> ExtraMenuItems = { EmptyView() }) {
         self.path = path
@@ -28,19 +28,16 @@ struct InteractiveImageView<ExtraMenuItems: View>: View {
         }
         .contextMenu {
             Button("Copy Image") { copyToPasteboard() }
-            Button("Save As…") { state.isSavePresented = true }
+            Button("Save As…") { isSavePresented = true }
             Button("Reveal in Finder") { revealInFinder() }
             extraMenuItems()
         }
         .fileExporter(
-            isPresented: Binding(
-                get: { state.isSavePresented },
-                set: { state.isSavePresented = $0 }
-            ),
+            isPresented: $isSavePresented,
             // Only reads the file when the save panel is actually about
             // to appear — `imageData` isn't evaluated at all otherwise,
             // since this is a plain `? :`, not a value computed above it.
-            document: ImageFileDocument(data: state.isSavePresented ? imageData : Data()),
+            document: ImageFileDocument(data: isSavePresented ? imageData : Data()),
             contentType: .png,
             defaultFilename: URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
         ) { _ in }
@@ -64,12 +61,6 @@ struct InteractiveImageView<ExtraMenuItems: View>: View {
     private func revealInFinder() {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
-}
-
-/// Plain `ObservableObject` (not `@State`) — see the toolchain note in
-/// README about `@State`.
-private final class InteractiveImageState: ObservableObject {
-    @Published var isSavePresented = false
 }
 
 /// Every generated image is its own immutable file (a new version in a

@@ -7,20 +7,20 @@ import AnvilCore
 // over the process entirely.
 struct AnvilApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var appState = AppState()
+    @State private var appState = AppState()
 
     var body: some Scene {
         WindowGroup("Anvil", id: "main") {
             RootView()
-                .environmentObject(appState.requirements)
-                .environmentObject(appState.sessions)
-                .environmentObject(appState.imageSessions)
-                .environmentObject(appState.chat)
-                .environmentObject(appState.imageGeneration)
-                .environmentObject(appState.profiles)
-                .environmentObject(appState.promptToModel)
-                .environmentObject(appState.modelManager)
-                .environmentObject(appState.codeAgent)
+                .environment(appState.requirements)
+                .environment(appState.sessions)
+                .environment(appState.imageSessions)
+                .environment(appState.chat)
+                .environment(appState.imageGeneration)
+                .environment(appState.profiles)
+                .environment(appState.promptToModel)
+                .environment(appState.modelManager)
+                .environment(appState.codeAgent)
                 .onAppear {
                     appDelegate.sessions = appState.sessions
                     appDelegate.imageSessions = appState.imageSessions
@@ -31,12 +31,12 @@ struct AnvilApp: App {
 
         WindowGroup("Code History", id: "code-threads") {
             CodeThreadsListView()
-                .environmentObject(appState.codeAgent)
+                .environment(appState.codeAgent)
         }
 
         WindowGroup("Memory", id: "memory") {
             MemoryView()
-                .environmentObject(appState.chat)
+                .environment(appState.chat)
         }
 
         // A detached copy of the same live chat — same `ChatViewModel`
@@ -49,16 +49,16 @@ struct AnvilApp: App {
         // see `ChatView`'s own header comment.
         WindowGroup("Chat", id: "chat-popout") {
             ChatView(isPopout: true)
-                .environmentObject(appState.sessions)
-                .environmentObject(appState.imageSessions)
-                .environmentObject(appState.chat)
+                .environment(appState.sessions)
+                .environment(appState.imageSessions)
+                .environment(appState.chat)
         }
         .windowResizability(.contentSize)
 
         MenuBarExtra("Anvil", systemImage: "hammer.fill") {
             MenuBarContentView()
-                .environmentObject(appState.sessions)
-                .environmentObject(appState.imageSessions)
+                .environment(appState.sessions)
+                .environment(appState.imageSessions)
         }
         .menuBarExtraStyle(.menu)
     }

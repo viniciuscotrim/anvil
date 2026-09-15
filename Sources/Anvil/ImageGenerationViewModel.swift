@@ -1,39 +1,42 @@
 import Foundation
 import AnvilCore
+import Observation
 
 /// Standalone image generation — its own tab, Draw-Things-style: a
 /// gallery of lineages (one tile per generated image family, its
 /// latest version), and a detail canvas with a vertical version-history
-/// carousel once one's selected. Plain `ObservableObject` (not
-/// `@Observable`) so it can be held with `@StateObject` — see the
-/// `@State` toolchain note in README.
+/// carousel once one's selected.
 @MainActor
-final class ImageGenerationViewModel: ObservableObject {
-    @Published var selectedModelID: String?
-    @Published var prompt: String = ""
-    @Published var settings = ImageGenerationSettings.default
-    @Published var isGenerating: Bool = false
-    @Published var isSettingsOpen: Bool = false
-    @Published var errorMessage: String?
+@Observable
+final class ImageGenerationViewModel {
+    var selectedModelID: String?
+    var prompt: String = ""
+    var settings = ImageGenerationSettings.default
+    var isGenerating: Bool = false
+    var isSettingsOpen: Bool = false
+    var errorMessage: String?
     /// nil until the first progress reading arrives (or if the server
     /// never reports a total, e.g. mid-startup) — CircularProgressView
     /// falls back to a plain spinner for that gap.
-    @Published private(set) var generationProgress: Double?
+    private(set) var generationProgress: Double?
     /// One tile per lineage (its latest version) — the main gallery.
-    @Published private(set) var gallery: [GeneratedImage] = []
+    private(set) var gallery: [GeneratedImage] = []
     /// The image showing large in the detail canvas, if any — nil
     /// means "show the gallery grid instead". Selecting one loads its
     /// prompt into the input field and its full version history into
     /// `selectedLineageVersions`.
-    @Published private(set) var selectedImage: GeneratedImage?
+    private(set) var selectedImage: GeneratedImage?
     /// Every version of `selectedImage`'s lineage, oldest first — the
     /// vertical history carousel. Generating again while something's
     /// selected adds to this lineage instead of starting a new one,
     /// whether only the prompt changed or a different model was picked.
-    @Published private(set) var selectedLineageVersions: [GeneratedImage] = []
+    private(set) var selectedLineageVersions: [GeneratedImage] = []
 
+    @ObservationIgnored
     private let imageSessions: ImageSessionManager
+    @ObservationIgnored
     private let store: GeneratedImageStore
+    @ObservationIgnored
     private let client = ImageClient()
 
     init(imageSessions: ImageSessionManager, store: GeneratedImageStore) {

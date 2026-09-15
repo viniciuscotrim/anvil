@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// Drives the check-then-install pattern for the whole app. This is the
 /// single choke point every feature goes through before it assumes a
@@ -8,11 +9,13 @@ import Foundation
 /// keeps mflux/mlx-audio uninstalled until image generation or voice
 /// is actually used.
 @MainActor
-public final class RequirementsManager: ObservableObject {
-    @Published public private(set) var statusMessage: String = ""
-    @Published public private(set) var isInstalling: Bool = false
-    @Published public private(set) var lastError: String?
+@Observable
+public final class RequirementsManager {
+    public private(set) var statusMessage: String = ""
+    public private(set) var isInstalling: Bool = false
+    public private(set) var lastError: String?
 
+    @ObservationIgnored
     private var satisfiedCache: Set<String> = []
 
     public init() {}

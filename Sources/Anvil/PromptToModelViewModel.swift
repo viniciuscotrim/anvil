@@ -1,5 +1,6 @@
 import Foundation
 import AnvilCore
+import Observation
 
 /// One registered image model's row: the tailored prompt an
 /// interpreting text model wrote for it (editable), and that row's own
@@ -20,22 +21,28 @@ struct PromptToModelRow: Identifiable {
 /// loads that model on demand if needed and saves the result into the
 /// Images tab's history like any other generation.
 ///
-/// Plain `ObservableObject` (not `@Observable`) so it can be held with
-/// `@StateObject` — see the `@State` toolchain note in README.
 @MainActor
-final class PromptToModelViewModel: ObservableObject {
-    @Published var intention: String = ""
-    @Published var selectedTextModelID: String?
-    @Published private(set) var rows: [PromptToModelRow] = []
-    @Published private(set) var isInterpreting = false
-    @Published var errorMessage: String?
+@Observable
+final class PromptToModelViewModel {
+    var intention: String = ""
+    var selectedTextModelID: String?
+    private(set) var rows: [PromptToModelRow] = []
+    private(set) var isInterpreting = false
+    var errorMessage: String?
 
+    @ObservationIgnored
     private let sessions: ModelSessionManager
+    @ObservationIgnored
     private let imageSessions: ImageSessionManager
+    @ObservationIgnored
     private let modelRegistry: ModelRegistry
+    @ObservationIgnored
     private let requirements: RequirementsManager
+    @ObservationIgnored
     private let generatedImageStore: GeneratedImageStore
+    @ObservationIgnored
     private let chatClient = ChatClient()
+    @ObservationIgnored
     private let imageClient = ImageClient()
 
     init(

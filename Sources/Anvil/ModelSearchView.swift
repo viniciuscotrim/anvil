@@ -24,7 +24,7 @@ struct ModelSearchView: View {
     // Owned once by `AppState` (like `ModelLibraryView`'s own copy of
     // the same instance) — see that type's header comment for why this
     // is never a view-local `@StateObject`.
-    @EnvironmentObject private var viewModel: ModelManagerViewModel
+    @Environment(ModelManagerViewModel.self) private var viewModel
 
     var body: some View {
         List {
@@ -172,7 +172,12 @@ struct ModelSearchView: View {
     }
 
     private var searchBar: some View {
-        HStack {
+        // `@Bindable` shadow: `@Observable` types read via `@Environment`
+        // don't expose a `$viewModel` projected value on their own — this
+        // local re-declaration is what makes `$viewModel.query` below
+        // resolve to a real `Binding<String>`.
+        @Bindable var viewModel = viewModel
+        return HStack {
             TextField("Search Hugging Face models…", text: $viewModel.query)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { Task { await viewModel.search() } }

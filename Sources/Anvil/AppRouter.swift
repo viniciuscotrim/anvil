@@ -1,10 +1,10 @@
 import Foundation
+import Observation
 
-/// Which screen is showing — plain `ObservableObject`, not `@Observable`,
-/// so it can be held with `@StateObject` (see the `@State` toolchain
-/// note in README). Chat isn't tied to a specific model anymore — it's
-/// an app-level tab that picks among whatever's currently loaded.
-final class AppRouter: ObservableObject {
+/// Which screen is showing. Chat isn't tied to a specific model anymore
+/// — it's an app-level tab that picks among whatever's currently loaded.
+@Observable
+final class AppRouter {
     enum Screen: Equatable {
         case bootstrap
         /// Search and download — its own tab now, separate from
@@ -19,5 +19,5 @@ final class AppRouter: ObservableObject {
         case code
     }
 
-    @Published var screen: Screen = .bootstrap
+    var screen: Screen = .bootstrap
 }

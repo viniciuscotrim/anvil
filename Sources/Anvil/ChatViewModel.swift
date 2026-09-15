@@ -1,14 +1,15 @@
 import CloudKit
 import Foundation
 import AnvilCore
+import Observation
 
 /// App-level chat state — owned once by `AppState`, not recreated when
 /// the Chat tab is hidden and shown again (that was the earlier bug:
 /// a view-local `@StateObject` was torn down on navigation, losing the
-/// conversation). Plain `ObservableObject` (not `@Observable`) — see
-/// the `@State` toolchain note in README.
+/// conversation).
 @MainActor
-final class ChatViewModel: ObservableObject {
+@Observable
+final class ChatViewModel {
     /// Asked before ever unloading another model to make room for the
     /// one "Suggest from Thread" needs — see
     /// `suggestMemoriesFromCurrentThread`'s doc comment.
@@ -46,17 +47,17 @@ final class ChatViewModel: ObservableObject {
     /// .messages.append(...)` reassigns this whole property too, since
     /// `ChatThread` is a value type, so a plain "always reset" here
     /// would wipe out pagination progress on every single new message).
-    @Published var currentThread: ChatThread {
+    var currentThread: ChatThread {
         didSet {
             if oldValue.id != currentThread.id {
                 displayedMessageCount = Self.messageDisplayPageSize
             }
         }
     }
-    @Published private(set) var allThreads: [ChatThread] = []
-    @Published private(set) var availableProfiles: [ChatProfile] = []
-    @Published private(set) var memories: [ChatMemory] = []
-    @Published private(set) var memorySuggestions: [ChatMemorySuggestion] = []
+    private(set) var allThreads: [ChatThread] = []
+    private(set) var availableProfiles: [ChatProfile] = []
+    private(set) var memories: [ChatMemory] = []
+    private(set) var memorySuggestions: [ChatMemorySuggestion] = []
 
     /// `memorySuggestions`, most-relevant first (`sortedDescending`,
     /// the same nils-last helper `ModelSearchSortOption` already uses
@@ -71,70 +72,70 @@ final class ChatViewModel: ObservableObject {
     var sortedMemorySuggestions: [ChatMemorySuggestion] {
         memorySuggestions.sortedDescending { $0.relevance }
     }
-    @Published private(set) var isSuggestingMemories = false
+    private(set) var isSuggestingMemories = false
     /// Unused since `suggestMemoriesFromCurrentThread` switched to the
     /// single-shot Context Shift pipeline (no more per-batch chat
     /// calls to report progress on) — kept, always `nil`, only so
     /// `MemoryView.suggestButtonLabel`'s progress branch still compiles
     /// and degrades to a plain "Analyzing…" instead of needing its own
     /// removal in lockstep.
-    @Published private(set) var memorySuggestionProgress: (completed: Int, total: Int)?
+    private(set) var memorySuggestionProgress: (completed: Int, total: Int)?
     /// Every registered text model (`ModelRegistry.all()`, filtered to
     /// `.text`) — not just the ones currently loaded — so the Memory
     /// screen's picker can offer anything mapped in the models folder,
     /// same as the Models tab itself does. Refreshed on every
     /// `loadInitialState()`.
-    @Published private(set) var availableTextModels: [ModelEntry] = []
+    private(set) var availableTextModels: [ModelEntry] = []
     /// Set when "Suggest from Thread" needs to load a model that
     /// doesn't fit in the remaining memory budget alongside whatever's
     /// already loaded — never unloads anything on its own; `MemoryView`
     /// shows this as a confirmation dialog and calls
     /// `resolveModelUnloadConfirmation` with the user's choice.
-    @Published var pendingModelUnloadConfirmation: PendingModelUnloadConfirmation?
-    @Published private(set) var isTemporaryModeActive = false
-    @Published var selectedModelID: String?
-    @Published var inputText: String = ""
-    @Published var chatMessageWaitSeconds: Double
-    @Published var maxEstimatedContextTokens: Int
-    @Published var recentMessageCount: Int
+    var pendingModelUnloadConfirmation: PendingModelUnloadConfirmation?
+    private(set) var isTemporaryModeActive = false
+    var selectedModelID: String?
+    var inputText: String = ""
+    var chatMessageWaitSeconds: Double
+    var maxEstimatedContextTokens: Int
+    var recentMessageCount: Int
     /// Off by default — see `AnvilSyncServer`'s own header comment for
     /// why this exists at all: nothing the Mac already runs exposes
     /// threads/profiles/memories over the network, so "the iPhone can
     /// resume this Mac's own conversation" needs this explicit opt-in.
-    @Published var isMacSyncEnabled: Bool
-    @Published var macSyncAccess: ServerAccess
+    var isMacSyncEnabled: Bool
+    var macSyncAccess: ServerAccess
     /// Off by default — see `CloudSyncEngine`'s own header comment.
     /// Independent of `isMacSyncEnabled`/`AnvilSyncServer`: this one
     /// works from anywhere, no Mac reachability required, through the
     /// user's own private iCloud database.
-    @Published var isCloudSyncEnabled: Bool
-    @Published private(set) var cloudAccountStatus: CKAccountStatus?
-    @Published private(set) var lastEstimatedContextTokens: Int = 0
-    @Published var isSending = false
-    @Published private(set) var isWaitingToSend = false
-    @Published private(set) var generationPhase: GenerationPhase = .idle
-    @Published var errorMessage: String?
-    @Published var hideReasoning = true
-    @Published var settings = GenerationSettings.default
-    @Published var isExportPresented = false
-    @Published var isSidebarOpen = false
+    var isCloudSyncEnabled: Bool
+    private(set) var cloudAccountStatus: CKAccountStatus?
+    private(set) var lastEstimatedContextTokens: Int = 0
+    var isSending = false
+    private(set) var isWaitingToSend = false
+    private(set) var generationPhase: GenerationPhase = .idle
+    var errorMessage: String?
+    var hideReasoning = true
+    var settings = GenerationSettings.default
+    var isExportPresented = false
+    var isSidebarOpen = false
     /// The left threads column — on by default since it's the main way
     /// to navigate between conversations (unlike the right sidebar's
     /// settings, which stay tucked away until asked for).
-    @Published var isThreadsSidebarOpen = true
+    var isThreadsSidebarOpen = true
     /// True while the "pop out" window (`ChatView(isPopout: true)`) is
     /// on screen — the main window's `ChatView` uses this to blank its
     /// own conversation pane (keeping only the threads column) instead
     /// of showing the same conversation twice at once. Set/cleared from
     /// that window's own `onAppear`/`onDisappear`, so closing it is the
     /// only way back — there's no separate "undo" action for this.
-    @Published var isPoppedOut = false
-    @Published private(set) var lastTokensPerSecond: Double?
-    @Published private(set) var lastCachedPromptTokens: Int?
+    var isPoppedOut = false
+    private(set) var lastTokensPerSecond: Double?
+    private(set) var lastCachedPromptTokens: Int?
     /// Set while a `generate_image` tool call is actively generating —
     /// nil the rest of the time, including while just waiting on the
     /// text model itself.
-    @Published private(set) var imageToolProgress: Double?
+    private(set) var imageToolProgress: Double?
     /// Live status from `ContextShiftCoordinator`'s background watcher
     /// — non-nil the moment a compaction pass starts (`isPaused`
     /// becomes true right away), updated continuously with real
@@ -142,24 +143,41 @@ final class ChatViewModel: ObservableObject {
     /// or fails. `ChatView` renders this as a status banner distinct
     /// from `errorMessage` (this isn't a failure, just informational)
     /// while it's non-nil with `isPaused == true`.
-    @Published private(set) var contextShiftStatus: ContextShiftCoordinator.Status?
+    private(set) var contextShiftStatus: ContextShiftCoordinator.Status?
 
+    @ObservationIgnored
     private let sessions: ModelSessionManager
+    @ObservationIgnored
     private let threadStore: ChatThreadStore
+    @ObservationIgnored
     private let imageSessions: ImageSessionManager
+    @ObservationIgnored
     private let generatedImageStore: GeneratedImageStore
+    @ObservationIgnored
     private let profileStore: ChatProfileStore
+    @ObservationIgnored
     private let memoryStore: ChatMemoryStore
+    @ObservationIgnored
     private let suggestionStore: ChatMemorySuggestionStore
+    @ObservationIgnored
     private let relevanceFeedbackStore: RelevanceFeedbackStore
+    @ObservationIgnored
     private let contextShift: ContextShiftCoordinator
+    @ObservationIgnored
     private let modelRegistry: ModelRegistry
+    @ObservationIgnored
     private let requirements: RequirementsManager
+    @ObservationIgnored
     private let client = ChatClient()
+    @ObservationIgnored
     private let imageClient = ImageClient()
+    @ObservationIgnored
     private let syncServer: AnvilSyncServer
+    @ObservationIgnored
     private let cloudSync: CloudSyncEngine
+    @ObservationIgnored
     private var threadBeforeTemporaryMode: ChatThread?
+    @ObservationIgnored
     private var temporaryThreads: [UUID: ChatThread] = [:]
     /// `.task { loadInitialState() }` on `ChatView` reruns every time the
     /// view re-enters the hierarchy (switching tabs and back) — this
@@ -169,6 +187,7 @@ final class ChatViewModel: ObservableObject {
     /// after navigating away mid-generation and back). Only the first
     /// call is allowed to pick the initial thread; every later call just
     /// refreshes the thread/profile lists.
+    @ObservationIgnored
     private var hasLoadedInitialState = false
     /// Per-thread memory of the last `generate_image` tool call, so a
     /// sequential request ("same character, different clothes") can
@@ -176,16 +195,21 @@ final class ChatViewModel: ObservableObject {
     /// from nothing each time — a real, reported bug where consecutive
     /// generations drifted in skin tone, hair, eyes, and body type even
     /// though only the clothing was meant to change.
+    @ObservationIgnored
     private var lastImageGenerationByThread: [UUID: (seed: Int, prompt: String)] = [:]
+    @ObservationIgnored
     private var generationTask: Task<Void, Never>?
+    @ObservationIgnored
     private var bufferedSendTask: Task<Void, Never>?
     /// Resumed by `resolveModelUnloadConfirmation` once the user
     /// answers the dialog `pendingModelUnloadConfirmation` describes.
+    @ObservationIgnored
     private var modelUnloadContinuation: CheckedContinuation<Bool, Never>?
     /// Guards `startContextShiftMonitoringIfNeeded()` so it only ever
     /// tries once per launch — a missing embedding/summarization model
     /// isn't retried on every `loadInitialState()` re-run (switching
     /// tabs and back), only after downloading one and relaunching.
+    @ObservationIgnored
     private var hasAttemptedContextShiftStart = false
 
     init(
@@ -377,7 +401,7 @@ final class ChatViewModel: ObservableObject {
     /// renders at once, so scrolling a very long thread stays
     /// responsive regardless of how far back it goes.
     private static let messageDisplayPageSize = 60
-    @Published private(set) var displayedMessageCount = messageDisplayPageSize
+    private(set) var displayedMessageCount = messageDisplayPageSize
 
     /// What `ChatView.messageList` actually renders — the most recent
     /// `displayedMessageCount` of `visibleMessages`.

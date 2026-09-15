@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 // macOS-only: wraps LLMServer/ImageServer, both Process-based (see
 // their own file headers) — doesn't exist on iOS at all today. The
@@ -19,10 +20,9 @@ import Foundation
 /// the caller explicitly asks otherwise — network exposure and a
 /// specific port are opt-in, never the default.
 ///
-/// Plain `ObservableObject` (not `@Observable`) so it can be held with
-/// `@StateObject` — see the `@State` toolchain note in README.
 @MainActor
-public final class ModelSessionManager: ObservableObject {
+@Observable
+public final class ModelSessionManager {
     public enum Status: Equatable, Sendable {
         case loading
         case ready
@@ -37,10 +37,13 @@ public final class ModelSessionManager: ObservableObject {
         public var id: String { model.id }
     }
 
-    @Published public private(set) var sessions: [Session] = []
+    public private(set) var sessions: [Session] = []
 
+    @ObservationIgnored
     private var servers: [String: LLMServer] = [:]
+    @ObservationIgnored
     private let residency: ResidencyPlanner
+    @ObservationIgnored
     private let gateway: OpenAIGateway?
 
     public init(residency: ResidencyPlanner = ResidencyPlanner(), gateway: OpenAIGateway? = nil) {

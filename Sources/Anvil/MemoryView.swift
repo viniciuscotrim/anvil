@@ -12,7 +12,7 @@ import AnvilCore
 /// são muitas" (need a scrollbar, there are too many) once a real
 /// multi-batch digest started surfacing dozens of suggestions at once.
 struct MemoryView: View {
-    @EnvironmentObject private var chat: ChatViewModel
+    @Environment(ChatViewModel.self) private var chat
     @State private var draftText = ""
     @State private var draftKind: ChatMemoryKind = .fact
     @State private var draftSource: ChatMemorySource = .explicit

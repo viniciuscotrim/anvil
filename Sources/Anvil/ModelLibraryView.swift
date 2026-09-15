@@ -18,10 +18,10 @@ struct ModelLibraryView: View {
     // in-flight download's `Task` (still running, just invisible) from
     // any UI that could show it. Same root cause, same fix, as the
     // earlier Chat/conversation-loss bug.
-    @EnvironmentObject private var viewModel: ModelManagerViewModel
-    @EnvironmentObject private var sessions: ModelSessionManager
-    @EnvironmentObject private var imageSessions: ImageSessionManager
-    @EnvironmentObject private var requirements: RequirementsManager
+    @Environment(ModelManagerViewModel.self) private var viewModel
+    @Environment(ModelSessionManager.self) private var sessions
+    @Environment(ImageSessionManager.self) private var imageSessions
+    @Environment(RequirementsManager.self) private var requirements
 
     var body: some View {
         List {

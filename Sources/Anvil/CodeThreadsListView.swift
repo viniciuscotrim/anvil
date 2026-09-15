@@ -8,7 +8,7 @@ import AnvilCore
 /// permanently the same way Chat's are — there's no temporary/incognito
 /// mode for Code (unlike Chat, which has an explicit toggle for that).
 struct CodeThreadsListView: View {
-    @EnvironmentObject private var codeAgent: CodeAgentViewModel
+    @Environment(CodeAgentViewModel.self) private var codeAgent
 
     var body: some View {
         VStack(spacing: 0) {

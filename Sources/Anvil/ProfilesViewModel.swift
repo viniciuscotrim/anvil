@@ -1,16 +1,16 @@
 import Foundation
 import AnvilCore
+import Observation
 
-/// Plain `ObservableObject` (not `@Observable`) so it can be held with
-/// `@StateObject` — see the `@State` toolchain note in README.
 @MainActor
-final class ProfilesViewModel: ObservableObject {
-    @Published private(set) var profiles: [ChatProfile] = []
-    @Published private(set) var registeredModels: [ModelEntry] = []
-    @Published var errorMessage: String?
+@Observable
+final class ProfilesViewModel {
+    private(set) var profiles: [ChatProfile] = []
+    private(set) var registeredModels: [ModelEntry] = []
+    var errorMessage: String?
 
     /// Draft state for the create/edit sheet — nil when it's closed.
-    @Published var editingDraft: Draft?
+    var editingDraft: Draft?
 
     struct Draft: Identifiable {
         var id: UUID?
@@ -23,8 +23,11 @@ final class ProfilesViewModel: ObservableObject {
         }
     }
 
+    @ObservationIgnored
     private let store: ChatProfileStore
+    @ObservationIgnored
     private let cloudSync = CloudSyncEngine()
+    @ObservationIgnored
     private let registry: ModelRegistry
 
     init(store: ChatProfileStore, registry: ModelRegistry) {

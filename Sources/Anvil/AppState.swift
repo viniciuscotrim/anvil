@@ -12,8 +12,17 @@ import AnvilCore
 /// mid-download, so an in-flight download kept running in the
 /// background (its `Task` held a strong `self` once started) but
 /// disappeared from the UI, with no way to see or control it again.
+///
+/// Deliberately not `@Observable`/`ObservableObject`: every property
+/// here is a `let`, set once at init and never reassigned, so nothing
+/// ever needs to react to *this* object changing — only to the
+/// individually-`@Observable` view models it holds, each injected into
+/// the environment on its own. Held by `AnvilApp` by a plain `@State`,
+/// which for a reference type does exactly what's needed here (keeps
+/// the same instance alive across view updates) without requiring any
+/// observation machinery at all.
 @MainActor
-final class AppState: ObservableObject {
+final class AppState {
     let requirements: RequirementsManager
     let residency: ResidencyPlanner
     let gateway: OpenAIGateway

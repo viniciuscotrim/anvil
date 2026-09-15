@@ -7,8 +7,8 @@ import AnvilCore
 /// here as later phases add things worth controlling from the menu bar
 /// (voice chat, memory usage).
 struct MenuBarContentView: View {
-    @EnvironmentObject private var sessions: ModelSessionManager
-    @EnvironmentObject private var imageSessions: ImageSessionManager
+    @Environment(ModelSessionManager.self) private var sessions
+    @Environment(ImageSessionManager.self) private var imageSessions
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {

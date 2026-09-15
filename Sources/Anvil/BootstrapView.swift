@@ -8,9 +8,9 @@ import AnvilCore
 /// to whichever model you clicked into, so it stays put no matter which
 /// loaded model you're talking to.
 struct RootView: View {
-    @EnvironmentObject private var requirements: RequirementsManager
-    @EnvironmentObject private var chat: ChatViewModel
-    @StateObject private var router = AppRouter()
+    @Environment(RequirementsManager.self) private var requirements
+    @Environment(ChatViewModel.self) private var chat
+    @State private var router = AppRouter()
     @State private var isIPhoneSyncPopoverPresented = false
     @State private var isCloudSyncPopoverPresented = false
 

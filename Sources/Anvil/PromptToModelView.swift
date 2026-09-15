@@ -6,8 +6,8 @@ import AnvilCore
 /// prompt per registered image model — each with its own Generate
 /// button.
 struct PromptToModelView: View {
-    @EnvironmentObject private var sessions: ModelSessionManager
-    @EnvironmentObject private var viewModel: PromptToModelViewModel
+    @Environment(ModelSessionManager.self) private var sessions
+    @Environment(PromptToModelViewModel.self) private var viewModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

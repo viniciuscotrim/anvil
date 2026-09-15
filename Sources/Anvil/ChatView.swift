@@ -10,8 +10,8 @@ import AnvilCore
 /// the collapsible side panel. iPhone/iCloud sync are app-wide, not
 /// per-conversation — see `RootView`'s top bar instead.
 struct ChatView: View {
-    @EnvironmentObject private var sessions: ModelSessionManager
-    @EnvironmentObject private var chat: ChatViewModel
+    @Environment(ModelSessionManager.self) private var sessions
+    @Environment(ChatViewModel.self) private var chat
     @Environment(\.openWindow) private var openWindow
     @State private var newMemoryText = ""
     @State private var memoryMessageID: UUID?

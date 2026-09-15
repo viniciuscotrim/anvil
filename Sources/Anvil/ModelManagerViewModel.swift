@@ -1,5 +1,6 @@
 import Foundation
 import AnvilCore
+import Observation
 
 /// One thing that can be downloaded — a Hugging Face repo or a CivitAI
 /// checkpoint or a Draw Things package — unified so a single queue/progress/pause-stop mechanism
@@ -26,8 +27,6 @@ enum DownloadJob: Identifiable, Equatable {
     }
 }
 
-/// Plain `ObservableObject` (not `@Observable`) so it can be held with
-/// `@StateObject` — see the toolchain note in README about `@State`.
 enum ModelSearchSource: String, CaseIterable, Identifiable {
     case huggingFace = "Hugging Face"
     case civitai = "CivitAI"
@@ -36,75 +35,78 @@ enum ModelSearchSource: String, CaseIterable, Identifiable {
 }
 
 @MainActor
-final class ModelManagerViewModel: ObservableObject {
-    @Published var searchSource: ModelSearchSource = .huggingFace
-    @Published var query: String = ""
-    @Published var searchResults: [HFModelSummary] = []
-    @Published var civitaiQuery: String = ""
-    @Published var civitaiResults: [CivitAIModelSummary] = []
-    @Published var civitaiTokenDraft: String = ""
-    @Published private(set) var hasStoredCivitAIToken: Bool = false
-    @Published var drawThingsQuery: String = ""
-    @Published var drawThingsResults: [DrawThingsModelSummary] = DrawThingsCatalog.curatedModels
-    @Published var registeredModels: [ModelEntry] = []
-    @Published var statusMessage: String = ""
-    @Published var isBusy: Bool = false
-    @Published var errorMessage: String?
-    @Published var isImportPanelPresented: Bool = false
+@Observable
+final class ModelManagerViewModel {
+    var searchSource: ModelSearchSource = .huggingFace
+    var query: String = ""
+    var searchResults: [HFModelSummary] = []
+    var civitaiQuery: String = ""
+    var civitaiResults: [CivitAIModelSummary] = []
+    var civitaiTokenDraft: String = ""
+    private(set) var hasStoredCivitAIToken: Bool = false
+    var drawThingsQuery: String = ""
+    var drawThingsResults: [DrawThingsModelSummary] = DrawThingsCatalog.curatedModels
+    var registeredModels: [ModelEntry] = []
+    var statusMessage: String = ""
+    var isBusy: Bool = false
+    var errorMessage: String?
+    var isImportPanelPresented: Bool = false
     /// Where downloads land and "scan for existing models" looks — nil
     /// shows as "Default" in the UI (Anvil's own Application Support
     /// folder). Loaded from `AppSettings` at init.
-    @Published var modelsRootPath: String?
-    @Published var isChoosingModelsFolder: Bool = false
+    var modelsRootPath: String?
+    var isChoosingModelsFolder: Bool = false
     /// Held in the macOS keychain, not `AppSettings`'s plain JSON — see
     /// `HFTokenStore`. Loaded once at init; the UI edits this directly
     /// and calls `saveHFToken()`/`clearHFToken()` to persist it.
-    @Published var hfTokenDraft: String = ""
-    @Published private(set) var hasStoredHFToken: Bool = false
+    var hfTokenDraft: String = ""
+    private(set) var hasStoredHFToken: Bool = false
     /// Which download (if any, from either source) is actively running
     /// — drives the Pause/Stop controls next to it and blocks starting
     /// a second one at the same time.
-    @Published private(set) var activeDownloadID: String?
+    private(set) var activeDownloadID: String?
     /// The full job behind `activeDownloadID`, so the dedicated
     /// "Downloads in Progress" section can show its name without the
     /// search results list (which may have since changed, or not even
     /// be the source this job came from) still being around.
-    @Published private(set) var activeJob: DownloadJob?
+    private(set) var activeJob: DownloadJob?
     /// 0...1, when the active download's own progress lines carry a
     /// real percentage — nil otherwise (nothing downloading, or a
     /// stretch of output with no percentage in it, e.g. between files).
-    @Published private(set) var downloadProgress: Double?
+    private(set) var downloadProgress: Double?
     /// Jobs waiting their turn — one shared queue for both sources, so
     /// an HF download and a CivitAI download never run at the same
     /// time either; drains one at a time as each finishes.
-    @Published private(set) var downloadQueue: [DownloadJob] = []
+    private(set) var downloadQueue: [DownloadJob] = []
     /// Which registered image model `generate_image` tool calls in
     /// chat should prefer when more than one is loaded/registered —
     /// see `AppSettings.defaultChatImageModelID`. Loaded from
     /// `AppSettings` at init.
-    @Published var defaultChatImageModelID: String?
+    var defaultChatImageModelID: String?
 
     /// nil = no size filter. Small/Medium/Large are relative to this
     /// Mac's own RAM (see `ModelSizeClass`), not an absolute cutoff.
-    @Published var sizeFilter: ModelSizeClass?
+    var sizeFilter: ModelSizeClass?
     /// When on, typing (3+ characters) searches automatically after a
     /// short pause instead of waiting for Search/Return.
-    @Published var isLiveSearchEnabled: Bool = false
+    var isLiveSearchEnabled: Bool = false
     /// On by default: hides search results Anvil can already tell it
     /// won't be able to load — a flat single-file checkpoint with none
     /// of the pipeline structure `mflux` needs, the exact real shape
     /// that downloaded fine and then failed to load. Never hides an
     /// `.unknown` result (most text models included) — only a
     /// confirmed `.incompatible` one.
-    @Published var hideIncompatibleModels: Bool = true
+    var hideIncompatibleModels: Bool = true
     /// Applies to whichever `searchSource` is currently selected — one
     /// shared control, not a per-source setting. Requested live: "Na
     /// aba de busca, me dar opcões de ordenação dos resultados em todas
     /// as plataformas por tamanho, quantidade de downloads, data de
     /// atualização/pulicação."
-    @Published var sortOption: ModelSearchSortOption = .relevance
+    var sortOption: ModelSearchSortOption = .relevance
+    @ObservationIgnored
     private var liveSearchTask: Task<Void, Never>?
 
+    @ObservationIgnored
     private let ramBytes = ProcessInfo.processInfo.physicalMemory
 
     /// What the list actually shows — `searchResults` narrowed by
@@ -179,36 +181,47 @@ final class ModelManagerViewModel: ObservableObject {
 
     /// Which model's server-settings popover is open, if any — one at
     /// a time is plenty.
-    @Published var openServerSettingsFor: String?
+    var openServerSettingsFor: String?
     /// Which model's failure-detail popover is open, if any — tapping
     /// the warning icon opens this so the real error (often several
     /// lines — the process's own captured output, not just a generic
     /// wrapper message) is actually readable, not just available on
     /// hover, which a real report showed users don't reliably discover.
-    @Published var failureDetailFor: String?
+    var failureDetailFor: String?
     /// Draft port/access per model, edited in the popover before being
     /// applied — separate from `ModelSessionManager.Session` so editing
     /// doesn't affect anything until the user confirms.
-    @Published private var serverDrafts: [String: ServerDraft] = [:]
+    private var serverDrafts: [String: ServerDraft] = [:]
 
     struct ServerDraft: Equatable {
         var portText: String
         var access: ServerAccess
     }
 
+    @ObservationIgnored
     private let requirements: RequirementsManager
+    @ObservationIgnored
     private let catalog = HuggingFaceCatalog()
+    @ObservationIgnored
     private let civitaiCatalog = CivitAICatalog()
+    @ObservationIgnored
     private let drawThingsCatalog = DrawThingsCatalog()
+    @ObservationIgnored
     private let registry: ModelRegistry
+    @ObservationIgnored
     private let downloader: ModelDownloader
+    @ObservationIgnored
     private let civitaiDownloader: CivitAIDownloader
+    @ObservationIgnored
     private let drawThingsDownloader: DrawThingsDownloader
+    @ObservationIgnored
     private let importer: ModelImporter
     /// The in-flight download, if any — cancelling this is the whole
     /// mechanism behind both Pause and Stop; they differ only in
     /// whether the partial directory gets deleted afterward.
+    @ObservationIgnored
     private var downloadTask: Task<Void, Never>?
+    @ObservationIgnored
     private var deletePartialOnCancel = false
 
     init(requirements: RequirementsManager) {
@@ -550,10 +563,10 @@ final class ModelManagerViewModel: ObservableObject {
         return path == root || path.hasPrefix(root + "/")
     }
 
-    @Published private(set) var movingModelID: String?
+    private(set) var movingModelID: String?
     /// Which model the delete confirmation dialog is asking about, if
     /// any — set by the View's Delete button, cleared once answered.
-    @Published var modelPendingDeletion: ModelEntry?
+    var modelPendingDeletion: ModelEntry?
 
     /// Physically moves this model's files into the current models
     /// folder and updates the registry to match — real bytes move on

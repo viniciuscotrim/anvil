@@ -4,7 +4,7 @@ import AnvilCore
 /// "Perfis" — reusable system prompts (oMLX's "personas"), each
 /// optionally bound as the default for one registered model.
 struct ProfilesView: View {
-    @EnvironmentObject private var viewModel: ProfilesViewModel
+    @Environment(ProfilesViewModel.self) private var viewModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

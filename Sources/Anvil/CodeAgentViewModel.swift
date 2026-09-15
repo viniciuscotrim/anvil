@@ -1,5 +1,6 @@
 import Foundation
 import AnvilCore
+import Observation
 
 /// "Code" — a chat that can actually read/write files and run terminal
 /// commands in one folder the user picks, gated by the same three-tier
@@ -10,11 +11,9 @@ import AnvilCore
 /// files never asks, whatever the level — only writes and commands are
 /// gated, mirroring how Claude Code's own Read tool needs no approval
 /// while Edit/Bash do.
-///
-/// Plain `ObservableObject` (not `@Observable`) so it can be held with
-/// `@StateObject` — see the `@State` toolchain note in README.
 @MainActor
-final class CodeAgentViewModel: ObservableObject {
+@Observable
+final class CodeAgentViewModel {
     enum GenerationPhase: Equatable {
         case idle
         case thinking
@@ -37,26 +36,26 @@ final class CodeAgentViewModel: ObservableObject {
         }
     }
 
-    @Published var currentThread: ChatThread
-    @Published private(set) var allThreads: [ChatThread] = []
-    @Published var selectedModelID: String?
-    @Published var inputText: String = ""
-    @Published var isSending = false
-    @Published private(set) var generationPhase: GenerationPhase = .idle
-    @Published var errorMessage: String?
-    @Published var settings = GenerationSettings.default
-    @Published var isExportPresented = false
+    var currentThread: ChatThread
+    private(set) var allThreads: [ChatThread] = []
+    var selectedModelID: String?
+    var inputText: String = ""
+    var isSending = false
+    private(set) var generationPhase: GenerationPhase = .idle
+    var errorMessage: String?
+    var settings = GenerationSettings.default
+    var isExportPresented = false
 
     // MARK: - Settings (persisted to AppSettings)
 
-    @Published private(set) var workingDirectoryPath: String?
-    @Published var allowFullDiskAccess: Bool {
+    private(set) var workingDirectoryPath: String?
+    var allowFullDiskAccess: Bool {
         didSet { persistSettings() }
     }
-    @Published var permissionLevel: CodeAgentPermissionLevel {
+    var permissionLevel: CodeAgentPermissionLevel {
         didSet { persistSettings() }
     }
-    @Published var enabledFeatures: Set<CodeAgentFeature> {
+    var enabledFeatures: Set<CodeAgentFeature> {
         didSet { persistSettings() }
     }
 
@@ -80,20 +79,27 @@ final class CodeAgentViewModel: ObservableObject {
         }
     }
 
-    @Published private(set) var pendingApproval: PendingApproval?
+    private(set) var pendingApproval: PendingApproval?
     /// The most recent Manual-mode proposal, shown in a side panel with
     /// a Copy button until the user's next message clears it.
-    @Published private(set) var manualProposal: ManualProposal?
+    private(set) var manualProposal: ManualProposal?
 
+    @ObservationIgnored
     private let sessions: ModelSessionManager
+    @ObservationIgnored
     private let threadStore: ChatThreadStore
+    @ObservationIgnored
     private let requirements: RequirementsManager
+    @ObservationIgnored
     private let client = ChatClient()
+    @ObservationIgnored
     private var hasLoadedInitialState = false
     /// Approved once this launch — "write_file:<path>" or
     /// "run_terminal_command:<command>" — never persisted across
     /// relaunches; a fresh launch asks again.
+    @ObservationIgnored
     private var rememberedApprovals: Set<String> = []
+    @ObservationIgnored
     private var approvalContinuation: CheckedContinuation<Bool, Never>?
 
     init(sessions: ModelSessionManager, threadStore: ChatThreadStore, requirements: RequirementsManager) {
@@ -246,11 +252,12 @@ final class CodeAgentViewModel: ObservableObject {
     /// 12s") instead of a plain spinner with no sense of whether
     /// anything is still happening. Reset at the start of every round
     /// (tool-call rounds included), not just once per `send()`.
-    @Published private(set) var currentRoundStartedAt: Date?
+    private(set) var currentRoundStartedAt: Date?
     /// The whole agentic loop's own `Task` — `stopGeneration()` cancels
     /// this directly rather than relying on the streamed response's own
     /// cancellation alone, since cancellation also has to interrupt
     /// whatever's happening between rounds (a tool call in progress).
+    @ObservationIgnored
     private var generationTask: Task<Void, Never>?
 
     /// Not `async` — spawns and owns its own `Task` (`generationTask`)

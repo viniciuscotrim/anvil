@@ -11,8 +11,8 @@ import UniformTypeIdentifiers
 /// hidden, and a pending-approval banner / manual-mode proposal panel
 /// `ChatView` has no equivalent of.
 struct CodeAgentView: View {
-    @EnvironmentObject private var sessions: ModelSessionManager
-    @EnvironmentObject private var codeAgent: CodeAgentViewModel
+    @Environment(ModelSessionManager.self) private var sessions
+    @Environment(CodeAgentViewModel.self) private var codeAgent
     @Environment(\.openWindow) private var openWindow
     @State private var isSidebarOpen = true
     @State private var isChoosingFolder = false
