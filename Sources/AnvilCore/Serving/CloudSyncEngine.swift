@@ -220,10 +220,10 @@ public actor CloudSyncEngine {
             guard let profile = await profileStore.get(id: id) else { return nil }
             return Self.makeRecord(from: profile, recordID: pendingChange)
         case .memory:
-            guard let memory = (await memoryStore.all()).first(where: { $0.id == id }) else { return nil }
+            guard let memory = await memoryStore.get(id: id) else { return nil }
             return Self.makeRecord(from: memory, recordID: pendingChange)
         case .suggestion:
-            guard let suggestion = (await suggestionStore.all()).first(where: { $0.id == id }) else { return nil }
+            guard let suggestion = await suggestionStore.get(id: id) else { return nil }
             return Self.makeRecord(from: suggestion, recordID: pendingChange)
         }
     }
@@ -383,13 +383,11 @@ public actor CloudSyncEngine {
             _ = try? await profileStore.upsert(remote)
         case RecordKind.memory.rawValue:
             guard let remote = Self.memory(from: record) else { return }
-            let localAll = await memoryStore.all()
-            if let local = localAll.first(where: { $0.id == remote.id }), local.updatedAt >= remote.updatedAt { return }
+            if let local = await memoryStore.get(id: remote.id), local.updatedAt >= remote.updatedAt { return }
             _ = try? await memoryStore.upsertPreservingTimestamp(remote)
         case RecordKind.suggestion.rawValue:
             guard let remote = Self.suggestion(from: record) else { return }
-            let localAll = await suggestionStore.all()
-            if let local = localAll.first(where: { $0.id == remote.id }), local.updatedAt >= remote.updatedAt { return }
+            if let local = await suggestionStore.get(id: remote.id), local.updatedAt >= remote.updatedAt { return }
             _ = try? await suggestionStore.upsertPreservingTimestamp(remote)
         default:
             break

@@ -24,28 +24,45 @@ public struct ChatContextBuilder: Sendable {
         let recentIDs = Set(recent.map(\.id))
         let prefix = messages.dropLast(recentMessageCount).filter { !recentIDs.contains($0.id) }
         var selected: [ChatMessage] = []
+        // O(1) membership checks below instead of `selected.contains(where:)`
+        // — `prefix` is the disposable "middle" of a long transcript, and
+        // since Context Shift stopped ever compacting history (v0.24.0)
+        // that can run to thousands of messages on every single chat send.
+        var selectedIDs: Set<UUID> = []
         var estimated = memoryPrompt.map(Self.estimateTokens) ?? 0
 
         // Reserve space for the first turn and recent window first. Older
         // middle turns are the disposable part of a long transcript.
         if let firstUser = messages.first(where: { $0.role == .user }) {
             selected.append(firstUser)
+            selectedIDs.insert(firstUser.id)
             estimated += Self.estimateTokens(firstUser.content)
         }
         for message in recent {
-            if selected.contains(where: { $0.id == message.id }) { continue }
+            if selectedIDs.contains(message.id) { continue }
             let cost = Self.estimateTokens(message.content)
             guard estimated + cost <= maxEstimatedTokens else { continue }
             selected.append(message)
+            selectedIDs.insert(message.id)
             estimated += cost
         }
+        // Collected newest-old-first (matching `prefix.reversed()`'s own
+        // order), then reversed once and inserted as a single block —
+        // equivalent to the old per-message `insert(at: min(1, ...))`
+        // (each insert at index 1 pushed the previous one rightward, so
+        // the net effect was always this same oldest-to-newest ordering
+        // right after the first turn), without an O(prefix.count) shift
+        // on every accepted message.
+        var middleMessagesNewestFirst: [ChatMessage] = []
         for message in prefix.reversed() {
-            if selected.contains(where: { $0.id == message.id }) { continue }
+            if selectedIDs.contains(message.id) { continue }
             let cost = Self.estimateTokens(message.content)
             guard estimated + cost <= maxEstimatedTokens else { continue }
-            selected.insert(message, at: min(1, selected.count))
+            middleMessagesNewestFirst.append(message)
+            selectedIDs.insert(message.id)
             estimated += cost
         }
+        selected.insert(contentsOf: middleMessagesNewestFirst.reversed(), at: min(1, selected.count))
         return (selected, memoryPrompt, memoryIDs)
     }
 

@@ -235,7 +235,7 @@ public actor AnvilSyncServer {
             return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await memoryStore.deletionTimestamps()))
         case ("PUT", "memories", nil):
             let memory = try JSONDecoder.anvil.decode(ChatMemory.self, from: request.body)
-            if let existing = await memoryStore.all().first(where: { $0.id == memory.id }), existing.updatedAt >= memory.updatedAt {
+            if let existing = await memoryStore.get(id: memory.id), existing.updatedAt >= memory.updatedAt {
                 return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(existing))
             }
             let saved = try await memoryStore.upsertPreservingTimestamp(memory)
@@ -251,7 +251,7 @@ public actor AnvilSyncServer {
             return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(await suggestionStore.deletionTimestamps()))
         case ("PUT", "suggestions", nil):
             let suggestion = try JSONDecoder.anvil.decode(ChatMemorySuggestion.self, from: request.body)
-            if let existing = await suggestionStore.all().first(where: { $0.id == suggestion.id }),
+            if let existing = await suggestionStore.get(id: suggestion.id),
                existing.updatedAt >= suggestion.updatedAt {
                 return RouteResponse(status: 200, body: try JSONEncoder.anvil.encode(existing))
             }

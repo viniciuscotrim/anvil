@@ -27,6 +27,26 @@ struct ChatContextBuilderTests {
         #expect(result.messages.count < messages.count)
     }
 
+    /// Pins the exact ordering `build`'s "middle" (non-recent, non-first)
+    /// selection produces once more than one of those messages fits the
+    /// budget — a regression guard for the O(n) rewrite of what used to
+    /// be a per-message `array.insert(at:)`: both must land on the same
+    /// oldest-to-newest order between the first turn and the recent
+    /// window, not just the same *set* of messages.
+    @Test
+    func middleMessagesLandInChronologicalOrderBetweenFirstTurnAndRecentWindow() {
+        let messages = (0..<20).map { index in
+            ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant, content: String(repeating: "x", count: 400))
+        }
+        // Each message costs 100 estimated tokens. Budget 900 fits the
+        // first turn (100) + the 4-message recent window (400) + four
+        // more middle messages (400) — exactly indices 12-15.
+        let result = ChatContextBuilder(maxEstimatedTokens: 900, recentMessageCount: 4).build(messages: messages)
+
+        let expectedIndices = [0, 12, 13, 14, 15, 16, 17, 18, 19]
+        #expect(result.messages.map(\.id) == expectedIndices.map { messages[$0].id })
+    }
+
     /// Regression test for the real gap `batches` exists to fix: a
     /// conversation long enough that `build(messages:)`'s own bounded
     /// window would drop its middle turns must still have *every*

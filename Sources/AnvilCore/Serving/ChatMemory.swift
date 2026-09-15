@@ -314,6 +314,10 @@ public actor ChatMemorySuggestionStore {
         await storage.all().sorted { $0.createdAt > $1.createdAt }
     }
 
+    public func get(id: UUID) async -> ChatMemorySuggestion? {
+        await storage.get(id: id)
+    }
+
     /// Local-generation entry point — stamps `updatedAt` to now. See
     /// `ChatThreadStore.upsert`/`upsertPreservingTimestamp` for why a
     /// sync/merge write must use the other method below instead.
@@ -365,6 +369,10 @@ public actor ChatMemoryStore {
 
     public func all() async -> [ChatMemory] {
         await storage.all().sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    public func get(id: UUID) async -> ChatMemory? {
+        await storage.get(id: id)
     }
 
     /// Local-edit entry point — stamps `updatedAt` to now. See
