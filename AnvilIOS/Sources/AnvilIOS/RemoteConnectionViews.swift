@@ -67,7 +67,7 @@ struct SavedConnectionRow: View {
 /// other kind — the whole point is that adding your Mac once, here,
 /// covers both its text and image servers.
 struct RemoteConnectionsListView: View {
-    @ObservedObject var connectionsModel: RemoteConnectionsViewModel
+    let connectionsModel: RemoteConnectionsViewModel
     var preferredKind: ModelKind = .text
     /// Called after a discovered model is connected-to, or a manual one
     /// is added — lets the caller select it immediately.
@@ -131,7 +131,7 @@ struct RemoteConnectionsListView: View {
 }
 
 struct AddConnectionView: View {
-    @ObservedObject var connectionsModel: RemoteConnectionsViewModel
+    let connectionsModel: RemoteConnectionsViewModel
     var onAdd: (RemoteMacConnection) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var displayName = ""

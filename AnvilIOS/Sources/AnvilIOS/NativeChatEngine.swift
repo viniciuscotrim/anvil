@@ -5,6 +5,7 @@ import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
 import Tokenizers
+import Observation
 
 /// Native, in-process text generation for iOS — the real replacement
 /// for what the Mac app does with `LLMServer` (spawning `mlx_lm.server`
@@ -50,29 +51,30 @@ import Tokenizers
 /// already carries the tool call, its result, and the model's narrated
 /// follow-up in one stream.
 @MainActor
-final class NativeChatEngine: ObservableObject {
-    @Published private(set) var isLoading = false
-    @Published private(set) var loadProgress: Double?
-    @Published private(set) var loadedModelID: String?
-    @Published var errorMessage: String?
+@Observable
+final class NativeChatEngine {
+    private(set) var isLoading = false
+    private(set) var loadProgress: Double?
+    private(set) var loadedModelID: String?
+    var errorMessage: String?
     /// Generation parameters — same cross-platform `GenerationSettings`
     /// type the Mac app's Chat sidebar edits, applied to
     /// `session.generateParameters` fresh before every request (see
     /// `applyGenerationSettings`) so a change takes effect on the very
     /// next turn without needing to reload the model or rebuild the
     /// session.
-    @Published var settings = GenerationSettings.default
+    var settings = GenerationSettings.default
     /// Set by the `generate_image` tool dispatch when a call completes
     /// during the current `send`/`streamSend` — the caller reads it
     /// once the stream finishes to attach the image to the visible
     /// reply (`ChatMessage.generatedImagePath`), mirroring
     /// `ChatViewModel.runGenerateImageTool`'s returned path on the Mac.
-    @Published private(set) var lastGeneratedImagePath: String?
+    private(set) var lastGeneratedImagePath: String?
     /// Set once `streamSend`'s stream finishes, from the real measured
     /// completion stats `ChatSession.streamDetails` reports — the same
     /// number the Mac app's header shows via `ChatMessage.tokensPerSecond`.
     /// Read-once via `consumeLastTokensPerSecond()`.
-    @Published private(set) var lastTokensPerSecond: Double?
+    private(set) var lastTokensPerSecond: Double?
     /// Set once `streamSend`'s stream finishes, holding whatever
     /// `ReasoningStreamSplitter` pulled out of a `<think>…</think>`
     /// block along the way — neither on-device backend
@@ -83,14 +85,21 @@ final class NativeChatEngine: ObservableObject {
     /// Read-once via `consumeLastReasoning()`. Reported live: "Não dá
     /// pra conversar como está" — a reasoning model's whole thinking
     /// block used to land straight in the visible reply.
-    @Published private(set) var lastReasoning: String?
+    private(set) var lastReasoning: String?
 
     // Qualified explicitly: the vendored StableDiffusion sources
     // (`NativeImageEngine`'s `StableDiffusion/` directory) declare their
     // own, unrelated generic `ModelContainer<M>` in this same app
     // module, and an unqualified `ModelContainer` here resolves to that
     // one instead of MLXLMCommon's.
+    // `container`/`session`/`ggufBackend` are `@ObservationIgnored`:
+    // every place any of them is set also sets `loadedModelID` (tracked,
+    // above) in the same call — `isLoaded` below reads these but is
+    // always read by a view alongside `loadedModelID` too, so tracking
+    // `loadedModelID` alone is enough to invalidate at the right time.
+    @ObservationIgnored
     private var container: MLXLMCommon.ModelContainer?
+    @ObservationIgnored
     private var session: ChatSession?
     /// The GGUF/llama.cpp counterpart to `container`/`session` — set
     /// instead of them when `load` detects a `.gguf` file rather than
@@ -98,13 +107,18 @@ final class NativeChatEngine: ObservableObject {
     /// detection and `GGUFChatBackend`'s header comment for why this
     /// is a genuinely separate backend rather than a second branch
     /// inside `ChatSession`'s own machinery.
+    @ObservationIgnored
     private var ggufBackend: GGUFChatBackend?
+    @ObservationIgnored
     private let imageEngine: NativeImageEngine
     // Qualified explicitly: `MLXLLM` exports its own public
     // `ModelRegistry` typealias (`= LLMRegistry`), which collides with
     // AnvilCore's unrelated one now that both modules are imported here.
+    @ObservationIgnored
     private let registry: AnvilCore.ModelRegistry
+    @ObservationIgnored
     private let catalog = HuggingFaceCatalog()
+    @ObservationIgnored
     private let downloader: HFRepoDownloader
 
     init(imageEngine: NativeImageEngine, registry: AnvilCore.ModelRegistry = AnvilCore.ModelRegistry()) {

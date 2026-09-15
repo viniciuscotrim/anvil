@@ -22,9 +22,9 @@ struct NativeChatView: View {
     @Environment(ModelsViewModel.self) private var modelsViewModel
     @Environment(ProfilesViewModel.self) private var profilesViewModel
     @Environment(ChatThreadsViewModel.self) private var threads
-    @EnvironmentObject private var engine: NativeChatEngine
-    @StateObject private var remoteEngine = RemoteChatEngine()
-    @StateObject private var connectionsModel = RemoteConnectionsViewModel()
+    @Environment(NativeChatEngine.self) private var engine
+    @State private var remoteEngine = RemoteChatEngine()
+    @State private var connectionsModel = RemoteConnectionsViewModel()
     @State private var selectedImageConnectionID: UUID?
     @State private var isConnectionsSheetPresented = false
     @State private var modelID = "mlx-community/Qwen3-0.6B-4bit"
@@ -287,7 +287,12 @@ struct NativeChatView: View {
     /// before every request regardless of which engine (local or
     /// remote) is currently answering.
     private var settingsSheet: some View {
-        NavigationStack {
+        // `@Bindable` shadow: `@Observable` types read via `@Environment`
+        // don't expose a `$engine` projected value on their own — this
+        // local re-declaration is what makes `$engine.settings.*` below
+        // resolve to real `Binding`s.
+        @Bindable var engine = engine
+        return NavigationStack {
             Form {
                 Section("Generation") {
                     LabeledContent("Max Tokens") {

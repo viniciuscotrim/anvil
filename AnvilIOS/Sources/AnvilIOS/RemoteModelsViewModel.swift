@@ -1,5 +1,6 @@
 import AnvilCore
 import Foundation
+import Observation
 
 /// Remote control for a Mac's own models over `AnvilSyncServer`'s
 /// `/v1/anvil/sessions*`/`models` routes — the exact same
@@ -8,12 +9,14 @@ import Foundation
 /// Loading, unloading, and reconfiguring here does exactly what doing
 /// it from the Mac's own gear-icon sheet does.
 @MainActor
-final class RemoteModelsViewModel: ObservableObject {
-    @Published private(set) var sessions: [ModelSessionWire] = []
-    @Published private(set) var allModels: [ModelEntry] = []
-    @Published var errorMessage: String?
-    @Published private(set) var isBusy = false
+@Observable
+final class RemoteModelsViewModel {
+    private(set) var sessions: [ModelSessionWire] = []
+    private(set) var allModels: [ModelEntry] = []
+    var errorMessage: String?
+    private(set) var isBusy = false
 
+    @ObservationIgnored
     private let client = AnvilSyncClient()
 
     /// Registered but not currently loaded — the "Load" section.

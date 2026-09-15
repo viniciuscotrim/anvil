@@ -7,8 +7,8 @@ import AnvilCore
 /// `PromptToModelViewModel`'s header for why this is one row instead of
 /// the Mac app's per-registered-image-model fan-out.
 struct PromptToModelView: View {
-    @EnvironmentObject private var chatEngine: NativeChatEngine
-    @EnvironmentObject private var imageEngine: NativeImageEngine
+    @Environment(NativeChatEngine.self) private var chatEngine
+    @Environment(NativeImageEngine.self) private var imageEngine
     @State private var viewModel = PromptToModelViewModel()
 
     var body: some View {

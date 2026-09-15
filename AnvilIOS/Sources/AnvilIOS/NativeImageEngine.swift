@@ -4,6 +4,7 @@ import Hub
 import MLX
 import SwiftUI
 import UIKit
+import Observation
 
 /// Native, in-process image generation for iOS — the real replacement
 /// for what `ImageServer` does on macOS (spawn the `mflux`-wrapping
@@ -24,36 +25,47 @@ import UIKit
 /// Stability-AI-specific; only the vendored library's two convenience
 /// presets were.
 @MainActor
-final class NativeImageEngine: ObservableObject {
-    @Published private(set) var isLoading = false
-    @Published private(set) var loadProgress: Double?
-    @Published private(set) var isGenerating = false
-    @Published private(set) var generationProgress: Double?
-    @Published var errorMessage: String?
-    @Published private(set) var lastImage: CGImage?
+@Observable
+final class NativeImageEngine {
+    private(set) var isLoading = false
+    private(set) var loadProgress: Double?
+    private(set) var isGenerating = false
+    private(set) var generationProgress: Double?
+    var errorMessage: String?
+    private(set) var lastImage: CGImage?
     /// One tile per lineage (its latest version) — the same gallery
     /// grid `ImageGenerationViewModel` gives the Mac app's Images tab,
     /// backed by the same cross-platform `GeneratedImageStore`.
-    @Published private(set) var gallery: [GeneratedImage] = []
+    private(set) var gallery: [GeneratedImage] = []
     /// The lineage `generate(prompt:)` continues as a new version
     /// instead of starting fresh — set by `selectImage`, cleared by
     /// `deselectImage` or `unload`.
-    @Published private(set) var selectedImage: GeneratedImage?
-    @Published private(set) var selectedLineageVersions: [GeneratedImage] = []
+    private(set) var selectedImage: GeneratedImage?
+    private(set) var selectedLineageVersions: [GeneratedImage] = []
     /// What's actually loaded right now — the built-in preset's own id
     /// ("stabilityai/sdxl-turbo") or a registered model's
     /// `ModelEntry.id`/`displayName`. Both `nil` while nothing is loaded.
-    @Published private(set) var loadedModelID: String?
-    @Published private(set) var loadedModelDisplayName: String?
+    private(set) var loadedModelID: String?
+    private(set) var loadedModelDisplayName: String?
     /// Per-generation parameters, editable once a model is loaded —
     /// seeded from that model's own sane defaults each time `load`
     /// picks a new one (a plain SDXL checkpoint and `sdxl-turbo` want
     /// very different steps/guidance), then left for the user to tune.
-    @Published var settings = ImageGenerationSettings.default
+    var settings = ImageGenerationSettings.default
 
+    // `@ObservationIgnored`: every place any of these three is set also
+    // sets `loadedModelID` (tracked, above) in the same call — `isLoaded`
+    // below reads `container` but is always read by a view alongside
+    // `loadedModelID` too, so tracking that alone is enough to
+    // invalidate at the right time. See `NativeChatEngine`'s identical
+    // `container`/`ggufBackend` reasoning.
+    @ObservationIgnored
     private var configuration: StableDiffusionConfiguration?
+    @ObservationIgnored
     private var hub: MLXLMHubOrDefault = .default
+    @ObservationIgnored
     private var container: ModelContainer<TextToImageGenerator>?
+    @ObservationIgnored
     private let store = GeneratedImageStore()
 
     var isLoaded: Bool { container != nil }

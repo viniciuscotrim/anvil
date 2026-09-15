@@ -9,8 +9,8 @@ import AnvilCore
 /// `ModelSearchView` — see `ModelsViewModel`'s header comment for why.
 struct ModelLibraryView: View {
     @Environment(ModelsViewModel.self) private var viewModel
-    @EnvironmentObject private var chatEngine: NativeChatEngine
-    @EnvironmentObject private var imageEngine: NativeImageEngine
+    @Environment(NativeChatEngine.self) private var chatEngine
+    @Environment(NativeImageEngine.self) private var imageEngine
 
     var body: some View {
         NavigationStack {

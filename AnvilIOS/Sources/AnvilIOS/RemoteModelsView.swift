@@ -10,7 +10,7 @@ import SwiftUI
 /// device) genuinely loses the connection, not just a label change.
 struct RemoteModelsView: View {
     let host: String
-    @StateObject private var viewModel = RemoteModelsViewModel()
+    @State private var viewModel = RemoteModelsViewModel()
 
     var body: some View {
         NavigationStack {

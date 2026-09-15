@@ -1,5 +1,6 @@
 import AnvilCore
 import Foundation
+import Observation
 
 /// Owns the list of Macs this phone knows about, and finding new ones —
 /// shared by Chat's "On Your Mac" source picker and the Images tab's own
@@ -14,21 +15,23 @@ import Foundation
 /// refresh, reopening a tab): reuses whatever's already there rather
 /// than duplicating saved entries.
 @MainActor
-final class RemoteConnectionsViewModel: ObservableObject {
-    @Published private(set) var connections: [RemoteMacConnection] = []
+@Observable
+final class RemoteConnectionsViewModel {
+    private(set) var connections: [RemoteMacConnection] = []
     /// Which saved connections answered when last checked — `nil` means
     /// "not checked yet this launch", not "offline". Checked first, fast
     /// (a handful of exact host:port pings), before the broader subnet
     /// scan even starts.
-    @Published private(set) var reachableConnectionIDs: Set<UUID> = []
-    @Published private(set) var isVerifyingSaved = false
-    @Published private(set) var isScanning = false
-    @Published private(set) var scanProgress: Double = 0
+    private(set) var reachableConnectionIDs: Set<UUID> = []
+    private(set) var isVerifyingSaved = false
+    private(set) var isScanning = false
+    private(set) var scanProgress: Double = 0
     /// Live servers found on the network that aren't already saved —
     /// each just needs one tap ("Remote") to start using, never typing
     /// an IP or port.
-    @Published private(set) var discoveredModels: [DiscoveredMacModel] = []
+    private(set) var discoveredModels: [DiscoveredMacModel] = []
 
+    @ObservationIgnored
     private let store = RemoteMacConnectionStore()
     /// `refreshConnections()` runs every time a tab appears — switching
     /// back and forth between Chat and Images (both share this view
@@ -39,7 +42,9 @@ final class RemoteConnectionsViewModel: ObservableObject {
     /// repeating that scan (previous results stay shown, still
     /// filtered against whatever's saved) when the last one finished
     /// too recently to plausibly have changed.
+    @ObservationIgnored
     private static let scanCooldown: TimeInterval = 30
+    @ObservationIgnored
     private var lastScanDate: Date?
 
     var textConnections: [RemoteMacConnection] { connections.filter { $0.kind == .text } }

@@ -1,6 +1,7 @@
 import AnvilCore
 import Foundation
 import UIKit
+import Observation
 
 /// The "talk to a Mac instead of on-device" half of Chat — the remote
 /// analog of `NativeChatEngine`, built on the same fully cross-platform
@@ -14,7 +15,8 @@ import UIKit
 /// switching Chat's source mid-thread only changes which engine answers
 /// the *next* message — the thread itself doesn't change shape.
 @MainActor
-final class RemoteChatEngine: ObservableObject {
+@Observable
+final class RemoteChatEngine {
     /// Mirrors the Mac app's own `ChatViewModel.GenerationPhase` — real
     /// signal that something is happening over the network, not just a
     /// bare spinner, the same lesson the Code tab's own streaming fix
@@ -41,20 +43,26 @@ final class RemoteChatEngine: ObservableObject {
         }
     }
 
-    @Published private(set) var generationPhase: GenerationPhase = .idle
-    @Published private(set) var lastTokensPerSecond: Double?
-    @Published var errorMessage: String?
+    private(set) var generationPhase: GenerationPhase = .idle
+    private(set) var lastTokensPerSecond: Double?
+    var errorMessage: String?
 
+    @ObservationIgnored
     private let client = ChatClient()
+    @ObservationIgnored
     private let syncClient = AnvilSyncClient()
+    @ObservationIgnored
     private let imageClient = RemoteImageClient()
+    @ObservationIgnored
     private let imageStore = GeneratedImageStore()
+    @ObservationIgnored
     private var generationTask: Task<Void, Never>?
     /// Carries the previous `generate_image` call's prompt + seed
     /// forward within a thread, the same fix the Mac app already needed
     /// for character consistency across consecutive generations ("same
     /// character, different clothes") — without it, consecutive remote
     /// generations would drift the same way the Mac's used to.
+    @ObservationIgnored
     private var lastImageGenerationByThread: [UUID: (seed: Int, prompt: String)] = [:]
 
     var isSending: Bool { generationTask != nil }

@@ -36,8 +36,8 @@ struct AnvilIOSApp: App {
     /// `chatEngine` also needs a direct reference to `imageEngine` for
     /// its `generate_image` tool-call dispatch, hence the explicit
     /// `init()` below instead of two independent property initializers.
-    @StateObject private var chatEngine: NativeChatEngine
-    @StateObject private var imageEngine: NativeImageEngine
+    @State private var chatEngine: NativeChatEngine
+    @State private var imageEngine: NativeImageEngine
 
     init() {
         // Real, documented MLX guidance for iOS (mlx-swift's own
@@ -63,8 +63,8 @@ struct AnvilIOSApp: App {
         Task { await BackgroundDownloadCoordinator.shared.reconnectIfNeeded() }
 
         let imageEngine = NativeImageEngine()
-        _imageEngine = StateObject(wrappedValue: imageEngine)
-        _chatEngine = StateObject(wrappedValue: NativeChatEngine(imageEngine: imageEngine))
+        _imageEngine = State(wrappedValue: imageEngine)
+        _chatEngine = State(wrappedValue: NativeChatEngine(imageEngine: imageEngine))
     }
 
     var body: some Scene {
@@ -73,8 +73,8 @@ struct AnvilIOSApp: App {
                 .environment(modelsViewModel)
                 .environment(profilesViewModel)
                 .environment(chatThreads)
-                .environmentObject(chatEngine)
-                .environmentObject(imageEngine)
+                .environment(chatEngine)
+                .environment(imageEngine)
         }
     }
 }

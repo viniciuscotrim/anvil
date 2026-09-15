@@ -9,7 +9,7 @@ import AnvilCore
 /// past lineages, and a detail canvas with a version-history strip once
 /// one is selected.
 struct NativeImageView: View {
-    @EnvironmentObject private var engine: NativeImageEngine
+    @Environment(NativeImageEngine.self) private var engine
     @Environment(ModelsViewModel.self) private var modelsViewModel
     @State private var prompt = "a photo of an astronaut riding a horse on the moon"
     @State private var isSettingsPresented = false
@@ -123,7 +123,12 @@ struct NativeImageView: View {
     }
 
     private var settingsSheet: some View {
-        NavigationStack {
+        // `@Bindable` shadow: `@Observable` types read via `@Environment`
+        // don't expose a `$engine` projected value on their own — this
+        // local re-declaration is what makes `$engine.settings.*` below
+        // resolve to real `Binding`s.
+        @Bindable var engine = engine
+        return NavigationStack {
             Form {
                 Section("Size") {
                     LabeledContent("Width") {

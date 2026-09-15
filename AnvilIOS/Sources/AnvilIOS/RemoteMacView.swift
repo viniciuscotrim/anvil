@@ -17,8 +17,8 @@ import AnvilCore
 /// exists, folded away as a fallback for a network the scan can't see
 /// (a different subnet, a VPN), not the primary path.
 struct RemoteMacView: View {
-    @StateObject private var imagesModel = RemoteMacViewModel()
-    @StateObject private var connectionsModel = RemoteConnectionsViewModel()
+    @State private var imagesModel = RemoteMacViewModel()
+    @State private var connectionsModel = RemoteConnectionsViewModel()
     @State private var isManagingConnections = false
     @State private var isManagingModels = false
 

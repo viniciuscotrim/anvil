@@ -1,6 +1,7 @@
 import AnvilCore
 import Foundation
 import UIKit
+import Observation
 
 /// Images generated through a model already loaded on a Mac on the same
 /// network — see `RemoteImageClient`'s own header comment for why the
@@ -13,14 +14,16 @@ import UIKit
 /// observable by the view instead of one silently going stale inside
 /// the other.
 @MainActor
-final class RemoteMacViewModel: ObservableObject {
-    @Published var selectedImageConnectionID: UUID?
-    @Published var imagePrompt = "a photo of an astronaut riding a horse on the moon"
-    @Published private(set) var isGenerating = false
-    @Published private(set) var lastImage: UIImage?
-    @Published var imageSettings = ImageGenerationSettings.default
-    @Published var errorMessage: String?
+@Observable
+final class RemoteMacViewModel {
+    var selectedImageConnectionID: UUID?
+    var imagePrompt = "a photo of an astronaut riding a horse on the moon"
+    private(set) var isGenerating = false
+    private(set) var lastImage: UIImage?
+    var imageSettings = ImageGenerationSettings.default
+    var errorMessage: String?
 
+    @ObservationIgnored
     private let imageClient = RemoteImageClient()
 
     func generateImage(using connection: RemoteMacConnection?) async {

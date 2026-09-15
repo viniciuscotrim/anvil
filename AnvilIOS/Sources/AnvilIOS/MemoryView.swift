@@ -12,7 +12,7 @@ import SwiftUI
 struct MemoryView: View {
     @Environment(ProfilesViewModel.self) private var profilesViewModel
     @Environment(ChatThreadsViewModel.self) private var threads
-    @EnvironmentObject private var engine: NativeChatEngine
+    @Environment(NativeChatEngine.self) private var engine
     @State private var draftText = ""
     @State private var draftKind: ChatMemoryKind = .fact
     @State private var draftSource: ChatMemorySource = .explicit
