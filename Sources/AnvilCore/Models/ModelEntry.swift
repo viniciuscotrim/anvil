@@ -43,27 +43,38 @@ public struct ModelEntry: Codable, Sendable, Equatable, Identifiable {
     public var engineOverride: InferenceEngine?
 
     /// Resolves the actual inference engine to use for this model.
+    ///
+    /// Checks `localPath`'s own extension before ever touching disk —
+    /// a single-file model (an imported GGUF, or a DrawThings `.ckpt`/
+    /// `.nnc`) settles this with a plain string check, so listing the
+    /// directory (needed only for a pipeline directory whose engine-
+    /// defining file could be anywhere inside it) is skipped entirely
+    /// for that common case via short-circuit evaluation, instead of
+    /// unconditionally scanning the filesystem on every access — this
+    /// is read once per row every time a model list re-renders.
     public var effectiveEngine: InferenceEngine {
         if let engineOverride { return engineOverride }
-        let url = URL(fileURLWithPath: localPath)
-        let fm = FileManager.default
-        let contents = (try? fm.contentsOfDirectory(atPath: url.path)) ?? []
-        let lower = contents.map { $0.lowercased() }
+        let lowerPath = localPath.lowercased()
 
         if kind == .image {
-            if lower.contains(where: { $0.hasSuffix(".ckpt") || $0.hasSuffix(".nnc") })
-                || localPath.lowercased().hasSuffix(".ckpt")
-                || localPath.lowercased().hasSuffix(".nnc") {
+            if lowerPath.hasSuffix(".ckpt") || lowerPath.hasSuffix(".nnc")
+                || Self.directoryContains(localPath, whereFileName: { $0.hasSuffix(".ckpt") || $0.hasSuffix(".nnc") }) {
                 return .drawThings
             }
             return .mflux
         }
 
         // Inspect local path to see if it's GGUF or Safetensors/MLX
-        if lower.contains(where: { $0.hasSuffix(".gguf") }) || localPath.lowercased().hasSuffix(".gguf") {
+        if lowerPath.hasSuffix(".gguf")
+            || Self.directoryContains(localPath, whereFileName: { $0.hasSuffix(".gguf") }) {
             return .llamaCpp
         }
         return .mlx
+    }
+
+    private static func directoryContains(_ path: String, whereFileName predicate: (String) -> Bool) -> Bool {
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
+        return contents.contains { predicate($0.lowercased()) }
     }
 
     public init(

@@ -195,44 +195,33 @@ public struct DrawThingsCatalog: Sendable {
     public func search(query: String, limit: Int = 30) async throws -> [DrawThingsModelSummary] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Fetch from Hugging Face targeting drawthingsai author and explicit drawthings checkpoints
+        // Fetch from Hugging Face targeting drawthingsai author and explicit drawthings checkpoints.
+        // Run every query concurrently — these are 2-3 independent round
+        // trips to the same API, previously awaited one at a time, which
+        // multiplied this search's latency by up to 3x for no reason.
+        // Merged back in `searchQueries`' own order (not completion
+        // order) afterward so which duplicate wins a dedup tie is
+        // deterministic, matching the old sequential behavior exactly.
         var fetchedSummaries: [HFModelSummary] = []
         let searchQueries = trimmed.isEmpty ? ["author:drawthingsai", "drawthings"] : ["drawthingsai \(trimmed)", "drawthings \(trimmed)", trimmed]
 
-        for kw in searchQueries {
-            var components = URLComponents(string: "https://huggingface.co/api/models")!
-            var queryItems = [
-                URLQueryItem(name: "limit", value: String(limit)),
-                URLQueryItem(name: "sort", value: "downloads"),
-                URLQueryItem(name: "direction", value: "-1"),
-                URLQueryItem(name: "expand", value: "downloads"),
-                URLQueryItem(name: "expand", value: "likes"),
-                URLQueryItem(name: "expand", value: "tags"),
-                URLQueryItem(name: "expand", value: "safetensors"),
-                URLQueryItem(name: "expand", value: "siblings"),
-                URLQueryItem(name: "expand", value: "lastModified")
-            ]
-            if kw.hasPrefix("author:") {
-                let author = String(kw.dropFirst(7))
-                queryItems.append(URLQueryItem(name: "author", value: author))
-            } else {
-                queryItems.append(URLQueryItem(name: "search", value: kw))
+        let resultsByQuery = await withTaskGroup(of: (Int, [HFModelSummary]).self) { group in
+            for (index, kw) in searchQueries.enumerated() {
+                group.addTask {
+                    (index, await Self.fetchHFModels(matching: kw, limit: limit, session: self.session))
+                }
             }
-            components.queryItems = queryItems
-
-            guard let url = components.url else { continue }
-            var request = URLRequest(url: url)
-            if let token = HFTokenStore.load(), !token.isEmpty {
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            var collected: [Int: [HFModelSummary]] = [:]
+            for await (index, items) in group {
+                collected[index] = items
             }
+            return searchQueries.indices.compactMap { collected[$0] }
+        }
 
-            if let (data, response) = try? await session.data(for: request),
-               let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
-                let decoded = (try? JSONDecoder().decode([HFModelSummary].self, from: data)) ?? []
-                for item in decoded {
-                    if !fetchedSummaries.contains(where: { $0.modelID == item.modelID }) {
-                        fetchedSummaries.append(item)
-                    }
+        for decoded in resultsByQuery {
+            for item in decoded {
+                if !fetchedSummaries.contains(where: { $0.modelID == item.modelID }) {
+                    fetchedSummaries.append(item)
                 }
             }
         }
@@ -359,6 +348,45 @@ public struct DrawThingsCatalog: Sendable {
             return fallback / Int64(max(1, totalFiles))
         }
         return 3_000_000_000
+    }
+
+    /// One query's worth of `search`'s Hugging Face fetch — extracted so
+    /// `search` can run all of its queries concurrently via a
+    /// `TaskGroup` instead of awaiting them one at a time. Failures are
+    /// swallowed (`try?`) exactly as they were inline before: a search
+    /// is best-effort across sources, not an all-or-nothing operation.
+    private static func fetchHFModels(matching keyword: String, limit: Int, session: URLSession) async -> [HFModelSummary] {
+        var components = URLComponents(string: "https://huggingface.co/api/models")!
+        var queryItems = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "sort", value: "downloads"),
+            URLQueryItem(name: "direction", value: "-1"),
+            URLQueryItem(name: "expand", value: "downloads"),
+            URLQueryItem(name: "expand", value: "likes"),
+            URLQueryItem(name: "expand", value: "tags"),
+            URLQueryItem(name: "expand", value: "safetensors"),
+            URLQueryItem(name: "expand", value: "siblings"),
+            URLQueryItem(name: "expand", value: "lastModified")
+        ]
+        if keyword.hasPrefix("author:") {
+            let author = String(keyword.dropFirst(7))
+            queryItems.append(URLQueryItem(name: "author", value: author))
+        } else {
+            queryItems.append(URLQueryItem(name: "search", value: keyword))
+        }
+        components.queryItems = queryItems
+
+        guard let url = components.url else { return [] }
+        var request = URLRequest(url: url)
+        if let token = HFTokenStore.load(), !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        guard let (data, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            return []
+        }
+        return (try? JSONDecoder().decode([HFModelSummary].self, from: data)) ?? []
     }
 }
 

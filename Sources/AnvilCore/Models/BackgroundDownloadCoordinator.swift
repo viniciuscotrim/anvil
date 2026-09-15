@@ -156,6 +156,19 @@ public actor BackgroundDownloadCoordinator {
     /// task itself carries, never on any other in-memory state.
     private final class Delegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
         private weak var owner: BackgroundDownloadCoordinator?
+        // `didWriteData` fires on essentially every packet for a
+        // multi-gigabyte GGUF — dozens to hundreds of times a second —
+        // and used to spawn a brand-new unstructured `Task` on every
+        // single call just to update a percentage. Throttled to at most
+        // once per 1% or 200ms (whichever comes first), which is still
+        // far more granular than the UI can visibly distinguish. Safe as
+        // plain mutable state (no lock): `URLSession(configuration:
+        // delegate:delegateQueue: nil)` gives this delegate its own
+        // serial operation queue, so these methods never run
+        // concurrently with each other.
+        private var lastReportedProgress: [Int: (fraction: Double, date: Date)] = [:]
+        private static let minimumFractionDelta = 0.01
+        private static let minimumInterval: TimeInterval = 0.2
 
         init(owner: BackgroundDownloadCoordinator) {
             self.owner = owner
@@ -171,11 +184,20 @@ public actor BackgroundDownloadCoordinator {
             guard totalBytesExpectedToWrite > 0 else { return }
             let fraction = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
             let identifier = downloadTask.taskIdentifier
+            let now = Date()
+            if let last = lastReportedProgress[identifier],
+               fraction - last.fraction < Self.minimumFractionDelta,
+               now.timeIntervalSince(last.date) < Self.minimumInterval,
+               fraction < 1.0 {
+                return
+            }
+            lastReportedProgress[identifier] = (fraction, now)
             Task { [owner] in await owner?.reportProgress(taskIdentifier: identifier, fraction: fraction) }
         }
 
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
             let identifier = downloadTask.taskIdentifier
+            lastReportedProgress.removeValue(forKey: identifier)
             let result = Self.finish(downloadTask: downloadTask, at: location)
             Task { [owner] in await owner?.resume(taskIdentifier: identifier, with: result) }
         }
@@ -223,6 +245,7 @@ public actor BackgroundDownloadCoordinator {
         }
 
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+            lastReportedProgress.removeValue(forKey: task.taskIdentifier)
             guard let error else { return }
             let identifier = task.taskIdentifier
             let resolved: Error = (error as NSError).code == NSURLErrorCancelled ? CancellationError() : error
