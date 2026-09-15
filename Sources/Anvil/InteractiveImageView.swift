@@ -74,7 +74,12 @@ struct InteractiveImageView<ExtraMenuItems: View>: View {
 /// because Swift doesn't allow a static stored property inside a
 /// generic type.
 private enum InteractiveImageCache {
-    private static let cache = NSCache<NSString, NSImage>()
+    // `nonisolated(unsafe)`: `NSCache` is documented by Apple as safe to
+    // use concurrently from multiple threads (it does its own internal
+    // locking) — Swift 6's strict concurrency checking flags any shared
+    // `static` of a non-`Sendable` type regardless, since it can't see
+    // that internal guarantee.
+    nonisolated(unsafe) private static let cache = NSCache<NSString, NSImage>()
 
     static func image(at path: String) -> NSImage? {
         let key = path as NSString
