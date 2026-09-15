@@ -923,8 +923,7 @@ final class ChatViewModel {
         // The pipeline itself can need up to 17GB per phase — same
         // "Stop-and-Swap" ceiling the automatic trigger enforces — so
         // nothing else heavy should be resident while it runs. Asked
-        // first, same as `ensureModelLoadedForSuggestions` always did,
-        // never unloaded silently.
+        // first, never unloaded silently.
         let previouslyLoadedTextModelID = selectedModelID
         let loadedTextSessions = sessions.readySessions
         let loadedImageSessions = imageSessions.readySessions
@@ -1104,8 +1103,9 @@ final class ChatViewModel {
     /// header's model picker started offering every registered model
     /// rather than just an already-loaded one, sending had to be able
     /// to bring the chosen one up itself. Unlike
-    /// `ensureModelLoadedForSuggestions` below, this never asks first —
-    /// the user picked this model to chat with, same as picking an
+    /// `suggestMemoriesFromCurrentThread`'s own unload handling below,
+    /// this never asks first — the user picked this model to chat with,
+    /// same as picking an
     /// already-loaded one always implied "just use it," so swapping
     /// what's resident to honor that should just happen. Returns
     /// `false` (setting `errorMessage`) when the model still isn't
@@ -1126,59 +1126,6 @@ final class ChatViewModel {
 
         for session in sessions.readySessions { await sessions.unload(modelID: session.id) }
         for session in imageSessions.readySessions { await imageSessions.unload(modelID: session.id) }
-
-        guard await sessions.load(entry, requirements: requirements) else {
-            if case .failed(let retryReason)? = sessions.session(for: modelID)?.status {
-                errorMessage = retryReason
-            } else {
-                errorMessage = "Could not load \(entry.displayName)."
-            }
-            return false
-        }
-        return true
-    }
-
-    /// Loads `modelID` on demand if it isn't already resident — the
-    /// whole point of letting the digest use any registered model, not
-    /// just whichever one Chat happens to have loaded, is that it
-    /// shouldn't require switching Chat's own model first. If loading
-    /// fails for lack of unified memory and something else is
-    /// currently loaded (text or image — they share one budget), asks
-    /// the user before unloading it and retrying once; never unloads
-    /// anything silently. Returns `false` (setting `errorMessage`,
-    /// unless the user simply declined) when the model still isn't
-    /// usable afterward.
-    private func ensureModelLoadedForSuggestions(_ modelID: String) async -> Bool {
-        if sessions.isLoaded(modelID: modelID) { return true }
-        guard let entry = await modelRegistry.all().first(where: { $0.id == modelID }) else {
-            errorMessage = "That model is no longer registered."
-            return false
-        }
-        if await sessions.load(entry, requirements: requirements) { return true }
-
-        guard case .failed(let reason)? = sessions.session(for: modelID)?.status,
-              reason.contains("Not enough unified memory") else {
-            errorMessage = "Could not load \(entry.displayName)."
-            return false
-        }
-
-        let otherTextSessions = sessions.readySessions
-        let otherImageSessions = imageSessions.readySessions
-        let namesToUnload = (otherTextSessions.map { $0.model.displayName } + otherImageSessions.map { $0.model.displayName })
-        guard !namesToUnload.isEmpty else {
-            // Nothing else is loaded to free up, so the estimate itself
-            // is simply larger than the whole budget — asking to
-            // unload "nothing" would be meaningless.
-            errorMessage = reason
-            return false
-        }
-
-        guard await confirmUnloadingOtherModels(toLoad: entry.displayName, currentlyLoaded: namesToUnload) else {
-            return false
-        }
-
-        for session in otherTextSessions { await sessions.unload(modelID: session.id) }
-        for session in otherImageSessions { await imageSessions.unload(modelID: session.id) }
 
         guard await sessions.load(entry, requirements: requirements) else {
             if case .failed(let retryReason)? = sessions.session(for: modelID)?.status {
