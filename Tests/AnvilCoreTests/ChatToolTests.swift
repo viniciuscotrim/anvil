@@ -6,7 +6,7 @@ import Testing
 struct ChatToolTests {
     @Test
     func generateImageWireShapeMatchesOpenAIToolFormat() throws {
-        let data = try JSONSerialization.data(withJSONObject: ChatTool.generateImage.wireRepresentation)
+        let data = try JSONEncoder().encode(ChatTool.generateImage.wireRepresentation)
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
 
         #expect(object?["type"] as? String == "function")

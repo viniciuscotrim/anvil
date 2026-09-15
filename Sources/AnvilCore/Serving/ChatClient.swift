@@ -50,23 +50,23 @@ public struct ChatClient: Sendable {
 
         var wireMessages = messages.map(Self.wireMessage)
         if let systemPrompt, !systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            wireMessages.insert(["role": "system", "content": systemPrompt], at: 0)
+            wireMessages.insert(WireMessage(role: "system", content: systemPrompt), at: 0)
         }
 
-        var body: [String: Any] = [
-            "model": model,
-            "messages": wireMessages,
-            "max_tokens": settings.wireMaxTokens,
-            "temperature": settings.temperature,
-            "top_p": settings.topP,
-            "top_k": settings.topK,
-            "min_p": settings.minP
-        ]
-        if !tools.isEmpty {
-            body["tools"] = tools.map(\.wireRepresentation)
-        }
-        if let conversationID { body["conversation_id"] = conversationID }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let body = ChatCompletionRequest(
+            model: model,
+            messages: wireMessages,
+            max_tokens: settings.wireMaxTokens,
+            temperature: settings.temperature,
+            top_p: settings.topP,
+            top_k: settings.topK,
+            min_p: settings.minP,
+            tools: tools.isEmpty ? nil : tools.map(\.wireRepresentation),
+            conversation_id: conversationID,
+            stream: nil,
+            stream_options: nil
+        )
+        request.httpBody = try JSONEncoder().encode(body)
 
         let start = Date()
 
@@ -165,24 +165,22 @@ public struct ChatClient: Sendable {
 
                     var wireMessages = messages.map(Self.wireMessage)
                     if let systemPrompt, !systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        wireMessages.insert(["role": "system", "content": systemPrompt], at: 0)
+                        wireMessages.insert(WireMessage(role: "system", content: systemPrompt), at: 0)
                     }
-                    var body: [String: Any] = [
-                        "model": model,
-                        "messages": wireMessages,
-                        "max_tokens": settings.wireMaxTokens,
-                        "temperature": settings.temperature,
-                        "top_p": settings.topP,
-                        "top_k": settings.topK,
-                        "min_p": settings.minP,
-                        "stream": true,
-                        "stream_options": ["include_usage": true]
-                    ]
-                    if !tools.isEmpty {
-                        body["tools"] = tools.map(\.wireRepresentation)
-                    }
-                    if let conversationID { body["conversation_id"] = conversationID }
-                    request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                    let body = ChatCompletionRequest(
+                        model: model,
+                        messages: wireMessages,
+                        max_tokens: settings.wireMaxTokens,
+                        temperature: settings.temperature,
+                        top_p: settings.topP,
+                        top_k: settings.topK,
+                        min_p: settings.minP,
+                        tools: tools.isEmpty ? nil : tools.map(\.wireRepresentation),
+                        conversation_id: conversationID,
+                        stream: true,
+                        stream_options: StreamOptions(include_usage: true)
+                    )
+                    request.httpBody = try JSONEncoder().encode(body)
 
                     let start = Date()
                     let bytes: URLSession.AsyncBytes
@@ -355,18 +353,65 @@ public struct ChatClient: Sendable {
     /// fields (id, reasoning, modelDisplayName, tokensPerSecond,
     /// generatedImagePath) that make `ChatMessage` fully `Codable` for
     /// disk persistence.
-    private static func wireMessage(_ message: ChatMessage) -> [String: Any] {
-        var wire: [String: Any] = ["role": message.role.rawValue, "content": message.content]
-        if let toolCallID = message.toolCallID {
-            wire["tool_call_id"] = toolCallID
-        }
-        if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
-            wire["tool_calls"] = toolCalls.map {
-                ["id": $0.id, "type": "function", "function": ["name": $0.name, "arguments": $0.argumentsJSON]]
+    private static func wireMessage(_ message: ChatMessage) -> WireMessage {
+        WireMessage(
+            role: message.role.rawValue,
+            content: message.content,
+            tool_call_id: message.toolCallID,
+            tool_calls: (message.toolCalls?.isEmpty ?? true) ? nil : message.toolCalls?.map {
+                WireOutgoingToolCall(id: $0.id, function: .init(name: $0.name, arguments: $0.argumentsJSON))
             }
-        }
-        return wire
+        )
     }
+}
+
+private struct WireOutgoingToolCall: Encodable {
+    struct Function: Encodable {
+        let name: String
+        let arguments: String
+    }
+    let id: String
+    let type = "function"
+    let function: Function
+}
+
+private struct WireMessage: Encodable {
+    let role: String
+    let content: String
+    var tool_call_id: String?
+    var tool_calls: [WireOutgoingToolCall]?
+
+    init(role: String, content: String, tool_call_id: String? = nil, tool_calls: [WireOutgoingToolCall]? = nil) {
+        self.role = role
+        self.content = content
+        self.tool_call_id = tool_call_id
+        self.tool_calls = tool_calls
+    }
+}
+
+private struct StreamOptions: Encodable {
+    let include_usage: Bool
+}
+
+/// Typed request body for `/v1/chat/completions` — replaces a
+/// `[String: Any]` dictionary encoded via `JSONSerialization`, where a
+/// misspelled key (e.g. `"top_P"`) would only ever fail silently at
+/// runtime. Optional fields are omitted from the wire payload when nil
+/// (Swift's synthesized `Encodable` conformance calls `encodeIfPresent`
+/// for `Optional`-typed properties), matching the old dictionary's
+/// conditional-key-insertion exactly.
+private struct ChatCompletionRequest: Encodable {
+    let model: String
+    let messages: [WireMessage]
+    let max_tokens: Int
+    let temperature: Double
+    let top_p: Double
+    let top_k: Int
+    let min_p: Double
+    let tools: [ChatTool.WireToolDefinition]?
+    let conversation_id: String?
+    let stream: Bool?
+    let stream_options: StreamOptions?
 }
 
 private struct ChatCompletionResponse: Decodable {

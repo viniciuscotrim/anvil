@@ -114,23 +114,38 @@ public struct ChatTool: Sendable, Equatable {
             + "taken effect, and wait for the user before building further on it."
     }
 
-    /// JSON-Schema-shaped dictionary, ready for `JSONSerialization`.
-    var wireRepresentation: [String: Any] {
-        var properties: [String: Any] = [:]
-        for parameter in parameters {
-            properties[parameter.name] = ["type": parameter.type, "description": parameter.description]
+    /// JSON-Schema-shaped, typed request payload — a wrong/misspelled
+    /// key here would previously only ever surface as a silent runtime
+    /// mismatch (a `[String: Any]` dictionary caught nothing at compile
+    /// time); `Encodable` structs make that a compile error instead.
+    struct WireToolDefinition: Encodable {
+        struct WireFunction: Encodable {
+            struct WireParameters: Encodable {
+                struct WireProperty: Encodable {
+                    let type: String
+                    let description: String
+                }
+                let type = "object"
+                let properties: [String: WireProperty]
+                let required: [String]
+            }
+            let name: String
+            let description: String
+            let parameters: WireParameters
         }
-        return [
-            "type": "function",
-            "function": [
-                "name": name,
-                "description": description,
-                "parameters": [
-                    "type": "object",
-                    "properties": properties,
-                    "required": parameters.map(\.name)
-                ]
-            ]
-        ]
+        let type = "function"
+        let function: WireFunction
+    }
+
+    var wireRepresentation: WireToolDefinition {
+        var properties: [String: WireToolDefinition.WireFunction.WireParameters.WireProperty] = [:]
+        for parameter in parameters {
+            properties[parameter.name] = .init(type: parameter.type, description: parameter.description)
+        }
+        return WireToolDefinition(function: .init(
+            name: name,
+            description: description,
+            parameters: .init(properties: properties, required: parameters.map(\.name))
+        ))
     }
 }
