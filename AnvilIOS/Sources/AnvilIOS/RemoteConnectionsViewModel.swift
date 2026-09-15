@@ -30,6 +30,17 @@ final class RemoteConnectionsViewModel: ObservableObject {
     @Published private(set) var discoveredModels: [DiscoveredMacModel] = []
 
     private let store = RemoteMacConnectionStore()
+    /// `refreshConnections()` runs every time a tab appears — switching
+    /// back and forth between Chat and Images (both share this view
+    /// model) could otherwise repeat the *entire* subnet scan on every
+    /// visit, worst case tens of seconds of Bonjour discovery plus a
+    /// 254-host/20-port fallback sweep, just to reappear on a screen
+    /// the user already saw a moment ago. A short cooldown skips
+    /// repeating that scan (previous results stay shown, still
+    /// filtered against whatever's saved) when the last one finished
+    /// too recently to plausibly have changed.
+    private static let scanCooldown: TimeInterval = 30
+    private var lastScanDate: Date?
 
     var textConnections: [RemoteMacConnection] { connections.filter { $0.kind == .text } }
     var imageConnections: [RemoteMacConnection] { connections.filter { $0.kind == .image } }
@@ -71,6 +82,16 @@ final class RemoteConnectionsViewModel: ObservableObject {
     }
 
     private func scanForNewConnections() async {
+        let alreadySaved = Set(connections.map { "\($0.host):\($0.port)" })
+        if let lastScanDate, Date().timeIntervalSince(lastScanDate) < Self.scanCooldown {
+            // Still re-applies the current saved-connections filter —
+            // a model connected to since the last scan must disappear
+            // from "discovered" immediately, not only after the next
+            // full rescan.
+            discoveredModels = discoveredModels.filter { !alreadySaved.contains("\($0.host):\($0.port)") }
+            return
+        }
+
         isScanning = true
         scanProgress = 0
         defer { isScanning = false }
@@ -78,7 +99,7 @@ final class RemoteConnectionsViewModel: ObservableObject {
         let found = await LocalNetworkScanner.scan { [weak self] fraction in
             Task { @MainActor in self?.scanProgress = fraction }
         }
-        let alreadySaved = Set(connections.map { "\($0.host):\($0.port)" })
+        lastScanDate = Date()
         discoveredModels = found.filter { !alreadySaved.contains("\($0.host):\($0.port)") }
     }
 

@@ -100,18 +100,25 @@ public struct ModelImporter: Sendable {
 
     /// Depth-first search for model directories under `root` (`root`
     /// itself included). Never recurses into a directory once it's
-    /// already been identified as a model.
+    /// already been identified as a model. Lists each directory's
+    /// contents exactly once — both the "does this look like a model"
+    /// check and the recursion into subdirectories used to list the
+    /// same directory separately, doubling the filesystem calls across
+    /// every node a folder-wide scan visits.
     private static func findModelDirectories(under root: URL, remainingDepth: Int) -> [URL] {
-        if looksLikeAModel(at: root) {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        ) else {
+            // `root` itself couldn't be listed (permissions, or it's not
+            // a directory at all) — it might still qualify as a model
+            // some other way `looksLikeAModel(at:)` alone can check.
+            return looksLikeAModel(at: root) ? [root] : []
+        }
+        if Self.looksLikeAModel(contents: contents) {
             return [root]
         }
-        guard remainingDepth > 0,
-              let contents = try? FileManager.default.contentsOfDirectory(
-                  at: root,
-                  includingPropertiesForKeys: [.isDirectoryKey]
-              ) else {
-            return []
-        }
+        guard remainingDepth > 0 else { return [] }
 
         var found: [URL] = []
         for entry in contents {
@@ -133,6 +140,10 @@ public struct ModelImporter: Sendable {
         ) else {
             return false
         }
+        return looksLikeAModel(contents: contents)
+    }
+
+    private static func looksLikeAModel(contents: [URL]) -> Bool {
         let names = Set(contents.map(\.lastPathComponent))
 
         if names.contains("config.json") || names.contains("model_index.json") {

@@ -463,7 +463,12 @@ struct NativeChatView: View {
     /// screen. Picking a Mac also switches Profiles/Memory to its data —
     /// see `ChatThreadsViewModel.selectSource`.
     private var sourceBar: some View {
-        HStack {
+        // Computed once per `body` evaluation instead of twice (once for
+        // `.isEmpty`, once for the `ForEach` below) — cheap today with a
+        // handful of discovered models, but there's no reason to filter
+        // the same array twice for the same result.
+        let discoveredTextModels = connectionsModel.discoveredModels.filter { $0.kind == .text }
+        return HStack {
             Menu {
                 Button {
                     Task { await threads.selectSource(.local, profilesViewModel: profilesViewModel) }
@@ -480,9 +485,9 @@ struct NativeChatView: View {
                         }
                     }
                 }
-                if !connectionsModel.discoveredModels.filter({ $0.kind == .text }).isEmpty {
+                if !discoveredTextModels.isEmpty {
                     Divider()
-                    ForEach(connectionsModel.discoveredModels.filter { $0.kind == .text }) { discovered in
+                    ForEach(discoveredTextModels) { discovered in
                         Button {
                             let connection = connectionsModel.connect(to: discovered)
                             Task { await threads.selectSource(.mac(connection), profilesViewModel: profilesViewModel) }

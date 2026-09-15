@@ -17,7 +17,7 @@ struct InteractiveImageView<ExtraMenuItems: View>: View {
 
     var body: some View {
         Group {
-            if let nsImage = NSImage(contentsOfFile: path) {
+            if let nsImage = Self.cachedImage(at: path) {
                 Image(nsImage: nsImage)
                     .resizable()
             } else {
@@ -37,7 +37,10 @@ struct InteractiveImageView<ExtraMenuItems: View>: View {
                 get: { state.isSavePresented },
                 set: { state.isSavePresented = $0 }
             ),
-            document: ImageFileDocument(data: imageData),
+            // Only reads the file when the save panel is actually about
+            // to appear — `imageData` isn't evaluated at all otherwise,
+            // since this is a plain `? :`, not a value computed above it.
+            document: ImageFileDocument(data: state.isSavePresented ? imageData : Data()),
             contentType: .png,
             defaultFilename: URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
         ) { _ in }
@@ -47,8 +50,12 @@ struct InteractiveImageView<ExtraMenuItems: View>: View {
         (try? Data(contentsOf: URL(fileURLWithPath: path))) ?? Data()
     }
 
+    private static func cachedImage(at path: String) -> NSImage? {
+        InteractiveImageCache.image(at: path)
+    }
+
     private func copyToPasteboard() {
-        guard let nsImage = NSImage(contentsOfFile: path) else { return }
+        guard let nsImage = Self.cachedImage(at: path) else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.writeObjects([nsImage])
@@ -63,4 +70,26 @@ struct InteractiveImageView<ExtraMenuItems: View>: View {
 /// README about `@State`.
 private final class InteractiveImageState: ObservableObject {
     @Published var isSavePresented = false
+}
+
+/// Every generated image is its own immutable file (a new version in a
+/// lineage is always a brand-new path, never an overwrite — see
+/// `GeneratedImage.versionNumber`), so caching by path alone is always
+/// safe: nothing this key ever refers to changes underneath it. Without
+/// this, `InteractiveImageView.body` re-decoding a multi-MB PNG from
+/// disk on every SwiftUI re-render (any state change in a parent
+/// gallery/chat view) was real, avoidable work on the main thread. A
+/// plain top-level type (not nested in `InteractiveImageView` itself)
+/// because Swift doesn't allow a static stored property inside a
+/// generic type.
+private enum InteractiveImageCache {
+    private static let cache = NSCache<NSString, NSImage>()
+
+    static func image(at path: String) -> NSImage? {
+        let key = path as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        guard let image = NSImage(contentsOfFile: path) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
+    }
 }
