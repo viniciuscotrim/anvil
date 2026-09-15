@@ -67,7 +67,7 @@ public actor ModelRegistry {
         var byPath: [String: ModelEntry] = [:]
         var pathOrder: [String] = []
         for entry in entries {
-            let key = URL(fileURLWithPath: entry.localPath).standardizedFileURL.path
+            let key = URL(fileURLWithPath: entry.localPath).canonicalModelPathKey
             if let existing = byPath[key] {
                 byPath[key] = Self.preferred(existing, entry)
             } else {

@@ -70,15 +70,18 @@ public struct ModelImporter: Sendable {
         }
 
         let modelDirectories = Self.findModelDirectories(under: path, remainingDepth: maxDepth)
-        let existingByPath = Dictionary(
-            uniqueKeysWithValues: await registry.all().map {
-                (URL(fileURLWithPath: $0.localPath).standardizedFileURL.path, $0)
-            }
-        )
+        // Built with a plain loop rather than `Dictionary(uniqueKeysWithValues:)`:
+        // resolving symlinks can make two already-registered entries collide
+        // on the same real path (exactly the case `deduplicateByLocalPath`
+        // exists to clean up), which would otherwise crash here.
+        var existingByPath: [String: ModelEntry] = [:]
+        for entry in await registry.all() {
+            existingByPath[URL(fileURLWithPath: entry.localPath).canonicalModelPathKey] = entry
+        }
 
         var imported: [ModelEntry] = []
         for directory in modelDirectories.sorted(by: { $0.path < $1.path }) {
-            let standardizedPath = directory.standardizedFileURL.path
+            let standardizedPath = directory.canonicalModelPathKey
             if let existing = existingByPath[standardizedPath] {
                 var refreshed = existing
                 refreshed.sizeBytes = DirectorySize.of(directory)

@@ -389,10 +389,15 @@ public actor ContextShiftCoordinator {
         case "unload_requested":
             let payload = try? JSONDecoder.anvil.decode(UnloadRequestedEvent.self, from: data)
             let modelID = payload?.modelID
+            // Captures `self` strongly on purpose: this Task isn't stored
+            // anywhere (no retain cycle to worry about), and the pending
+            // unload handshake must always reach `sendControl` — a `weak`
+            // self that happened to be nil here would silently drop the
+            // ack and hang the Python side for a full 60s timeout.
             let callback = onUnloadRequested
-            Task { [weak self] in
+            Task {
                 await callback?(modelID)
-                await self?.sendControl(event: "unload_complete")
+                self.sendControl(event: "unload_complete")
             }
 
         case "memory_status":

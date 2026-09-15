@@ -1,5 +1,15 @@
 import Foundation
 
+extension URL {
+    /// A path key for identifying "the same files on disk", resolving
+    /// symlinks first — two paths that reach the same real directory
+    /// through different symlinks (common on an externally-mounted
+    /// volume) must dedup as one model, not two.
+    var canonicalModelPathKey: String {
+        resolvingSymlinksInPath().standardizedFileURL.path
+    }
+}
+
 /// Where a registered model's files came from.
 public enum ModelSource: Codable, Sendable, Equatable {
     case huggingFace(repoID: String, revision: String)

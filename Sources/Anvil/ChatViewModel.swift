@@ -1953,7 +1953,13 @@ final class ChatViewModel: ObservableObject {
         let cloudEnabled = isCloudSyncEnabled
         Task {
             guard let saved = try? await threadStore.upsert(threadToSave) else { return }
-            if currentThread.id == saved.id {
+            // Guards against a real race: two of these Tasks can be in
+            // flight together (e.g. a fast edit followed by another),
+            // and `await threadStore.upsert` gives no ordering guarantee
+            // over which resumes first — without this check, an older
+            // save resuming last could clobber `currentThread` with a
+            // stale snapshot after a newer one already landed.
+            if currentThread.id == saved.id, saved.updatedAt >= currentThread.updatedAt {
                 currentThread = saved
             }
             allThreads = await threadStore.all()

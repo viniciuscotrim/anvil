@@ -13,6 +13,10 @@ struct AnvilSyncClient {
     /// happens to use — the sync server is a separate listener on the
     /// same Mac, not tied to any one model's own port.
     static let port = 8090
+    /// Short on purpose: this runs on a 3-second merge loop, so a Mac
+    /// that's gone offline mid-cycle must fail fast rather than tie up
+    /// that loop for `URLSession.shared`'s default 60s timeout.
+    private static let requestTimeout: TimeInterval = 8
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -175,7 +179,9 @@ struct AnvilSyncClient {
         guard let url = Self.baseURL(host: host)?.appendingPathComponent("v1/anvil/\(path)") else {
             throw AnvilSyncClientError.invalidHost
         }
-        let (data, response) = try await session.data(from: url)
+        var request = URLRequest(url: url)
+        request.timeoutInterval = Self.requestTimeout
+        let (data, response) = try await session.data(for: request)
         try Self.checkStatus(response)
         return try JSONDecoder.anvil.decode(Response.self, from: data)
     }
@@ -188,6 +194,7 @@ struct AnvilSyncClient {
         }
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
+        request.timeoutInterval = Self.requestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder.anvil.encode(body)
         let (data, response) = try await session.data(for: request)
@@ -203,8 +210,9 @@ struct AnvilSyncClient {
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = Self.requestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(body)
+        request.httpBody = try JSONEncoder.anvil.encode(body)
         let (data, response) = try await session.data(for: request)
         try Self.checkStatus(response)
         return try JSONDecoder.anvil.decode(Response.self, from: data)
@@ -216,6 +224,7 @@ struct AnvilSyncClient {
         }
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        request.timeoutInterval = Self.requestTimeout
         let (_, response) = try await session.data(for: request)
         try Self.checkStatus(response)
     }

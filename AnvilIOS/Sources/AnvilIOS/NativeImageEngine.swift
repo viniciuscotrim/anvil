@@ -183,7 +183,12 @@ final class NativeImageEngine: ObservableObject {
             parameters.prompt = text
             parameters.cfgWeight = Float(settings.guidance)
             parameters.steps = settings.steps
-            parameters.latentSize = [max(settings.height / 8, 8), max(settings.width / 8, 8)]
+            // Rounds to the nearest multiple-of-8 latent unit rather than
+            // flooring (`+4` before the integer divide) — the UI's width/
+            // height fields don't constrain input to multiples of 8, and
+            // a plain `/ 8` silently shrank e.g. 500 down to 496 with no
+            // indication to the user.
+            parameters.latentSize = [max((settings.height + 4) / 8, 8), max((settings.width + 4) / 8, 8)]
             return parameters
         }()
         let totalSteps = parameters.steps
